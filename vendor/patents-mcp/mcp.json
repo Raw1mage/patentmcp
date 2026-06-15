@@ -1,0 +1,12 @@
+{
+  "id": "patentmcp",
+  "name": "patentmcp",
+  "description": "Patent-data MCP server — USPTO / Google Patents (BigQuery) / TIPO GPSS / EPO OPS. Search, retrieve, screen and stage prior-art artifacts. Runs as an isolated Docker container; transfers files via token-based download over a Unix socket.",
+  "version": "0.2.3",
+  "transport": "streamable-http",
+  "url": "unix:///home/pkcs12/projects/PatentDrafter/vendor/patents-mcp/.run/patentmcp.sock:/mcp/",
+  "auth": { "type": "none" },
+  "source": { "type": "local" },
+  "skillPaths": ["../../skills"],
+  "instructions": "patentmcp produced files are reachable on this host via:\n  curl --unix-socket /home/pkcs12/projects/PatentDrafter/vendor/patents-mcp/.run/patentmcp.sock http://patentmcp.local/files/{token}/blob/{rel}\n(The {token} and {rel} placeholders come from each tool result's handle.)\n\nThe human landing page (install guide + live tool list + patentworks skill download) is served at GET / on the same socket, and through the gateway at /patentmcp. The skill zip is at /patentmcp/skills/patentworks.zip.\n\nSource priority for search: GPSS (gpss_search, primary) > EPO (epo_family / epo_biblio / epo_search) > Google Patents (gpatents_*, rate-limited) > BigQuery (cheap metadata only)."
+}

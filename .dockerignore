@@ -1,0 +1,18 @@
+# Build context is the repo root (for patentmcp). Keep it lean and keep
+# unrelated / licensed trees out of the image context.
+.git
+refs/
+output/
+issues/
+docs/
+specs/
+.specbase/
+.opencode/
+.claude/
+**/__pycache__/
+**/.venv/
+**/.tmp/
+**/.run/
+**/node_modules/
+*.log
+vendor/patents-mcp/.env

@@ -17,5 +17,8 @@ wheels/
 
 # Configuration files
 .env
-.env
 toolrowai-credentials.json
+!.env.example
+
+# IPC rendezvous (UDS socket lives here once uvicorn binds it)
+.run/
