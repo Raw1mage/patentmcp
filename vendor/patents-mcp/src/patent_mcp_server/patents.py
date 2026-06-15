@@ -1140,11 +1140,30 @@ async def cleanup():
 
 
 def main():
-    # Start the docxmcp-style blob server (background thread) for file delivery.
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="patent-mcp-server")
+    parser.add_argument(
+        "--transport", choices=["stdio", "http"],
+        default=os.environ.get("PATENTS_TRANSPORT", "stdio"),
+        help="stdio (default) for local spawn; http for UDS/TCP gateway service.",
+    )
+    parser.add_argument("--uds", default=os.environ.get("PATENTS_UDS"),
+                        help="Unix domain socket path (http transport; preferred).")
+    parser.add_argument("--host", default=os.environ.get("PATENTS_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PATENTS_PORT", "8078")))
+    args = parser.parse_args()
+
+    if args.transport == "http":
+        from patent_mcp_server import _http_app
+        logger.info("Starting patentmcp with http transport")
+        _http_app.serve(mcp, token_store, uds=args.uds, host=args.host, port=args.port)
+        return
+
+    # stdio: start the docxmcp-style blob server (background thread) for files.
     base = _file_server.start_file_server(token_store)
     if base:
         logger.info(f"File blob server on {base} (/files/{{token}}/blob/{{rel}})")
-    # Initialize and run the server with stdio transport
     logger.info("Starting USPTO Patent MCP server with stdio transport")
     mcp.run(transport='stdio')
 
