@@ -67,16 +67,118 @@ td.name{color:var(--accent);white-space:nowrap;font-family:ui-monospace,monospac
 """
 
 
-def _landing_html(tools, prefix: str, skill_available: bool) -> str:
+# UI strings per locale. Tool descriptions come from the MCP server (English
+# docstrings) and are not translated; only the page chrome is localized.
+STRINGS = {
+    "en": {
+        "subtitle": "USPTO / Google Patents / GPSS / EPO patent-data MCP server. "
+                    "Streamable HTTP at <code>{mcp}</code>; this backend is UDS-only and fronted by the gateway.",
+        "install_h2": "Install the skill",
+        "install_btn": "⬇ Download {skill} skill (.zip)",
+        "install_note": "Unzip into your Claude/agent skills directory (e.g. <code>~/.claude/skills/</code>). "
+                        "The <code>{skill}</code> skill orchestrates disclosure → screening → drafting against this server's tools.",
+        "skill_unavailable": "Skill package unavailable on this host.",
+        "connect_h2": "Connect the MCP server",
+        "connect_remote": "Remote client (through the gateway) — Streamable HTTP:",
+        "connect_local": "Local client — stdio via <code>uv</code> (<code>.mcp.json</code>):",
+        "endpoints_h2": "Endpoints",
+        "ep_mcp": "MCP", "ep_file": "File download", "ep_health": "Health", "ep_skill": "Skill",
+        "tools_h2": "Tools",
+    },
+    "zh-Hant": {
+        "subtitle": "USPTO / Google Patents / GPSS / EPO 專利資料 MCP 伺服器。"
+                    "Streamable HTTP 端點在 <code>{mcp}</code>；後端僅走 UDS，由 gateway 對外代理。",
+        "install_h2": "安裝 skill",
+        "install_btn": "⬇ 下載 {skill} skill（.zip）",
+        "install_note": "解壓到你的 Claude/agent skills 目錄（例如 <code>~/.claude/skills/</code>）。"
+                        "<code>{skill}</code> skill 串起 交底書 → 前案檢索 → 起草，呼叫本伺服器的工具。",
+        "skill_unavailable": "本主機未提供 skill 套件。",
+        "connect_h2": "連接 MCP 伺服器",
+        "connect_remote": "遠端 client（經 gateway）— Streamable HTTP：",
+        "connect_local": "本機 client — 經 <code>uv</code> 的 stdio（<code>.mcp.json</code>）：",
+        "endpoints_h2": "端點",
+        "ep_mcp": "MCP", "ep_file": "檔案下載", "ep_health": "健康檢查", "ep_skill": "Skill",
+        "tools_h2": "工具",
+    },
+    "zh-Hans": {
+        "subtitle": "USPTO / Google Patents / GPSS / EPO 专利数据 MCP 服务器。"
+                    "Streamable HTTP 端点在 <code>{mcp}</code>；后端仅走 UDS，由 gateway 对外代理。",
+        "install_h2": "安装 skill",
+        "install_btn": "⬇ 下载 {skill} skill（.zip）",
+        "install_note": "解压到你的 Claude/agent skills 目录（例如 <code>~/.claude/skills/</code>）。"
+                        "<code>{skill}</code> skill 串起 交底书 → 在先技术检索 → 起草，调用本服务器的工具。",
+        "skill_unavailable": "本主机未提供 skill 套件。",
+        "connect_h2": "连接 MCP 服务器",
+        "connect_remote": "远端 client（经 gateway）— Streamable HTTP：",
+        "connect_local": "本机 client — 经 <code>uv</code> 的 stdio（<code>.mcp.json</code>）：",
+        "endpoints_h2": "端点",
+        "ep_mcp": "MCP", "ep_file": "文件下载", "ep_health": "健康检查", "ep_skill": "Skill",
+        "tools_h2": "工具",
+    },
+}
+
+_LOCALES = ("en", "zh-Hant", "zh-Hans")
+_LOCALE_LABELS = {"en": "EN", "zh-Hant": "繁中", "zh-Hans": "简中"}
+
+
+def _map_tag(tag: str):
+    """Map one BCP-47 tag to a supported locale, or None. Bare `zh` → Traditional."""
+    t = tag.strip().lower()
+    if t.startswith("en"):
+        return "en"
+    if t.startswith("zh"):
+        if "hant" in t or t in ("zh-tw", "zh-hk", "zh-mo"):
+            return "zh-Hant"
+        if "hans" in t or t in ("zh-cn", "zh-sg", "zh-my"):
+            return "zh-Hans"
+        return "zh-Hant"
+    return None
+
+
+def _pick_locale(lang_q, cookie_lang, accept_language) -> str:
+    """Precedence: ?lang= → `pmlang` cookie → Accept-Language → en.
+
+    The cookie path matters behind a protected gateway: `?lang=` adds a query
+    so the URL is no longer the public landing and triggers login, but the
+    cookie lets the switcher reload the bare (public) landing and still change
+    language for anonymous visitors."""
+    for src in (lang_q, cookie_lang):
+        if src:
+            if src in STRINGS:
+                return src
+            m = _map_tag(src)
+            if m:
+                return m
+    for part in (accept_language or "").split(","):
+        m = _map_tag(part.split(";")[0])
+        if m:
+            return m
+    return "en"
+
+
+def _landing_html(tools, prefix: str, skill_available: bool, locale: str = "en") -> str:
+    s = STRINGS.get(locale, STRINGS["en"])
+    mcp_ep = f"{prefix}/mcp"
     rows = "".join(
         f"<tr><td class=name>{html.escape(t.name)}</td>"
         f"<td>{html.escape((t.description or '').strip().splitlines()[0] if (t.description or '').strip() else '')}</td></tr>"
         for t in tools
     )
     dl = (
-        f'<a class=btn href="{prefix}/skills/{_SKILL_NAME}.zip">⬇ Download {_SKILL_NAME} skill (.zip)</a>'
+        f'<a class=btn href="{prefix}/skills/{_SKILL_NAME}.zip">'
+        + html.escape(s["install_btn"].format(skill=_SKILL_NAME)) + "</a>"
         if skill_available
-        else '<p class=muted>Skill package unavailable on this host.</p>'
+        else f'<p class=muted>{html.escape(s["skill_unavailable"])}</p>'
+    )
+    # Switcher sets a cookie and reloads the BARE landing path (no query) so it
+    # works even for anonymous visitors behind a protected gateway, where a
+    # `?lang=` URL would be redirected to login.
+    switch = " · ".join(
+        (f'<strong>{_LOCALE_LABELS[loc]}</strong>' if loc == locale
+         else f'<a href="?lang={loc}" '
+              f"onclick=\"document.cookie='pmlang={loc};path=/;max-age=31536000';"
+              f'location.href=location.pathname;return false">{_LOCALE_LABELS[loc]}</a>')
+        for loc in _LOCALES
     )
     stdio_cfg = html.escape(
         '{\n'
@@ -98,32 +200,31 @@ def _landing_html(tools, prefix: str, skill_available: bool) -> str:
         '  }\n'
         '}'
     )
-    return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
+    return f"""<!doctype html><html lang="{locale}"><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>patentmcp</title><style>{_LANDING_CSS}</style></head><body>
+<p class=muted style="float:right">{switch}</p>
 <h1>patentmcp</h1>
-<p class=muted>USPTO / Google Patents / GPSS / EPO patent-data MCP server.
-Streamable HTTP at <code>{prefix}/mcp</code>; this backend is UDS-only and fronted by the gateway.</p>
+<p class=muted>{s["subtitle"].format(mcp=mcp_ep)}</p>
 
-<h2>Install the skill</h2>
+<h2>{html.escape(s["install_h2"])}</h2>
 <div class=card>{dl}
-<p class=muted>Unzip into your Claude/agent skills directory (e.g. <code>~/.claude/skills/</code>).
-The <code>{_SKILL_NAME}</code> skill orchestrates disclosure → screening → drafting against this server's tools.</p></div>
+<p class=muted>{s["install_note"].format(skill=_SKILL_NAME)}</p></div>
 
-<h2>Connect the MCP server</h2>
-<p>Remote client (through the gateway) — Streamable HTTP:</p>
+<h2>{html.escape(s["connect_h2"])}</h2>
+<p>{s["connect_remote"]}</p>
 <pre>{http_cfg}</pre>
-<p>Local client — stdio via <code>uv</code> (<code>.mcp.json</code>):</p>
+<p>{s["connect_local"]}</p>
 <pre>{stdio_cfg}</pre>
 
-<h2>Endpoints</h2>
+<h2>{html.escape(s["endpoints_h2"])}</h2>
 <div class=card>
-<p>MCP: <code>{prefix}/mcp</code></p>
-<p>File download: <code>{prefix}/files/{{token}}/blob/{{rel}}</code></p>
-<p>Health: <code>{prefix}/healthz</code></p>
-<p>Skill: <code>{prefix}/skills/{_SKILL_NAME}.zip</code></p></div>
+<p>{html.escape(s["ep_mcp"])}: <code>{prefix}/mcp</code></p>
+<p>{html.escape(s["ep_file"])}: <code>{prefix}/files/{{token}}/blob/{{rel}}</code></p>
+<p>{html.escape(s["ep_health"])}: <code>{prefix}/healthz</code></p>
+<p>{html.escape(s["ep_skill"])}: <code>{prefix}/skills/{_SKILL_NAME}.zip</code></p></div>
 
-<h2>Tools <span class=count>({len(tools)})</span></h2>
+<h2>{html.escape(s["tools_h2"])} <span class=count>({len(tools)})</span></h2>
 <table>{rows}</table>
 </body></html>"""
 
@@ -177,7 +278,15 @@ def build_app(mcp, store):
         except Exception:  # noqa: BLE001
             tools = []
         skill_available = (_skills_root() / _SKILL_NAME).is_dir()
-        return HTMLResponse(_landing_html(tools, prefix, skill_available))
+        locale = _pick_locale(
+            request.query_params.get("lang"),
+            request.cookies.get("pmlang"),
+            request.headers.get("accept-language"),
+        )
+        return HTMLResponse(
+            _landing_html(tools, prefix, skill_available, locale),
+            headers={"Content-Language": locale, "Vary": "Accept-Language"},
+        )
 
     app.router.routes.extend([
         Route("/", landing, methods=["GET"]),
