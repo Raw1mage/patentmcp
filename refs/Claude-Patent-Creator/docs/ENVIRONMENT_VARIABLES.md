@@ -1,0 +1,73 @@
+# Setting Environment Variables
+
+This guide shows how to set environment variables for API keys on different platforms.
+
+## Windows (PowerShell)
+
+Set permanently for your user account:
+
+```powershell
+[System.Environment]::SetEnvironmentVariable('VARIABLE_NAME', 'your_value_here', 'User')
+```
+
+**Verify:**
+```powershell
+$env:VARIABLE_NAME
+```
+
+**Note:** Restart any open terminals/applications for changes to take effect.
+
+## Linux/macOS
+
+### Bash
+
+Add to `~/.bashrc` for persistence:
+
+```bash
+echo 'export VARIABLE_NAME="your_value_here"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### Zsh
+
+Add to `~/.zshrc` for persistence:
+
+```bash
+echo 'export VARIABLE_NAME="your_value_here"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+### Fish
+
+Add to Fish config for persistence:
+
+```bash
+echo 'set -gx VARIABLE_NAME "your_value_here"' >> ~/.config/fish/config.fish
+source ~/.config/fish/config.fish
+```
+
+### Temporary (Current Session Only)
+
+```bash
+export VARIABLE_NAME="your_value_here"
+```
+
+## Verify Setup
+
+Check that the variable is set:
+
+```bash
+# Linux/macOS
+echo $VARIABLE_NAME
+
+# Windows PowerShell
+$env:VARIABLE_NAME
+```
+
+## Common Variables for This Project
+
+- `GOOGLE_CLOUD_PROJECT` - GCP project for BigQuery patent search billing
+- `USPTO_API_KEY` - USPTO Open Data Portal API key (optional)
+- `EPO_OPS_KEY` / `EPO_OPS_SECRET` - EPO OPS API credentials (optional)
+- `HYDE_BACKEND` - Set to `api` to use Anthropic/OpenAI for HyDE query expansion
+- `PATENT_BIGQUERY_MAX_BYTES_BILLED` - Override the per-query BigQuery cost ceiling (default: 25 GiB)

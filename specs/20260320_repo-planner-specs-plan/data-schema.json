@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://patentdrafter.local/specs/repo-architecture-plan/data-schema.json",
+  "title": "PatentDrafter File-Based Pipeline Contracts",
+  "description": "Spec-level data contracts for the observable prompt-first PatentDrafter pipeline. This is a planning contract, not proof that runtime validators already exist.",
+  "type": "object",
+  "required": ["project", "pipeline", "artifacts"],
+  "properties": {
+    "project": {
+      "type": "object",
+      "required": ["name", "mode", "architectureSourceOfTruth"],
+      "properties": {
+        "name": {"const": "PatentDrafter"},
+        "mode": {"enum": ["prompt-first-assets", "target-runtime-design"]},
+        "architectureSourceOfTruth": {"const": "specs/architecture.md"}
+      }
+    },
+    "pipeline": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "type": "object",
+        "required": ["stageId", "agent", "inputArtifacts", "outputArtifacts"],
+        "properties": {
+          "stageId": {"type": "string", "pattern": "^A[1-8]$|^S[1-8]$"},
+          "agent": {"type": "string"},
+          "inputArtifacts": {"type": "array", "items": {"type": "string"}},
+          "outputArtifacts": {"type": "array", "items": {"type": "string"}},
+          "controls": {"type": "array", "items": {"type": "string"}},
+          "evidenceFiles": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["parsedInfo", "searchResults", "outline", "content", "diagrams", "finalPackage"],
+      "properties": {
+        "parsedInfo": {"$ref": "#/$defs/fileArtifact"},
+        "searchResults": {"$ref": "#/$defs/fileArtifact"},
+        "outline": {"$ref": "#/$defs/fileArtifact"},
+        "content": {"type": "array", "items": {"$ref": "#/$defs/fileArtifact"}},
+        "diagrams": {"type": "array", "items": {"$ref": "#/$defs/fileArtifact"}},
+        "finalPackage": {"type": "array", "items": {"$ref": "#/$defs/fileArtifact"}}
+      }
+    }
+  },
+  "$defs": {
+    "fileArtifact": {
+      "type": "object",
+      "required": ["path", "format", "owner"],
+      "properties": {
+        "path": {"type": "string"},
+        "format": {"enum": ["docx", "markdown", "json", "mermaid", "directory"]},
+        "owner": {"type": "string"},
+        "validation": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

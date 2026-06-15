@@ -1,0 +1,34 @@
+[
+  {
+    "diagram_title": "Repository Inventory And Plan Materialization",
+    "scenario": "Planner inspects repo assets, normalizes architecture truth, and writes the active planning package.",
+    "moduleRef": "A7",
+    "participants": [
+      { "id": "P1", "name": "Planner Session", "type": "actor", "componentRef": "SYS1" },
+      { "id": "P2", "name": "Main Workflow Prompt", "type": "component", "componentRef": "C1" },
+      { "id": "P3", "name": "Stage Agent Definitions", "type": "component", "componentRef": "C3" },
+      { "id": "P4", "name": "Architecture Design Docs", "type": "component", "componentRef": "C4" },
+      { "id": "P5", "name": "Sample Pipeline Outputs", "type": "component", "componentRef": "C6" },
+      { "id": "P6", "name": "Specs Architecture SSOT", "type": "component", "componentRef": "C9" },
+      { "id": "P7", "name": "Planner Contract Package", "type": "component", "componentRef": "C10" }
+    ],
+    "messages": [
+      { "id": "MSG1", "from": "P1", "to": "P2", "label": "read orchestration contract", "type": "sync", "order": 1 },
+      { "id": "MSG2", "from": "P1", "to": "P3", "label": "read stage agent prompts", "type": "sync", "order": 2 },
+      { "id": "MSG3", "from": "P1", "to": "P4", "label": "read long-lived design docs", "type": "sync", "order": 3 },
+      { "id": "MSG4", "from": "P1", "to": "P5", "label": "inspect sample pipeline artifacts", "type": "sync", "order": 4 },
+      { "id": "MSG5", "from": "P1", "to": "P6", "label": "write normalized architecture truth", "type": "create", "order": 5 },
+      { "id": "MSG6", "from": "P6", "to": "P7", "label": "provide architecture baseline", "type": "sync", "order": 6 },
+      { "id": "MSG7", "from": "P1", "to": "P7", "label": "write proposal spec design tasks handoff and models", "type": "create", "order": 7 },
+      { "id": "MSG8", "from": "P7", "to": "P1", "label": "return execution-ready plan package", "type": "return", "order": 8 }
+    ],
+    "fragments": [
+      {
+        "id": "FRAG1",
+        "type": "alt",
+        "label": "If future implementation target remains undefined, stop at planning handoff and ask user to choose the next slice.",
+        "messageRefs": ["MSG8"]
+      }
+    ]
+  }
+]

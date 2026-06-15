@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '**Patent Creator System Ready**\n\nAvailable capabilities:\n- /create-patent - Complete patent application creation\n- /search-prior-art - Search 100M+ patents (BigQuery)\n- /review-claims - Automated 35 USC 112(b) compliance\n- /setup-patent-system - One-time system setup\n\n**Skills**: mpep-search, patent-claims-analyzer, bigquery-patent-search, patent-diagram-generator, prior-art-search, patent-application-creator\n\n**Agents**: patent-researcher, patent-drafter, mpep-expert, patent-illustrator\n\nNeed help? Ask me to:\n- Search for prior art\n- Draft patent claims\n- Research USPTO law (MPEP/USC/CFR)\n- Create diagrams\n- Review your patent application'"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash.*python.*mcp_server",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '**Note**: Running Python analysis. This may take a moment for first-time module loading...'"
+          }
+        ]
+      }
+    ]
+  }
+}

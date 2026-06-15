@@ -1,0 +1,89 @@
+{
+  "diagram_title": "PatentDrafter Repository Architecture Inventory",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A0",
+      "title": "Inventory Repository Architecture",
+      "description": "Capture the observable PatentDrafter repository structure, workflow assets, planning artifacts, and handoff boundaries.",
+      "decomposition": {
+        "diagram_title": "PatentDrafter Repository Architecture Inventory Decomposition",
+        "node_reference": "A0",
+        "activities": [
+          {
+            "id": "A1",
+            "title": "Inspect Prompt Assets",
+            "description": "Review main orchestration prompts and patent writing knowledge sources.",
+            "decomposition": null
+          },
+          {
+            "id": "A2",
+            "title": "Inspect Agent Contracts",
+            "description": "Review subagent definitions and stage-by-stage responsibilities.",
+            "decomposition": null
+          },
+          {
+            "id": "A3",
+            "title": "Inspect Design Documents",
+            "description": "Review long-lived docs and identify future-state narratives versus current-state evidence.",
+            "decomposition": null
+          },
+          {
+            "id": "A4",
+            "title": "Inspect Sample Pipeline",
+            "description": "Use sample artifacts to reconstruct the file-based pipeline and outputs.",
+            "decomposition": null
+          },
+          {
+            "id": "A5",
+            "title": "Inspect Supporting Utilities",
+            "description": "Review helper scripts and modeling experiment assets that support but do not define the main pipeline.",
+            "decomposition": null
+          },
+          {
+            "id": "A6",
+            "title": "Synthesize Architectural Truth",
+            "description": "Normalize repo boundaries, data flow, and current-state observations into architecture docs.",
+            "decomposition": null
+          },
+          {
+            "id": "A7",
+            "title": "Materialize Planner Package",
+            "description": "Write the active planner artifacts and handoff contract for future execution.",
+            "decomposition": null
+          }
+        ],
+        "arrows": [
+          { "id": "AR1", "source": "EXTERNAL", "target": "A1:input", "label": "Repository Files", "type": "input" },
+          { "id": "AR2", "source": "EXTERNAL", "target": "A1:control", "label": "Planning Request", "type": "control" },
+          { "id": "AR3", "source": "EXTERNAL", "target": "A1:mechanism", "label": "Read Tools", "type": "mechanism" },
+          { "id": "AR4", "source": "A1:output", "target": "A2:input", "label": "Prompt Inventory", "type": "output" },
+          { "id": "AR5", "source": "EXTERNAL", "target": "A2:control", "label": "Agent Workflow Rules", "type": "control" },
+          { "id": "AR6", "source": "EXTERNAL", "target": "A2:mechanism", "label": "Read Tools", "type": "mechanism" },
+          { "id": "AR7", "source": "A2:output", "target": "A3:input", "label": "Agent Stage Map", "type": "output" },
+          { "id": "AR8", "source": "EXTERNAL", "target": "A3:control", "label": "Documentation Criteria", "type": "control" },
+          { "id": "AR9", "source": "EXTERNAL", "target": "A3:mechanism", "label": "Read Tools", "type": "mechanism" },
+          { "id": "AR10", "source": "A3:output", "target": "A4:input", "label": "Documented Architecture Claims", "type": "output" },
+          { "id": "AR11", "source": "EXTERNAL", "target": "A4:control", "label": "Sample Validation Criteria", "type": "control" },
+          { "id": "AR12", "source": "EXTERNAL", "target": "A4:mechanism", "label": "Read Tools", "type": "mechanism" },
+          { "id": "AR13", "source": "A4:output", "target": "A5:input", "label": "Pipeline Evidence", "type": "output" },
+          { "id": "AR14", "source": "EXTERNAL", "target": "A5:control", "label": "Utility Review Criteria", "type": "control" },
+          { "id": "AR15", "source": "EXTERNAL", "target": "A5:mechanism", "label": "Read Tools", "type": "mechanism" },
+          { "id": "AR16", "source": "A5:output", "target": "A6:input", "label": "Supporting Asset Inventory", "type": "output" },
+          { "id": "AR17", "source": "EXTERNAL", "target": "A6:control", "label": "Architecture Sync Rules", "type": "control" },
+          { "id": "AR18", "source": "EXTERNAL", "target": "A6:mechanism", "label": "Planner Artifacts", "type": "mechanism" },
+          { "id": "AR19", "source": "A6:output", "target": "A7:input", "label": "Normalized Architecture", "type": "output" },
+          { "id": "AR20", "source": "EXTERNAL", "target": "A7:control", "label": "Planner Format Rules", "type": "control" },
+          { "id": "AR21", "source": "EXTERNAL", "target": "A7:mechanism", "label": "Write Tools", "type": "mechanism" },
+          { "id": "AR22", "source": "A7:output", "target": "EXTERNAL", "label": "Execution Ready Plan", "type": "output" }
+        ]
+      }
+    }
+  ],
+  "arrows": [
+    { "id": "AR0_1", "source": "EXTERNAL", "target": "A0:input", "label": "Repository Files", "type": "input" },
+    { "id": "AR0_2", "source": "EXTERNAL", "target": "A0:control", "label": "Planning Request And Workflow Rules", "type": "control" },
+    { "id": "AR0_3", "source": "EXTERNAL", "target": "A0:mechanism", "label": "Planner Tools And Docs", "type": "mechanism" },
+    { "id": "AR0_4", "source": "A0:output", "target": "EXTERNAL", "label": "Architecture Plan Package", "type": "output" }
+  ]
+}

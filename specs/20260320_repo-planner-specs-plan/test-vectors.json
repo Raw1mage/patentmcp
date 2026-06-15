@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "vectors": [
+    {
+      "id": "TV-1",
+      "requirement": "Architecture inventory must reflect observable repo state",
+      "input": ["source/CLAUDE.md", ".claude/agents/*.md", "sample/**"],
+      "expected": [
+        "specs/architecture.md identifies the repo as prompt-first / agent-definition-first",
+        "specs/architecture.md lists source, .claude/agents, docs, sample, bin, hls, and specs boundaries"
+      ]
+    },
+    {
+      "id": "TV-2",
+      "requirement": "Global architecture SSOT must exist in specs",
+      "input": ["specs/architecture.md"],
+      "expected": [
+        "file exists",
+        "file distinguishes observable current state from target product narratives"
+      ]
+    },
+    {
+      "id": "TV-3",
+      "requirement": "Planner package must be execution-ready",
+      "input": ["specs/20260320_repo-planner-specs-plan/**"],
+      "expected": [
+        ".state.json exists and declares a lifecycle state",
+        "planned-state companion artifacts exist: tasks.md, handoff.md, data-schema.json, test-vectors.json, errors.md, observability.md",
+        "model artifacts exist: idef0.json, grafcet.json, c4.json, sequence.json"
+      ]
+    },
+    {
+      "id": "TV-4",
+      "requirement": "Event evidence must be recorded",
+      "input": ["docs/events/event_20260503_repo-spec-skeleton-rebuild.md"],
+      "expected": [
+        "event log records request, scope, debug checkpoints, validation, and architecture sync"
+      ]
+    }
+  ]
+}

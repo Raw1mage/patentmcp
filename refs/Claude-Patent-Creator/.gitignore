@@ -1,0 +1,68 @@
+__pycache__/
+index/
+patent_corpus/
+pdfs/
+.env
+*.local.*
+*.egg-info/
+venv/
+data/
+nul
+.ruff_cache/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Backups and temporary files
+*.backup
+*.bak
+*.old
+*~
+.DS_Store
+
+# Archive directory (optional)
+.archive/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Generated indexes and data
+index/
+patent_corpus/
+patent_index/
+
+# Logs
+*.log
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment variables
+.env
+.env.local
+NUL
+pyright_out*.txt
+ruff_out*.txt
+
+# Codebase reckoning workspace
+.codebase-reckoning/

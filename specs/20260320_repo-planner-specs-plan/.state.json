@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "state": "planned",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-03-20T00:00:00Z",
+      "by": "planner",
+      "mode": "new",
+      "reason": "initial repo architecture inventory plan created"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-03-20T00:00:00Z",
+      "by": "planner",
+      "mode": "promote",
+      "reason": "repo-specific architecture, IDEF0, Grafcet, C4, sequence, and design artifacts drafted"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-05-03T00:00:00Z",
+      "by": "TheSmartAI",
+      "mode": "promote",
+      "reason": "rebuild spec-compliant skeleton with state, data contract, tests, errors, observability, and invariants"
+    }
+  ]
+}

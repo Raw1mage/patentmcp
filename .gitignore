@@ -1,0 +1,24 @@
+__pycache__/
+output/
+.DS_Store
+.claude/settings.local.json
+.mcp.json
+~*
+
+# build / transient artifacts
+.venv/
+**/.venv/
+.tmp/
+**/.tmp/
+*.egg-info/
+**/*.egg-info/
+.specbase/*.sqlite
+
+# secrets — never commit
+.env
+.env.*
+*-key.json
+sa-key.json
+*.serviceaccount.json
+**/credentials*.json
+
