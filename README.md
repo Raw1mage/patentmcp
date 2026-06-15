@@ -10,7 +10,7 @@
 專利資料檢索與檔案交付。fork 自 openpharma/patents-mcp(MIT)並擴充:
 - **檢索**:`gpatents_search`(Google Patents,語義排序+代表圖,已上線)、`gpss_search`(TIPO GPSS 官方 API,首選,待 userCode)、`uspto_patents`(ppubs)、Google BigQuery(降級不用於互動)。
 - **取文/產物**:`gpatents_get`(完整摘要+claims)、`gpatents_download_pdf/figure`(代表圖/PDF)。
-- **建表**:`build_screening_table`(search→家族去重→切 Claim1→**欄位隨選 xlsx**→handle;>300 擋下)。
+- **建表**:`build_screening_table`(search→家族去重→切 Claim1→**欄位隨選 CSV**→handle;>300 擋下)。
 - **檔案交付**:docxmcp 式 token+blob store(`/files/{token}/blob/{rel}`),`stage_file` 落地任意檔回 handle,bytes 不過 context。
 
 ### `patentworks`(skill,`skills/patentworks/`)
@@ -19,7 +19,7 @@
 disclosure(交底書)→ screening(查新)→ drafting(起草說明書)
 ```
 - **disclosure**:原始材料/idea → 結構化技術交底書(intake 問題集、專利點挖掘、脱敏、自檢)。
-- **screening**:CPC 錨定、US/CN、≤300 件、家族去重、逐列消化評分 → 人類可讀 scored xlsx。內分「可專利性」與「landscape」。
+- **screening**:CPC 錨定、US/CN、≤300 件、家族去重、逐列消化評分 → Agent 友善、人類可讀 scored CSV。內分「可專利性」與「landscape」。
 - **drafting**:claims-first → spec 支持 → 法遵自檢。法域分 **共通/TW/CN/US/EP**;法遵以 skill 知識處理,不做工具。
 
 領域骨幹見 `skills/patentworks/patent-practitioner-workflow.md`。
@@ -34,7 +34,7 @@ disclosure(交底書)→ screening(查新)→ drafting(起草說明書)
 
 ## 設計原則
 
-- **輸出不變式**:任何檢索的最終交付物一律是人類可讀的表格(xlsx),經 token+blob handle 交付。
+- **輸出不變式**:任何檢索的最終交付物一律是 Agent 友善、人類可讀的 CSV 表格,經 token+blob handle 交付。
 - **AI 預篩/起草草稿 + 解釋,人類複核裁決**(專利有法律份量)。
 - **大道至簡**:不重造 docxmcp / drawmiat / OpenCMS 已能服務的子系統。
 

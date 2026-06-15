@@ -1,10 +1,10 @@
 # Handoff
 
 ## Execution Contract
-- Build agent must read `implementation-spec.md` first.
-- Build agent must read `proposal.md`, `spec.md`, `design.md`, `tasks.md`, and `specs/architecture.md` before coding.
-- Build agent must materialize runtime todo from `tasks.md` before execution continues.
-- Build agent must treat this plan as an inventory-first plan: do not assume Web/API/runtime code already exists just because older docs describe it.
+- Future implementation agent must read `implementation-spec.md` first.
+- Future implementation agent must read `specs/architecture.md`, `proposal.md`, `spec.md`, `design.md`, and `tasks.md` before editing skill files.
+- Treat this package as the source of truth for the analysis boundary: `analysis` is not a sub-step owned exclusively by `screening`.
+- Do not modify MCP tool schemas unless the user explicitly approves a broader implementation slice.
 
 ## Required Reads
 - `specs/architecture.md`
@@ -13,23 +13,30 @@
 - `specs/20260320_repo-planner-specs-plan/spec.md`
 - `specs/20260320_repo-planner-specs-plan/design.md`
 - `specs/20260320_repo-planner-specs-plan/tasks.md`
-- `docs/events/event_20260320_repo-architecture-planning.md`
+- `skills/patentworks/SKILL.md`
+- `skills/patentworks/flows/screening.md`
+- `skills/patentworks/flows/drafting.md`
+- `skills/patent-practitioner-workflow.md`
 
 ## Current State
-- Repo architecture inventory has been normalized into `specs/architecture.md`.
-- Active plan root has been converted from template to repo-specific planner artifacts.
-- No follow-up implementation slice has been selected yet.
+- Specbase documents now describe PatentWorks as `patentmcp` MCP server + `patentworks` skill.
+- Analysis is specified as a planned source-agnostic layer.
+- No skill behavior has been changed yet.
+- Future implementation should start with `tasks.md` section 3.
 
 ## Stop Gates In Force
-- Pause if the user has not chosen the next build target.
-- Pause if proposed implementation depends on code or runtime components that are only documented aspirationally and not present in repo.
-- Return to plan mode if the chosen follow-up work materially changes architecture boundaries beyond this inventory plan.
+- Pause before adding `flows/analysis.md` if the user wants only documentation/spec changes.
+- Pause before formalizing JSON schema if the user has not approved a machine-readable schema slice.
+- Pause before changing MCP server behavior, CSV writer behavior, or token/blob delivery contracts.
 
 ## Build Entry Recommendation
-- Start by asking the user to choose one follow-up direction from this inventory: prompt pipeline hardening, product runtime realization, documentation consolidation, or validation/tooling.
+- First implementation slice: add `skills/patentworks/flows/analysis.md`, update `SKILL.md` routing, and lightly adjust `screening.md` / `drafting.md` handoff language.
+- Keep implementation minimal: no new fallback mechanisms, no MCP schema changes, no CSV logic changes.
 
 ## Execution-Ready Checklist
-- [ ] Implementation spec is complete
-- [ ] Companion artifacts are aligned
-- [ ] Validation plan is explicit
-- [ ] Runtime todo seed is present in `tasks.md`
+- [x] Architecture SSOT updated
+- [x] Proposal/spec/design aligned
+- [x] Future tasks seeded
+- [ ] Analysis skill implemented
+- [ ] Skill routing updated
+- [ ] Screening/drafting handoff updated

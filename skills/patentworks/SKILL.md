@@ -27,7 +27,7 @@ disclosure(交底書)→ screening(查新)→ drafting(起草說明書)
 
 ## 共用原則(兩 flow 皆適用)
 
-1. **交付物是人類可讀的成品**(screening = scored xlsx;drafting = 說明書文件),一律經 patentmcp `stage_file` / docxmcp token+blob handle 交付,bytes 不過 context。
+1. **交付物是人類可讀的成品**(screening = scored CSV;drafting = 說明書文件),一律經 patentmcp `stage_file` / docxmcp token+blob handle 交付,bytes 不過 context。
 2. **法域意識**:檢索預設 US/CN(TW 低價值);起草須先定目標法域,載入 `reference/drafting/common.md` + 對應法域檔。
 3. **法遵以 skill 知識處理,不做工具**:合規/法條要點寫在 `reference/drafting/{common,tw,cn,us,ep}.md`,起草時逐條自檢。
 4. **AI 做預篩/起草草稿 + 解釋,人類複核裁決**(專利有法律份量)。

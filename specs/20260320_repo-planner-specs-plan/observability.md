@@ -2,27 +2,28 @@
 
 ## Current Observability Surface
 - The current repo has no implemented application telemetry pipeline.
-- Observable evidence comes from static prompt contracts, sample artifacts, scripts, and docs.
+- Observable evidence comes from `README.md`, `patentmcp` tool definitions, `patentworks` skill flow files, local output artifacts, and specbase documents.
 
 ## Checkpoints
 
 | Checkpoint | Boundary | Signal | Evidence Source |
 |---|---|---|---|
-| OBS-1 | Main orchestration prompt | Ordered 8-stage pipeline exists | `source/CLAUDE.md` |
-| OBS-2 | Agent prompt contracts | Each subagent has input/output responsibility | `.claude/agents/*.md` |
-| OBS-3 | File-based data flow | Sample artifacts match stage handoffs | `sample/01_input` through `sample/06_final` |
-| OBS-4 | Target-state docs | Docs explicitly mark future-state product design | `docs/spec/PatentDrafter_Spec.md` |
-| OBS-5 | Diagram/tool support | Mermaid validation helper exists | `bin/check_mermaid.sh` |
+| OBS-1 | Product positioning | PatentWorks is MCP server + skill package | `README.md` |
+| OBS-2 | Retrieval MCP | Search/get/build-table/stage-file tools exist | `vendor/patents-mcp/src/patent_mcp_server/patents.py` |
+| OBS-3 | Skill routing | disclosure/screening/drafting flows are routed | `skills/patentworks/SKILL.md` |
+| OBS-4 | Flow contracts | screening keeps CSV delivery; drafting keeps jurisdiction knowledge | `skills/patentworks/flows/*.md` |
+| OBS-5 | Analysis boundary | Source-agnostic analysis is planned but not implemented | `specs/architecture.md`, `design.md` |
 | OBS-6 | Architecture SSOT | Current-state boundary map exists | `specs/architecture.md` |
 
 ## Future Runtime Metrics
-- Stage duration by agent.
+- MCP tool success/failure counts by source.
+- Screening table row counts, deduped counts, source gaps, and too-broad stops.
+- Analysis material counts by `sourceType` and analysis goal.
 - Handoff artifact validation status.
 - External patent/search API success and failure counts.
-- Mermaid syntax validation results.
-- Final document completeness checks: required sections, terminology consistency, description length.
+- Final drafting completeness checks: required sections, terminology consistency, claim/support alignment.
 
 ## Logging Requirements for Future Implementation
-- Log every stage transition with session id, stage id, input paths, output paths, and validation status.
-- Log external dependency failures without recording secrets.
-- Preserve per-stage error evidence under a session-scoped `metadata/agent_logs/` directory if runtime implementation is added.
+- Log every flow transition with session id, flow id, material source type, handles, and validation status.
+- Log external dependency failures without recording secrets or credential paths.
+- Preserve MCP gaps and analysis review flags as first-class evidence; do not replace unavailable sources with silent fallback data.

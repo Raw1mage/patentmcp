@@ -1,5 +1,5 @@
 """Screening-table assembly: normalize search hits → dedup by family → select
-columns by purpose → write a human-readable xlsx.
+columns by purpose → write a human-readable CSV.
 
 Columns are selectable (欄位隨選制): a mandatory CORE is always kept, a PURPOSE
 preset adds groups (classification for landscape, dates for prior-art/FTO, etc.),
@@ -8,6 +8,7 @@ digestion pass. Unavailable fields are emitted empty (honestly blank), never fak
 """
 from __future__ import annotations
 
+import csv
 import html as _html
 import io
 from typing import Any, Dict, List, Optional
@@ -113,23 +114,14 @@ def _render(rec: Dict[str, Any], key: str) -> str:
     return "" if val is None else str(val)
 
 
-def build_xlsx(records: List[Dict[str, Any]], columns: List[str]) -> bytes:
-    """Render records into an xlsx (bytes) with the given column keys."""
-    from openpyxl import Workbook
-    from openpyxl.styles import Font
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "screening"
-    ws.append([COLUMNS[k] for k in columns])
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
+def build_csv(records: List[Dict[str, Any]], columns: List[str]) -> bytes:
+    """Render records into a UTF-8 CSV (bytes) with the given column keys."""
+    buf = io.StringIO(newline="")
+    writer = csv.writer(buf)
+    writer.writerow([COLUMNS[k] for k in columns])
     for rec in records:
-        ws.append([_render(rec, k) for k in columns])
-    ws.freeze_panes = "A2"
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+        writer.writerow([_render(rec, k) for k in columns])
+    return buf.getvalue().encode("utf-8")
 
 
 # ── source adapters: normalize a source's hits into common record dicts ──

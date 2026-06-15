@@ -888,11 +888,11 @@ async def build_screening_table(
     exclude_fields: Optional[List[str]] = None,
     max_rows: int = 300,
     num: int = 100,
-    filename: str = "screening.xlsx",
+    filename: str = "screening.csv",
 ) -> Dict[str, Any]:
     """Run a CPC-anchored search and LAND the candidate set as a human-readable
-    xlsx in the token store — the raw rows never flow through the model context.
-    The agent then reads the xlsx in batches, judges each row, and writes back
+    CSV in the token store — the raw rows never flow through the model context.
+    The agent then reads the CSV in batches, judges each row, and writes back
     the AI columns (relevance/score/tech_gist/feat/reason).
 
     Columns are selectable (欄位隨選制): a mandatory core (專利號/申請號/名稱/摘要/
@@ -947,10 +947,10 @@ async def build_screening_table(
             "suggestion": f"命中 {count} 件 > {max_rows};請收斂(加嚴 CPC 子群 / 加關鍵詞 / 縮日期)後再建表。",
         }
 
-    # 3) dedup by family → select columns → xlsx → handle
+    # 3) dedup by family → select columns → CSV → handle
     deduped = _st.dedup_by_family(records)
     columns = _st.resolve_columns(purpose, extra_fields, exclude_fields)
-    data = _st.build_xlsx(deduped, columns)
+    data = _st.build_csv(deduped, columns)
     entry = token_store.put_bytes(data, filename)
     gaps = {k: v for k, v in _st.KNOWN_GAPS.items()
             if (k in columns or k == "family")
@@ -969,7 +969,7 @@ async def build_screening_table(
 
 @mcp.tool()
 async def stage_file(path: str, filename: Optional[str] = None) -> Dict[str, Any]:
-    """Stage an existing local file (e.g. a scored xlsx the screening flow built)
+    """Stage an existing local file (e.g. a scored CSV the screening flow built)
     into the token store, returning a docxmcp-style handle
     {token, rel, download_url, bytes, sha256} for the client to download or for
     docxmcp `from_token` to pull into a report. The bytes never pass through the

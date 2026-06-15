@@ -1,45 +1,89 @@
 # Design
 
 ## Context
-- PatentDrafter repo 目前是以 prompt assets、設計文檔與 sample artifacts 為主的知識型專案。
-- `docs/spec/PatentDrafter_Spec.md` 與 `docs/A0_system_idef0.md` 描述了較完整的產品化願景，但 repo 中缺少對應的完整源碼樹與 runtime implementation。
-- 因此本次 planning 必須先把「可觀察現況」沉澱到 `specs/`，避免後續 agent 重複用過時文件建模。
+- PatentDrafter 現行定位是 PatentWorks：一組 `patentmcp` MCP server 與 `skills/patentworks` skill flows。
+- `README.md` 已明確標示舊 8 層多 Agent 架構與 HLS/Grafcet 實驗廢除；舊 spec package 需重構以避免後續 agent 使用過時邊界。
+- 現有 `screening.md` 已同時承擔檢索、建表、逐列判讀與新穎性綜述；使用者要求 analysis 可獨立於資料來源。
 
 ## Goals / Non-Goals
 
 **Goals:**
-- 建立 repo 現況導向的全域 architecture 文件。
-- 讓本次 planner package 成為後續 build/debug 的可執行合約。
-- 明確分離 prompt pipeline、sample artifacts、design docs、helper scripts、modeling experiments。
+- 將 current-state architecture 改為 PatentWorks MCP + skill。
+- 定義 `analysis` 為資料來源無關的中介層。
+- 保留 `screening` 的 CSV 交付不變式。
+- 讓 `drafting` 從 analysis 結構化輸出開始，而不是直接吃檢索工具 schema。
 
 **Non-Goals:**
-- 不定義最終產品化架構的唯一答案。
-- 不在本次計畫中重構或實作 runtime。
+- 不在本 spec 重構中直接新增 skill flow 檔案。
+- 不改 MCP server 行為或欄位。
+- 不替代人類專利判斷或法律意見。
 
 ## Decisions
-- Decision 1: 以 `source/CLAUDE.md` + `.claude/agents/*.md` + `sample/**` 作為現況 pipeline 的最高可信證據來源。
-- Decision 2: 將 `docs/spec/**` 與 `docs/A0_system_idef0.md` 視為重要參考，但標記其偏向目標產品/願景層，而非完全等價於現況實作。
-- Decision 3: 新建 `specs/architecture.md`，使未來開發任務優先從 `specs/` 而非散落的 `docs/` 重建心智模型。
-- Decision 4: 規劃文件的後續 execution slice 先聚焦「inventory → choose target → implement」，不預設直接落地任何特定 runtime。
+- Decision 1: `patentmcp` 是檢索/取文/落地交付層，不是 analysis 的唯一資料來源。
+- Decision 2: `screening` 是檢索工作流與 scored spreadsheet 交付；其逐列判讀產物可作為 analysis input。
+- Decision 3: `analysis` 應使用標準化 input envelope，至少包含 `sourceType`、`materials`、`analysisGoal` 與可選 metadata。
+- Decision 4: `drafting` 應依賴 analysis output：核心特徵、必要要件、最接近前案、差異點、實施例、術語表、疑點清單。
+- Decision 5: 大型資料仍以 handle 傳遞；analysis 可讀取必要摘要/節選，但不應把整份 PDF/CSV/docx bytes 放入 context。
+- Decision 6: CSV 大檔如何切批、抽樣、索引、分工或迭代讀寫，屬 agent execution strategy；spec 只約束輸入來源、輸出契約、可稽核性與不得捏造證據。
 
 ## Data / State / Control Flow
-- Control Flow: `source/CLAUDE.md` 定義主 Agent 順序控制 → `.claude/agents/*.md` 定義子任務契約。
-- Data Flow: 以檔案為中心，從 `raw_document.docx` 逐步流向 `parsed_info.json`、`similar_patents.json`、`patent_outline.md`、內容 markdown、Mermaid 圖表、最終 `complete_patent.md`。
-- State Evidence: `sample/**` 是最可見的 pipeline 狀態快照；`docs/**` 與 `hls/**` 提供建模與願景補充。
+- Retrieval-first path: `patentmcp` search/get/build table → `screening` scored CSV / shortlist / handles → `analysis` structured report → `drafting` claims-first output。
+- User-first path: user-provided invention/prior-art/claim text → `analysis` structured report → optional `screening` for prior-art enrichment → `drafting`。
+- Mixed path: disclosure + prior-art shortlist + full claims handles → `analysis` claim chart / feature matrix → `drafting`。
+
+## Planned Analysis Contract
+
+### Input Envelope
+```ts
+type AnalysisInput = {
+  sourceType: "retrieval_mcp" | "user_provided" | "file" | "mixed"
+  materials: Array<{
+    id?: string
+    title?: string
+    content?: string
+    handle?: { token: string; rel: string; download_url?: string }
+    metadata?: Record<string, unknown>
+  }>
+  analysisGoal:
+    | "technical_features"
+    | "novelty"
+    | "claim_mapping"
+    | "drafting_basis"
+    | "landscape"
+    | "fto"
+}
+```
+
+### Output Envelope
+```ts
+type AnalysisOutput = {
+  normalizedMaterials: Array<{ id: string; title?: string; gist: string }>
+  technicalFeatures: Array<{ feature: string; role: "required" | "optional" | "variant"; support: string[] }>
+  elementMap?: Array<{ feature: string; references: Array<{ materialId: string; disclosure: string; gap?: string }> }>
+  closestPriorArt?: Array<{ materialId: string; reason: string; coveredFeatures: string[]; missingFeatures: string[] }>
+  differences: Array<{ point: string; basis: string; draftingUse?: string }>
+  draftingBasis?: { problem: string; solution: string; effects: string[]; claimSeeds: string[] }
+  reviewFlags: Array<{ issue: string; severity: "low" | "medium" | "high"; humanReviewNeeded: boolean }>
+}
+```
 
 ## Risks / Trade-offs
-- 過度依賴歷史 docs -> 可能把未實作的產品構想誤判為現況 -> 以 sample + agent prompts 校正。
-- 只做靜態盤點不做 runtime 驗證 -> 可能保留少量未知落差 -> 在 tasks 與 handoff 中保留後續 verification slice。
-- 新增 `specs/architecture.md` 會與既有 `docs/` 並存 -> 增加維護責任 -> 以 `specs/architecture.md` 指定為後續 SSOT 降低分歧。
+- Over-separation risk: screening may still need lightweight row judgement for CSV delivery; do not force every row through deep analysis.
+- Schema drift risk: MCP handles and CSV columns may evolve; analysis should depend on normalized materials, not raw column names.
+- Legal risk: analysis outputs are drafting aids and triage evidence, not attorney conclusions.
+- Token risk: user-provided files may be large; analysis must preserve handle-first and excerpt-first discipline.
+- Over-specification risk: 如果 spec 規定固定 CSV 讀取策略，會限制 agent 依檔案大小、欄位品質與工具能力自行最佳化；因此只定 contract，不定 algorithm。
 
 ## Critical Files
 - `/home/pkcs12/projects/PatentDrafter/specs/architecture.md`
-- `/home/pkcs12/projects/PatentDrafter/source/CLAUDE.md`
-- `/home/pkcs12/projects/PatentDrafter/source/PATENT_SKILL.md`
-- `/home/pkcs12/projects/PatentDrafter/.claude/agents/`
-- `/home/pkcs12/projects/PatentDrafter/docs/A0_system_idef0.md`
-- `/home/pkcs12/projects/PatentDrafter/docs/spec/PatentDrafter_Spec.md`
-- `/home/pkcs12/projects/PatentDrafter/sample/`
+- `/home/pkcs12/projects/PatentDrafter/README.md`
+- `/home/pkcs12/projects/PatentDrafter/vendor/patents-mcp/src/patent_mcp_server/patents.py`
+- `/home/pkcs12/projects/PatentDrafter/skills/patentworks/SKILL.md`
+- `/home/pkcs12/projects/PatentDrafter/skills/patentworks/flows/screening.md`
+- `/home/pkcs12/projects/PatentDrafter/skills/patentworks/flows/drafting.md`
+- `/home/pkcs12/projects/PatentDrafter/skills/patent-practitioner-workflow.md`
 
-## Supporting Docs (Optional)
-- `/home/pkcs12/projects/PatentDrafter/docs/events/event_20260320_repo-architecture-planning.md`
+## Supporting Docs
+- `proposal.md` explains why this refactor is needed.
+- `spec.md` defines acceptance requirements.
+- `tasks.md` identifies the follow-up implementation sequence.

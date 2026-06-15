@@ -1,152 +1,36 @@
 {
-  "diagram_title": "PatentDrafter Repository Inventory — C4 Component Diagram",
+  "diagram_title": "PatentWorks Analysis Boundary — C4 Component Diagram",
   "diagram_level": "component",
   "systems": [
     {
       "id": "SYS1",
-      "name": "PatentDrafter Repository",
-      "description": "Prompt-first patent drafting repository containing orchestration assets, design docs, and sample outputs.",
+      "name": "PatentWorks",
+      "description": "PatentDrafter current-state package composed of patentmcp retrieval tools and patentworks skill flows.",
       "external": false
     }
   ],
   "containers": [
-    {
-      "id": "CT1",
-      "name": "Prompt Asset Layer",
-      "description": "Main orchestration prompts and patent writing knowledge sources.",
-      "technology": "Markdown prompt files",
-      "systemRef": "SYS1"
-    },
-    {
-      "id": "CT2",
-      "name": "Agent Contract Layer",
-      "description": "Subagent prompt contracts for each patent drafting stage.",
-      "technology": "Markdown agent definitions",
-      "systemRef": "SYS1"
-    },
-    {
-      "id": "CT3",
-      "name": "Documentation Layer",
-      "description": "Long-lived architecture, IDEF0, Grafcet, and product specification docs.",
-      "technology": "Markdown documentation",
-      "systemRef": "SYS1"
-    },
-    {
-      "id": "CT4",
-      "name": "Sample Artifact Layer",
-      "description": "Sample pipeline inputs and outputs used as execution evidence.",
-      "technology": "DOCX JSON Markdown Mermaid artifacts",
-      "systemRef": "SYS1"
-    },
-    {
-      "id": "CT5",
-      "name": "Utility Layer",
-      "description": "Helper scripts and modeling experiment assets.",
-      "technology": "Shell Python C modeling files",
-      "systemRef": "SYS1"
-    }
+    {"id": "CT1", "name": "Retrieval MCP Layer", "description": "Patent data search, full-text retrieval, table building, and handle delivery.", "technology": "Python MCP server", "systemRef": "SYS1"},
+    {"id": "CT2", "name": "Skill Flow Layer", "description": "Patent practitioner workflows for disclosure, screening, analysis, and drafting.", "technology": "Markdown skill contracts", "systemRef": "SYS1"},
+    {"id": "CT3", "name": "Specbase Layer", "description": "Architecture SSOT and implementation planning artifacts.", "technology": "Markdown and JSON specs", "systemRef": "SYS1"},
+    {"id": "CT4", "name": "Reference Layer", "description": "Patent practitioner workflow and jurisdiction-specific drafting knowledge.", "technology": "Markdown references", "systemRef": "SYS1"}
   ],
   "components": [
-    {
-      "id": "C1",
-      "name": "Main Workflow Prompt",
-      "description": "Defines the top-level eight-stage orchestration contract.",
-      "technology": "Markdown",
-      "containerRef": "CT1",
-      "moduleRef": "A1",
-      "filePath": "source/CLAUDE.md"
-    },
-    {
-      "id": "C2",
-      "name": "Patent Writing Knowledge",
-      "description": "Defines domain-specific patent drafting rules and legal writing constraints.",
-      "technology": "Markdown",
-      "containerRef": "CT1",
-      "moduleRef": "A1",
-      "filePath": "source/PATENT_SKILL.md"
-    },
-    {
-      "id": "C3",
-      "name": "Stage Agent Definitions",
-      "description": "Defines stage-specific agent prompts and expected outputs.",
-      "technology": "Markdown",
-      "containerRef": "CT2",
-      "moduleRef": "A2",
-      "filePath": ".claude/agents/"
-    },
-    {
-      "id": "C4",
-      "name": "Architecture Design Docs",
-      "description": "Describe intended system decomposition and workflow design.",
-      "technology": "Markdown",
-      "containerRef": "CT3",
-      "moduleRef": "A3",
-      "filePath": "docs/A0_system_idef0.md"
-    },
-    {
-      "id": "C5",
-      "name": "Product Spec Docs",
-      "description": "Describe target product capabilities and operating expectations.",
-      "technology": "Markdown",
-      "containerRef": "CT3",
-      "moduleRef": "A3",
-      "filePath": "docs/spec/PatentDrafter_Spec.md"
-    },
-    {
-      "id": "C6",
-      "name": "Sample Pipeline Outputs",
-      "description": "Provide observable evidence for the file-based drafting workflow.",
-      "technology": "Mixed artifacts",
-      "containerRef": "CT4",
-      "moduleRef": "A4",
-      "filePath": "sample/"
-    },
-    {
-      "id": "C7",
-      "name": "Helper Scripts",
-      "description": "Support validation and text processing tasks.",
-      "technology": "Shell and Python",
-      "containerRef": "CT5",
-      "moduleRef": "A5",
-      "filePath": "bin/"
-    },
-    {
-      "id": "C8",
-      "name": "Modeling Experiments",
-      "description": "Contain HLS and Grafcet experiment files outside the main prompt pipeline.",
-      "technology": "C and compiled artifacts",
-      "containerRef": "CT5",
-      "moduleRef": "A5",
-      "filePath": "hls/"
-    },
-    {
-      "id": "C9",
-      "name": "Specs Architecture SSOT",
-      "description": "Normalized architecture truth for future planner and builder sessions.",
-      "technology": "Markdown",
-      "containerRef": "CT3",
-      "moduleRef": "A6",
-      "filePath": "specs/architecture.md"
-    },
-    {
-      "id": "C10",
-      "name": "Planner Contract Package",
-      "description": "Execution-ready planning package for follow-up implementation work.",
-      "technology": "Markdown and JSON",
-      "containerRef": "CT3",
-      "moduleRef": "A7",
-      "filePath": "specs/20260320_repo-planner-specs-plan/"
-    }
+    {"id": "C1", "name": "patentmcp Tool Server", "description": "Exposes search/get/build_screening_table/stage_file tools.", "technology": "FastMCP", "containerRef": "CT1", "moduleRef": "A2", "filePath": "vendor/patents-mcp/src/patent_mcp_server/patents.py"},
+    {"id": "C2", "name": "PatentWorks Skill Router", "description": "Routes user intent to disclosure, screening, or drafting; analysis routing is planned.", "technology": "Skill metadata", "containerRef": "CT2", "moduleRef": "A3", "filePath": "skills/patentworks/SKILL.md"},
+    {"id": "C3", "name": "Screening Flow", "description": "Builds and enriches agent-friendly human-readable scored CSV outputs from retrieval materials.", "technology": "Markdown workflow", "containerRef": "CT2", "moduleRef": "A3", "filePath": "skills/patentworks/flows/screening.md"},
+    {"id": "C4", "name": "Analysis Boundary", "description": "Planned source-agnostic layer for feature extraction, element mapping, differences, drafting basis, and review flags.", "technology": "Planned Markdown workflow", "containerRef": "CT2", "moduleRef": "A4", "filePath": "skills/patentworks/flows/analysis.md"},
+    {"id": "C5", "name": "Drafting Flow", "description": "Consumes analysis basis plus jurisdiction knowledge to draft claims, specification, and abstract.", "technology": "Markdown workflow", "containerRef": "CT2", "moduleRef": "A3", "filePath": "skills/patentworks/flows/drafting.md"},
+    {"id": "C6", "name": "Practitioner Workflow Reference", "description": "Defines patent search, screening, analysis, and report practices.", "technology": "Markdown reference", "containerRef": "CT4", "moduleRef": "A1", "filePath": "skills/patent-practitioner-workflow.md"},
+    {"id": "C7", "name": "Architecture SSOT", "description": "Records current PatentWorks boundaries and planned analysis separation.", "technology": "Markdown spec", "containerRef": "CT3", "moduleRef": "A5", "filePath": "specs/architecture.md"},
+    {"id": "C8", "name": "Analysis Refactor Plan", "description": "Execution-ready plan package for implementing the analysis boundary.", "technology": "Markdown and JSON specs", "containerRef": "CT3", "moduleRef": "A5", "filePath": "specs/20260320_repo-planner-specs-plan/"}
   ],
   "relationships": [
-    { "id": "REL1", "source": "C1", "target": "C3", "description": "orchestrates stage agent execution order", "technology": "prompt contract" },
-    { "id": "REL2", "source": "C2", "target": "C3", "description": "provides patent writing knowledge to drafting agents", "technology": "domain prompt reference" },
-    { "id": "REL3", "source": "C3", "target": "C6", "description": "produces artifacts represented by sample pipeline outputs", "technology": "file handoff contract" },
-    { "id": "REL4", "source": "C4", "target": "C9", "description": "informs architecture normalization with historical design intent", "technology": "documentation reference" },
-    { "id": "REL5", "source": "C5", "target": "C9", "description": "provides target-state product expectations for comparison", "technology": "product spec reference" },
-    { "id": "REL6", "source": "C6", "target": "C9", "description": "grounds architecture truth in observable sample evidence", "technology": "artifact evidence" },
-    { "id": "REL7", "source": "C7", "target": "C10", "description": "supports future validation and execution slices", "technology": "helper tooling" },
-    { "id": "REL8", "source": "C8", "target": "C9", "description": "is classified as supporting modeling work outside the main drafting pipeline", "technology": "boundary clarification" },
-    { "id": "REL9", "source": "C9", "target": "C10", "description": "provides normalized repository architecture to the active planning package", "technology": "spec reference" }
+    {"id": "REL1", "source": "C1", "target": "C3", "description": "provides retrieval rows, full text handles, and screening table handles", "technology": "MCP tool calls"},
+    {"id": "REL2", "source": "C3", "target": "C4", "description": "hands shortlist or enriched row materials to analysis", "technology": "normalized materials"},
+    {"id": "REL3", "source": "C4", "target": "C5", "description": "provides drafting basis, differences, features, and review flags", "technology": "AnalysisOutput"},
+    {"id": "REL4", "source": "C6", "target": "C4", "description": "grounds analysis in practitioner claim chart and feature comparison practice", "technology": "domain reference"},
+    {"id": "REL5", "source": "C7", "target": "C8", "description": "provides architecture baseline to plan package", "technology": "spec reference"},
+    {"id": "REL6", "source": "C8", "target": "C2", "description": "defines future router update for standalone analysis requests", "technology": "implementation task"}
   ]
 }

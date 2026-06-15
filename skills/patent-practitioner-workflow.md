@@ -2,7 +2,7 @@
 
 > 本文記錄專利從業人員（專利工程師／檢索分析師／專利師）進行專利檢索與判讀的**實際人類流程**，作為本 repo 各 AI skill 的設計依據。先忠實描述人類怎麼做，最後一節說明 AI 該怎麼「對應而非照抄」。
 
-> **⚠️ 輸出不變式（硬性契約，無例外）**：不論 AI 內部如何處理（fan-out、可拋棄 worker、handle 化…），**任何 patent search 的最終交付物一律是「人類看得懂的表格（spreadsheet）」**——這是所有檢索類型共通的產業慣例。AI 的內部方法自由，**輸出契約固定**。表須保留可稽核的原始欄位（PN/TI/AB/相關 CL/申請人/日期/CPC）並排 AI 加值欄（相關性判定＋理由＋命中要件），以 xlsx 經 blob handle 交付。
+> **⚠️ 輸出不變式（硬性契約，無例外）**：不論 AI 內部如何處理（fan-out、可拋棄 worker、handle 化…），**任何 patent search 的最終交付物一律是 Agent 友善、人類看得懂的 CSV 表格**——這是所有檢索類型共通的產業慣例。AI 的內部方法自由，**輸出契約固定**。表須保留可稽核的原始欄位（PN/TI/AB/相關 CL/申請人/日期/CPC）並排 AI 加值欄（相關性判定＋理由＋命中要件），以 CSV 經 blob handle 交付。
 
 ---
 
@@ -124,16 +124,16 @@
 |---|---|
 | **單次分析上限** | **300 件**;每件帶 **PatNo / Title / Abstract / Claim1**(只取獨立項，足以判相關性) |
 | **命中 >300 件** | **不分析，先「再篩選」收斂**(加嚴 CPC/關鍵詞/日期)，不讓結果發散 |
-| **工作介質** | agent **爬這個 excel、逐格消化**，每格寫回壓縮蒸餾(見 §四原則 2) |
+| **工作介質** | agent **爬這個 CSV、逐格消化**，每格寫回壓縮蒸餾(見 §四原則 2) |
 | **降成本前處理** | **家族去重 + 保留家族關聯欄**:同一 INPADOC 家族的 US/CN/EP 成員是同一發明，收斂成一個代表列 + 列出成員，**只消化代表一次**(其餘標「同家族，見代表」)。300 命中常收斂成 ~180 家族 → 消化量少約四成 |
 
 **裝配流程**:
 ```
 search(優先 GPSS, CPC+關鍵詞) → 命中數
   ├─ >300 → 回「太發散 + 建議收斂方式」,不繼續分析
-  └─ ≤300 → 組去重 excel(PatNo/Title/Abstract/Claim1/family_id/members) → blob
-            → agent 爬 excel 逐格消化,寫回 蒸餾 + 判定 + 命中要件
-            → 交付同一張 enriched excel
+  └─ ≤300 → 組去重 CSV(PatNo/Title/Abstract/Claim1/family_id/members) → blob
+            → agent 爬 CSV 逐格消化,寫回 蒸餾 + 判定 + 命中要件
+            → 交付同一張 enriched CSV
 ```
 
 > 來源注記:GPSS 的 search 一次呼叫即回 PatNo/Title/Abstract/Claims(`expFld`),最適合裝配此表;Claim1 由 CL 切首項。家族 family_id 是否由 GPSS 直接提供待核准後實測;若無,以 EPO INPADOC / Google family 補。
@@ -141,6 +141,6 @@ search(優先 GPSS, CPC+關鍵詞) → 命中數
 ## 五、本生產線的分工對應
 
 - **MCP tool**:`search`(候選列)、`get`(完整摘要+claims)、`stage_*`(PDF/代表圖/全文 → blob handle)。
-- **skill**(待建,如 `patent-screening`):編排「search → fan-out judge → 評分 xlsx」。
-- **xlsx skill / docxmcp**:把結果列落地成 spreadsheet/報告,經 token+blob handle 交付。
+- **skill**(待建,如 `patent-screening`):編排「search → fan-out judge → 評分 CSV」。
+- **CSV / docxmcp**:把結果列落地成 spreadsheet/報告,經 token+blob handle 交付。
 - 資料來源優先序:GPSS(首選)> Google Patents(語義排序+代表圖)> EPO(家族/引用)。

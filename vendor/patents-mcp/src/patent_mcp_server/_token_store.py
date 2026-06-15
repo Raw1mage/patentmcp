@@ -1,6 +1,6 @@
 """Token store for the patents-mcp file API — ported from docxmcp (same contract).
 
-Mirrors docxmcp's _token_store.py so retrieval artifacts (excel/PDF/figures/
+Mirrors docxmcp's _token_store.py so retrieval artifacts (CSV/PDF/figures/
 full-text) are delivered exactly the docxmcp way: an opaque `tok_<32>` token
 whose bytes live under ``<root>/<token>/<filename>`` and are downloaded via
 ``/files/{token}/blob/{rel}``. Copy-by-reference (`from_token`) lets the

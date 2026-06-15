@@ -3,38 +3,38 @@
   "vectors": [
     {
       "id": "TV-1",
-      "requirement": "Architecture inventory must reflect observable repo state",
-      "input": ["source/CLAUDE.md", ".claude/agents/*.md", "sample/**"],
+      "requirement": "Architecture inventory must reflect current PatentWorks repo state",
+      "input": ["README.md", "vendor/patents-mcp/src/patent_mcp_server/patents.py", "skills/patentworks/SKILL.md"],
       "expected": [
-        "specs/architecture.md identifies the repo as prompt-first / agent-definition-first",
-        "specs/architecture.md lists source, .claude/agents, docs, sample, bin, hls, and specs boundaries"
+        "specs/architecture.md identifies PatentWorks as patentmcp MCP server plus patentworks skill",
+        "specs/architecture.md separates retrieval, analysis, drafting, and delivery boundaries"
       ]
     },
     {
       "id": "TV-2",
-      "requirement": "Global architecture SSOT must exist in specs",
-      "input": ["specs/architecture.md"],
+      "requirement": "Analysis must be source-agnostic",
+      "input": ["retrieval_mcp materials", "user_provided materials", "mixed materials"],
       "expected": [
-        "file exists",
-        "file distinguishes observable current state from target product narratives"
+        "design.md defines AnalysisInput sourceType values",
+        "design.md defines AnalysisOutput fields for features, element map, differences, drafting basis, and review flags"
       ]
     },
     {
       "id": "TV-3",
-      "requirement": "Planner package must be execution-ready",
-      "input": ["specs/20260320_repo-planner-specs-plan/**"],
+      "requirement": "Screening must keep spreadsheet delivery invariant",
+      "input": ["skills/patentworks/flows/screening.md"],
       "expected": [
-        ".state.json exists and declares a lifecycle state",
-        "planned-state companion artifacts exist: tasks.md, handoff.md, data-schema.json, test-vectors.json, errors.md, observability.md",
-        "model artifacts exist: idef0.json, grafcet.json, c4.json, sequence.json"
+        "tasks.md preserves screening CSV delivery",
+        "handoff.md warns not to change MCP or CSV delivery contracts without approval"
       ]
     },
     {
       "id": "TV-4",
-      "requirement": "Event evidence must be recorded",
-      "input": ["docs/events/event_20260503_repo-spec-skeleton-rebuild.md"],
+      "requirement": "Drafting must consume analysis outputs",
+      "input": ["skills/patentworks/flows/drafting.md", "specs/20260320_repo-planner-specs-plan/design.md"],
       "expected": [
-        "event log records request, scope, debug checkpoints, validation, and architecture sync"
+        "drafting handoff is defined as a future implementation slice",
+        "analysis output includes draftingBasis and reviewFlags"
       ]
     }
   ]
