@@ -5,6 +5,8 @@ description: 專利全流程工作站。三種任務:(A) 把發明材料/idea �
 
 # PatentWorks
 
+> **搭配 `patentmcp` MCP 使用**:本 skill 是這組工具的劇本;所有檢索/交付工具(`gpss_search`、`epo_family`/`epo_biblio`/`epo_search`、`gpatents_*`、`build_screening_table`、`stage_file`)都來自 patentmcp。沒有該 MCP 時本 skill 無法執行實際檢索。
+
 專利從 idea 到申請的全流程。依需求選一個 flow,**先讀對應 flow 檔再執行**。
 
 ## 完整管線

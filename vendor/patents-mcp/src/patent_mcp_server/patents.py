@@ -16,8 +16,23 @@ from typing import Any, Dict, List, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
 
-# Initialize FastMCP server
-mcp = FastMCP("patentmcp")
+# Initialize FastMCP server. The instructions reach every client (stdio + http)
+# via InitializeResult — they point at the companion patentworks skill so the
+# MCP and skill wake each other (skill <-> tools cross-reference).
+mcp = FastMCP(
+    "patentmcp",
+    instructions=(
+        "Patent-data tools: USPTO / Google Patents / GPSS / EPO. "
+        "Before any patent search or drafting task, load the companion "
+        "**patentworks** skill — it is the playbook for these tools "
+        "(disclosure -> screening -> drafting) and carries the per-jurisdiction "
+        "drafting rules that decide which tool to call and what to deliver. "
+        "Source priority: GPSS (gpss_search, primary) > EPO (epo_family / "
+        "epo_biblio / epo_search) > Google Patents (gpatents_*, rate-limited) > "
+        "BigQuery (cheap metadata only). Tool results return file handles; "
+        "bytes are delivered via /files/{token}/blob/{rel}, not through context."
+    ),
+)
 
 # Set up logging
 logging.basicConfig(
