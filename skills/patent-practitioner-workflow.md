@@ -136,11 +136,11 @@ search(優先 GPSS, CPC+關鍵詞) → 命中數
             → 交付同一張 enriched CSV
 ```
 
-> 來源注記:GPSS 的 search 一次呼叫即回 PatNo/Title/Abstract/Claims(`expFld`),最適合裝配此表;Claim1 由 CL 切首項。家族 family_id 是否由 GPSS 直接提供待核准後實測;若無,以 EPO INPADOC / Google family 補。
+> 來源注記:GPSS 的 search 一次呼叫即回 PatNo/Title/Abstract/Claims(`expFld`),最適合裝配此表;Claim1 由 claims.claim[0] 切首項(偶為前言,真 claim1 在 [1])。**GPSS 不提供 INPADOC 家族 → 以 `epo_family` 補(已驗證,正確合併 US/CN/TW)**。
 
 ## 五、本生產線的分工對應
 
-- **MCP tool**:`search`(候選列)、`get`(完整摘要+claims)、`stage_*`(PDF/代表圖/全文 → blob handle)。
-- **skill**(待建,如 `patent-screening`):編排「search → fan-out judge → 評分 CSV」。
-- **CSV / docxmcp**:把結果列落地成 spreadsheet/報告,經 token+blob handle 交付。
-- 資料來源優先序:GPSS(首選)> Google Patents(語義排序+代表圖)> EPO(家族/引用)。
+- **MCP tool**(patentmcp,皆已上線):`gpss_search`(首選,一次回全欄)、`epo_family/biblio/search`(官方家族/摘要/CQL)、`gpatents_search/get/download_*`(語義+圖)、`build_screening_table`(search→去重→CSV→handle)、`stage_file`(任意檔→handle)。
+- **skill**(`patentworks`,已建):router + flows(disclosure/screening/drafting)+ 法域 reference,編排「search → 逐筆消化 → 評分 CSV」。
+- **CSV / docxmcp**:結果落地成 CSV / 報告,經 token+blob handle 交付。
+- 資料來源優先序:GPSS(首選)> EPO(家族/摘要/CQL,零限速)> Google Patents(語義+圖,需節流)> BigQuery(僅便宜 metadata)。

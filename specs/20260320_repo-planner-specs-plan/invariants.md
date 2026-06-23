@@ -6,18 +6,20 @@
    - `specs/architecture.md` is the first source for repo current-state architecture.
    - Historical docs may inform target-state planning but must not override observable repo evidence.
 
-2. **Prompt-First Current-State Invariant**
-   - Until real application code is added, PatentDrafter must be described as a prompt-first / agent-definition-first asset repo.
-   - Streamlit, FastAPI, Celery, Redis, and PostgreSQL references remain target-state proposals unless corresponding implementation files exist.
+2. **PatentWorks Current-State Invariant**
+   - PatentDrafter must be described as PatentWorks: `patentmcp` MCP server plus `patentworks` skill flows.
+   - Historical prompt-agent, HLS, or product-runtime narratives remain references unless current files explicitly reintroduce them.
 
-3. **Sequential Handoff Invariant**
-   - The patent drafting pipeline flows through input parsing, patent search, outline generation, abstract writing, claims writing, description writing, diagram generation, and markdown merging.
+3. **Source-Agnostic Analysis Invariant**
+   - Analysis must accept retrieval MCP output, user-provided content, file-derived materials, or mixed inputs.
+   - Analysis output must normalize materials into technical features, element maps, differences, drafting basis, and review flags.
 
-4. **File Contract Invariant**
-   - Agent handoff occurs through JSON, Markdown, Mermaid, DOCX, and directory artifacts, not through imported application modules in the current repo state.
+4. **Delivery Contract Invariant**
+   - Screening final delivery remains a human-readable scored spreadsheet.
+   - Large files and binary artifacts move by token/blob handle, not model context bytes.
 
 5. **No Fabricated Evidence Invariant**
-   - Missing search results, credentials, sample outputs, or runtime code must be recorded as gaps; they must not be replaced by invented validation evidence.
+   - Missing search results, credentials, handles, user materials, or runtime code must be recorded as gaps; they must not be replaced by invented validation evidence.
 
 6. **Spec Synchronization Invariant**
-   - Any future task that adds runtime code, changes module boundaries, or changes data flow must update `specs/architecture.md` and this plan package or create a successor spec.
+   - Any future task that adds `flows/analysis.md`, changes skill routing, changes MCP contracts, or changes data flow must update `specs/architecture.md` and this plan package or create a successor spec.

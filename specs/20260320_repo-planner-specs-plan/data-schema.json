@@ -1,58 +1,63 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://patentdrafter.local/specs/repo-architecture-plan/data-schema.json",
-  "title": "PatentDrafter File-Based Pipeline Contracts",
-  "description": "Spec-level data contracts for the observable prompt-first PatentDrafter pipeline. This is a planning contract, not proof that runtime validators already exist.",
+  "$id": "https://patentdrafter.local/specs/patentworks-analysis-boundary/data-schema.json",
+  "title": "PatentWorks Analysis Boundary Contracts",
+  "description": "Spec-level contract for source-agnostic analysis between retrieval/screening and drafting.",
   "type": "object",
-  "required": ["project", "pipeline", "artifacts"],
+  "required": ["project", "analysisInput", "analysisOutput"],
   "properties": {
     "project": {
       "type": "object",
       "required": ["name", "mode", "architectureSourceOfTruth"],
       "properties": {
         "name": {"const": "PatentDrafter"},
-        "mode": {"enum": ["prompt-first-assets", "target-runtime-design"]},
+        "mode": {"const": "patentworks-mcp-skill"},
         "architectureSourceOfTruth": {"const": "specs/architecture.md"}
       }
     },
-    "pipeline": {
-      "type": "array",
-      "minItems": 8,
-      "items": {
-        "type": "object",
-        "required": ["stageId", "agent", "inputArtifacts", "outputArtifacts"],
-        "properties": {
-          "stageId": {"type": "string", "pattern": "^A[1-8]$|^S[1-8]$"},
-          "agent": {"type": "string"},
-          "inputArtifacts": {"type": "array", "items": {"type": "string"}},
-          "outputArtifacts": {"type": "array", "items": {"type": "string"}},
-          "controls": {"type": "array", "items": {"type": "string"}},
-          "evidenceFiles": {"type": "array", "items": {"type": "string"}}
-        }
-      }
-    },
-    "artifacts": {
-      "type": "object",
-      "required": ["parsedInfo", "searchResults", "outline", "content", "diagrams", "finalPackage"],
-      "properties": {
-        "parsedInfo": {"$ref": "#/$defs/fileArtifact"},
-        "searchResults": {"$ref": "#/$defs/fileArtifact"},
-        "outline": {"$ref": "#/$defs/fileArtifact"},
-        "content": {"type": "array", "items": {"$ref": "#/$defs/fileArtifact"}},
-        "diagrams": {"type": "array", "items": {"$ref": "#/$defs/fileArtifact"}},
-        "finalPackage": {"type": "array", "items": {"$ref": "#/$defs/fileArtifact"}}
-      }
-    }
+    "analysisInput": {"$ref": "#/$defs/analysisInput"},
+    "analysisOutput": {"$ref": "#/$defs/analysisOutput"}
   },
   "$defs": {
-    "fileArtifact": {
+    "analysisInput": {
       "type": "object",
-      "required": ["path", "format", "owner"],
+      "required": ["sourceType", "materials", "analysisGoal"],
       "properties": {
-        "path": {"type": "string"},
-        "format": {"enum": ["docx", "markdown", "json", "mermaid", "directory"]},
-        "owner": {"type": "string"},
-        "validation": {"type": "array", "items": {"type": "string"}}
+        "sourceType": {"enum": ["retrieval_mcp", "user_provided", "file", "mixed"]},
+        "materials": {"type": "array", "items": {"$ref": "#/$defs/material"}},
+        "analysisGoal": {"enum": ["technical_features", "novelty", "claim_mapping", "drafting_basis", "landscape", "fto"]}
+      }
+    },
+    "material": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "content": {"type": "string"},
+        "handle": {"$ref": "#/$defs/handle"},
+        "metadata": {"type": "object"}
+      }
+    },
+    "handle": {
+      "type": "object",
+      "required": ["token", "rel"],
+      "properties": {
+        "token": {"type": "string"},
+        "rel": {"type": "string"},
+        "download_url": {"type": "string"}
+      }
+    },
+    "analysisOutput": {
+      "type": "object",
+      "required": ["normalizedMaterials", "technicalFeatures", "differences", "reviewFlags"],
+      "properties": {
+        "normalizedMaterials": {"type": "array", "items": {"type": "object"}},
+        "technicalFeatures": {"type": "array", "items": {"type": "object"}},
+        "elementMap": {"type": "array", "items": {"type": "object"}},
+        "closestPriorArt": {"type": "array", "items": {"type": "object"}},
+        "differences": {"type": "array", "items": {"type": "object"}},
+        "draftingBasis": {"type": "object"},
+        "reviewFlags": {"type": "array", "items": {"type": "object"}}
       }
     }
   }

@@ -33,7 +33,7 @@ disclosure(交底書)→ screening(查新)→ drafting(起草說明書)
 2. **法域意識**:檢索預設 US/CN(TW 低價值);起草須先定目標法域,載入 `reference/drafting/common.md` + 對應法域檔。
 3. **法遵以 skill 知識處理,不做工具**:合規/法條要點寫在 `reference/drafting/{common,tw,cn,us,ep}.md`,起草時逐條自檢。
 4. **AI 做預篩/起草草稿 + 解釋,人類複核裁決**(專利有法律份量)。
-5. **來源優先序**:GPSS(首選,待 userCode)> Google Patents(已上線)> EPO(家族/引用,待核)。BigQuery 降級不用於互動檢索。
+5. **來源優先序(皆已上線)**:**GPSS**(`gpss_search`,首選——一次回 PN/AN/標題/摘要/Claim1/CPC/IPC/申請人/日期,CPC 錨定,US/CN/TW)> **EPO**(`epo_family` 官方 INPADOC 家族 / `epo_biblio` 摘要 / `epo_search` CQL,零限速)> **Google Patents**(`gpatents_search` 語義排序+代表圖;非官方,**會限速,client 已內建節流**)。**BigQuery** 僅用於便宜 metadata 查詢(assignee/分類/日期),**不用於全文互動檢索**(掃描計費,全文 200GB+)。
 
 ## 領域骨幹
 

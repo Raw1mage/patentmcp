@@ -9,7 +9,10 @@ thumbnail, and a link to the full PDF.
 import asyncio
 import html as _html
 import logging
+import os
+import random
 import re
+import time
 import urllib.parse
 from typing import Any, Dict, List, Optional
 
@@ -41,10 +44,23 @@ BROWSER_UA = (
 class GooglePatentsClient:
     """Async client for the unofficial Google Patents query endpoint."""
 
-    def __init__(self, min_interval: float = 1.0, timeout: float = 30.0):
-        # Be polite to the unofficial endpoint: serialize + space out requests.
-        self.min_interval = min_interval
+    def __init__(self, min_interval: Optional[float] = None, timeout: float = 30.0,
+                 max_retries: Optional[int] = None):
+        # The Google Patents xhr endpoint rate-limits bursts (HTTP 503). We:
+        #   1. serialize every request (single-flight lock),
+        #   2. space requests by min_interval seconds,
+        #   3. on 503/429 back off exponentially and PARK a cooldown so the next
+        #      requests (even different queries) wait it out rather than re-trip it.
+        # Tunable via env so the cadence can be tightened without code changes.
+        self.min_interval = float(
+            os.getenv("PATENTS_GP_MIN_INTERVAL",
+                      min_interval if min_interval is not None else 3.0))
+        self.max_retries = int(
+            os.getenv("PATENTS_GP_MAX_RETRIES",
+                      max_retries if max_retries is not None else 4))
         self._lock = asyncio.Lock()
+        self._last_req = 0.0       # monotonic time of last request
+        self._cooldown_until = 0.0  # honor an active backoff window
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
@@ -52,12 +68,35 @@ class GooglePatentsClient:
         )
 
     async def _get(self, url: str) -> httpx.Response:
-        # Single-flight + min-interval throttle so we never burst the endpoint.
+        """Single-flight, paced GET with 503/429 exponential backoff.
+
+        Spacing and cooldown are enforced at the top of the loop, so a 503 parks
+        a cooldown window that the retry — and any subsequent call — waits out.
+        """
         async with self._lock:
-            resp = await self._client.get(url)
-            await asyncio.sleep(self.min_interval)
-        resp.raise_for_status()
-        return resp
+            last_resp = None
+            for attempt in range(self.max_retries + 1):
+                now = time.monotonic()
+                wait = max(self.min_interval - (now - self._last_req),
+                           self._cooldown_until - now, 0.0)
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                try:
+                    last_resp = await self._client.get(url)
+                finally:
+                    self._last_req = time.monotonic()
+                if last_resp.status_code in (429, 503):
+                    backoff = min(60.0, 8.0 * (2 ** attempt)) + random.uniform(0, 3)
+                    self._cooldown_until = time.monotonic() + backoff
+                    logger.warning(
+                        "Google Patents %d (rate-limited); cooldown %.0fs, attempt %d/%d",
+                        last_resp.status_code, backoff, attempt + 1, self.max_retries)
+                    if attempt < self.max_retries:
+                        continue  # top-of-loop waits out the cooldown
+                last_resp.raise_for_status()
+                return last_resp
+            last_resp.raise_for_status()
+            return last_resp
 
     @staticmethod
     def _build_inner(

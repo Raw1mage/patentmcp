@@ -49,6 +49,7 @@ from patent_mcp_server.uspto.api_uspto_gov import ApiUsptoClient
 from patent_mcp_server.google.bigquery_client import GoogleBigQueryClient
 from patent_mcp_server.gpatents.client import GooglePatentsClient
 from patent_mcp_server.gpss.client import GPSSClient, GPSSCondition
+from patent_mcp_server.epo.client import EPOClient
 from patent_mcp_server._token_store import default_store
 from patent_mcp_server import _file_server
 from patent_mcp_server import screening_table as _st
@@ -64,6 +65,7 @@ api_client = ApiUsptoClient() # api.uspto.gov module
 google_bq_client = GoogleBigQueryClient()  # Google Patents BigQuery module
 gpatents_client = GooglePatentsClient()  # Google Patents web endpoint (ranked search + figures + PDF)
 gpss_client = GPSSClient()  # TIPO GPSS official REST API (CPC/IPC + claims search, US/CN, JSON)
+epo_client = EPOClient()  # EPO OPS official API (INPADOC family, citations, biblio, legal)
 token_store = default_store()  # docxmcp-compatible token store for file delivery
 
 # =====================================================================
@@ -1137,6 +1139,44 @@ async def gpss_search(
 
 
 # =====================================================================
+# EPO OPS Tools — official INPADOC family / biblio / CQL search
+# =====================================================================
+
+@mcp.tool()
+async def epo_family(publication_number: str) -> Dict[str, Any]:
+    """Get the INPADOC patent family for a publication via EPO OPS (official).
+
+    Unifies the US/CN/TW/EP/JP members of one invention into a single family —
+    more reliable than BigQuery's split family_id. Pass any member's number
+    (e.g. "US11213256B2"); returns {family_id, count, members:[pub numbers]}.
+    Use to deduplicate a screening pool by true family or to expand a seed.
+    """
+    return await epo_client.family(publication_number)
+
+
+@mcp.tool()
+async def epo_biblio(publication_number: str) -> Dict[str, Any]:
+    """Get official bibliographic data + abstract for a publication via EPO OPS.
+
+    Fills the abstract/title/applicant/IPC for patents that Google/BigQuery
+    couldn't supply in-band. Returns {title, abstract, applicants, ipc}.
+    """
+    return await epo_client.biblio(publication_number)
+
+
+@mcp.tool()
+async def epo_search(cql: str, range: str = "1-25") -> Dict[str, Any]:
+    """Search EPO OPS published data with a CQL query (official, global).
+
+    CQL examples: 'pa=faceheart' (applicant), 'in=poh' (inventor),
+    'txt=photoplethysmography and ic=A61B5/024' (text + IPC), 'pn=US11213256'.
+    `range` paginates (e.g. "1-25", "26-50"; max 100/page, 2000 total).
+    Returns {total, count, results:[publication numbers]}.
+    """
+    return await epo_client.search(cql, range_=range)
+
+
+# =====================================================================
 # Cleanup Handler
 # =====================================================================
 
@@ -1149,6 +1189,7 @@ async def cleanup():
         await google_bq_client.close()
         await gpatents_client.close()
         await gpss_client.close()
+        await epo_client.close()
         logger.info("Cleanup completed successfully")
     except Exception as e:
         logger.error(f"Error during cleanup: {str(e)}")

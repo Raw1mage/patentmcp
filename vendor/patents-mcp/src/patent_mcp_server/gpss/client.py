@@ -13,6 +13,7 @@ Auth: a single userCode (API 驗證碼) issued by TIPO after approval.
 
 import logging
 import os
+import urllib.parse
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -117,8 +118,13 @@ class GPSSClient:
         params = [("userCode", self.user_code)] + self._build_query(
             conditions, databases, case_type, patent_type, fields, fmt, num, skip
         )
+        # GPSS field names contain '/' (TI/AB) and the +/- combinators ride in the
+        # KEY; httpx's param encoder would percent-encode those and break the query.
+        # Build the query string by hand: keys literal, values url-encoded.
+        qs = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params)
+        url = f"{GPSS_API_URL}?{qs}"
         try:
-            resp = await self._client.get(GPSS_API_URL, params=params)
+            resp = await self._client.get(url)
             resp.raise_for_status()
         except Exception as e:  # noqa: BLE001
             logger.error(f"GPSS request failed: {e}")
@@ -133,11 +139,13 @@ class GPSSClient:
             api = data.get("gpss-API", data)
             status = api.get("status")
             message = api.get("message")
-            # TIPO returns status=success with message="no record found" / error strings.
+            # status=success with a message means "no record found" / error string.
             return {
                 "success": status == "success" and not message,
                 "status": status,
                 "message": message,
+                "total": api.get("total-rec"),
+                "qty": api.get("qty-rec"),
                 "data": data,
             }
         return {"success": True, "format": "xml", "raw": text}

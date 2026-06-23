@@ -148,38 +148,61 @@ def google_to_records(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return recs
 
 
+def _g(node: Any, *keys: str, default: str = "") -> Any:
+    """Safe nested get over GPSS dicts."""
+    cur = node
+    for k in keys:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(k)
+    return cur if cur is not None else default
+
+
+def _as_list(x: Any) -> List[Any]:
+    if x is None:
+        return []
+    return x if isinstance(x, list) else [x]
+
+
 def gpss_to_records(gpss_json: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """GPSS search JSON → records. GPSS gives PN/AN/TI/AB/CL/IC/CS/UC/PR/AD/ID/
-    PA/IN in one call. Field paths are best-effort per the API doc and must be
-    verified against a live userCode response."""
-    api = gpss_json.get("data", {}).get("gpss-API", gpss_json.get("gpss-API", {}))
-    rows = api.get("patents") or api.get("results") or api.get("record") or []
-    if isinstance(rows, dict):
-        rows = [rows]
+    """GPSS search JSON → records. Verified against a live userCode response:
+    rows live at gpss-API.patent.patentcontent[]; fields are nested objects."""
+    api = gpss_json.get("data", {}).get("gpss-API") or gpss_json.get("gpss-API", {})
+    rows = _as_list(_g(api, "patent", "patentcontent"))
     recs = []
     for r in rows:
-        claims = r.get("CL") or r.get("claims") or ""
+        # claims[0] -> Claim1
+        claims = _as_list(_g(r, "claims", "claim"))
         claim1 = ""
-        if isinstance(claims, list):
-            claim1 = str(claims[0]) if claims else ""
-        elif isinstance(claims, str):
-            # first claim ≈ up to the second numbered marker; keep it simple.
-            claim1 = claims.strip().split("\n2.")[0][:2000]
+        if claims:
+            ct = claims[0].get("claim-text", "")
+            claim1 = " ".join(ct) if isinstance(ct, list) else str(ct or "")
+        abstract = _g(r, "abstract", "p")
+        if isinstance(abstract, list):
+            abstract = " ".join(str(x) for x in abstract)
+        applicants = "; ".join(
+            (a.get("english-name") or a.get("name") or "")
+            for a in _as_list(_g(r, "parties", "applicants", "applicant")))
+        inventors = "; ".join(
+            (i.get("english-name") or i.get("name") or "")
+            for i in _as_list(_g(r, "parties", "inventors", "inventor")))
+        cpc = "; ".join(c.get("keyValue", "") for c in _as_list(_g(r, "classifications-cpc", "cpc"))[:6])
+        ipc = "; ".join(c.get("keyValue", "") for c in _as_list(_g(r, "classifications-ipc", "ipc"))[:6])
+        prio = _as_list(_g(r, "priority-claims", "priority-claim"))
         recs.append({
-            "pubno": r.get("PN", ""),
-            "appno": r.get("AN", ""),
-            "title": r.get("TI", ""),
-            "abstract": r.get("AB", ""),
+            "pubno": _g(r, "publication-reference", "doc-number"),
+            "appno": _g(r, "application-reference", "doc-number"),
+            "title": _g(r, "patent-title", "english-title") or _g(r, "patent-title", "chinese-title"),
+            "abstract": str(abstract or ""),
             "claim1": claim1,
-            "family_id": r.get("family_id", ""),  # verify GPSS exposes this
-            "cpc": r.get("CS", ""),
-            "ipc": r.get("IC", ""),
-            "uspc": r.get("UC", ""),
-            "prio_date": r.get("PR", ""),
-            "app_date": r.get("AD", ""),
-            "pub_date": r.get("ID", ""),
-            "assignee": r.get("PA", ""),
-            "inventor": r.get("IN", ""),
+            "family_id": "",  # GPSS doesn't expose INPADOC family; use epo_family
+            "cpc": cpc,
+            "ipc": ipc,
+            "prio_date": (prio[0].get("date", "") if prio else ""),
+            "app_date": _g(r, "application-reference", "date"),
+            "pub_date": _g(r, "publication-reference", "date"),
+            "assignee": applicants,
+            "inventor": inventors,
         })
     return recs
 
