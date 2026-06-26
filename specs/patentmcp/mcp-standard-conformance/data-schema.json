@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "patentmcp conformance data contracts",
+  "definitions": {
+    "ToolsResponse": {
+      "type": "object",
+      "required": ["tools"],
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ToolSchema" }
+        }
+      }
+    },
+    "ToolSchema": {
+      "type": "object",
+      "required": ["name", "inputSchema"],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "inputSchema": {
+          "type": "object",
+          "description": "JSON Schema of the tool's arguments"
+        }
+      }
+    },
+    "HealthResponse": {
+      "type": "object",
+      "required": ["ok", "service"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "service": { "type": "string" },
+        "store": { "type": "object", "description": "store.stats() snapshot" }
+      }
+    },
+    "SelfHealResult": {
+      "type": "object",
+      "required": ["mode", "healthy"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["check", "heal"] },
+        "healthy": { "type": "boolean" },
+        "action": {
+          "type": "string",
+          "enum": ["none", "recreated"],
+          "description": "recreate only patentmcp-${USER}"
+        }
+      }
+    }
+  }
+}

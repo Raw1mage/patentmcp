@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-06-25T12:24:03.998Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-06-25T12:30:40.425Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "spec/design/modeling artifacts complete"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-06-25T12:30:47.222Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "tasks.md + handoff.md complete; modeling + test-vectors ready"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-06-26T03:05:00.000Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "first tasks checked: R8 /tools+/health routes + R7.4 self-heal implemented in _http_app.py + scripts/"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-06-26T03:10:00.000Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "all tasks.md checked (4.3 gap-matrix deferred: opencode repo, cross-repo); V1-V5 live smoke over UDS PASS after webctl.sh refresh (18 tools, /health+/healthz parity, self-heal idempotent, back-compat green)"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-06-26T09:15:00.000Z",
+      "by": "pkcs12",
+      "mode": "graduate",
+      "reason": "user explicitly instructed graduation; moved plans/patentmcp_mcp-standard-conformance/ -> specs/patentmcp/mcp-standard-conformance/; gap-matrix (4.3) since landed in opencode repo; all surfaces live-verified and committed (patentmcp 9b6cca2, opencode fdbcf09a6)"
+    }
+  ]
+}

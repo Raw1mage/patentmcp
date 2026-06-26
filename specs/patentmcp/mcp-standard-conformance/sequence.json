@@ -1,0 +1,104 @@
+[
+  {
+    "title": "GET /tools returns live schemas (R8.1)",
+    "componentRef": "A1",
+    "messages": [
+      {
+        "id": "MSG1",
+        "from": "client",
+        "to": "patentmcp_http",
+        "label": "GET /tools"
+      },
+      {
+        "id": "MSG2",
+        "from": "patentmcp_http",
+        "to": "fastmcp_registry",
+        "label": "await mcp.list_tools()"
+      },
+      {
+        "id": "MSG3",
+        "from": "fastmcp_registry",
+        "to": "patentmcp_http",
+        "label": "Tool[] objects"
+      },
+      {
+        "id": "MSG4",
+        "from": "patentmcp_http",
+        "to": "patentmcp_http",
+        "label": "project {name,description,inputSchema}"
+      },
+      {
+        "id": "MSG5",
+        "from": "patentmcp_http",
+        "to": "client",
+        "label": "200 JSON {tools:[...]} (or 500 on registry error — no silent [])"
+      }
+    ]
+  },
+  {
+    "title": "GET /health liveness (R8.3)",
+    "componentRef": "A2",
+    "messages": [
+      {
+        "id": "MSG6",
+        "from": "client",
+        "to": "patentmcp_http",
+        "label": "GET /health"
+      },
+      {
+        "id": "MSG7",
+        "from": "patentmcp_http",
+        "to": "health_coroutine",
+        "label": "invoke shared health handler"
+      },
+      {
+        "id": "MSG8",
+        "from": "health_coroutine",
+        "to": "patentmcp_http",
+        "label": "{ok, service, store}"
+      },
+      {
+        "id": "MSG9",
+        "from": "patentmcp_http",
+        "to": "client",
+        "label": "200 liveness JSON (same as /healthz alias)"
+      }
+    ]
+  },
+  {
+    "title": "Self-heal check/heal (R7.4)",
+    "componentRef": "A3",
+    "messages": [
+      {
+        "id": "MSG10",
+        "from": "operator",
+        "to": "selfheal_script",
+        "label": "patentmcp-self-heal.sh --check"
+      },
+      {
+        "id": "MSG11",
+        "from": "selfheal_script",
+        "to": "uds_socket",
+        "label": "probe [ -S socket ] + optional curl /health"
+      },
+      {
+        "id": "MSG12",
+        "from": "uds_socket",
+        "to": "selfheal_script",
+        "label": "healthy | unhealthy"
+      },
+      {
+        "id": "MSG13",
+        "from": "selfheal_script",
+        "to": "docker_compose",
+        "label": "if unhealthy: recreate patentmcp-${USER} only"
+      },
+      {
+        "id": "MSG14",
+        "from": "docker_compose",
+        "to": "selfheal_script",
+        "label": "service healthy (idempotent, no competing daemon)"
+      }
+    ]
+  }
+]

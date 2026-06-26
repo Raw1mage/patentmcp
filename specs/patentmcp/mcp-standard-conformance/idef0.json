@@ -1,0 +1,142 @@
+{
+  "diagram_title": "patentmcp MCP Standard Conformance — Additive R8/R7.4",
+  "node_reference": "A0",
+  "viewpoint": "Closing patentmcp's narrow conformance gaps (introspection + self-heal) without disturbing existing surfaces",
+  "purpose": "Model the additive endpoints and self-heal flow that bring patentmcp to full fleet-standard conformance",
+  "activities": [
+    {
+      "id": "A1",
+      "name": "Expose tool introspection (GET /tools)",
+      "description": "Serve live FastMCP tool schemas as JSON sourced from mcp.list_tools()"
+    },
+    {
+      "id": "A2",
+      "name": "Add standard health path (GET /health)",
+      "description": "Register /health pointing at the existing health coroutine; keep /healthz as alias"
+    },
+    {
+      "id": "A3",
+      "name": "Provide idempotent self-heal",
+      "description": "Ship patentmcp-self-heal.sh probing the UDS socket, recreating only patentmcp's own compose project"
+    },
+    {
+      "id": "A4",
+      "name": "Sync manifest + docs + gap matrix",
+      "description": "Document new endpoints in mcp.json/README and mark patentmcp fully conformant in the fleet gap matrix"
+    }
+  ],
+  "arrows": [
+    {
+      "id": "AR1",
+      "type": "input",
+      "source": "external",
+      "target": "A1",
+      "label": "HTTP GET /tools request"
+    },
+    {
+      "id": "AR2",
+      "type": "control",
+      "source": "external",
+      "target": "A1",
+      "label": "fleet standard R8.1"
+    },
+    {
+      "id": "AR3",
+      "type": "mechanism",
+      "source": "external",
+      "target": "A1",
+      "label": "FastMCP registry (mcp.list_tools)"
+    },
+    {
+      "id": "AR4",
+      "type": "output",
+      "source": "A1",
+      "target": "external",
+      "label": "JSON tool schemas {name,description,inputSchema}"
+    },
+    {
+      "id": "AR5",
+      "type": "input",
+      "source": "external",
+      "target": "A2",
+      "label": "HTTP GET /health request"
+    },
+    {
+      "id": "AR6",
+      "type": "control",
+      "source": "external",
+      "target": "A2",
+      "label": "fleet standard R8.3"
+    },
+    {
+      "id": "AR7",
+      "type": "mechanism",
+      "source": "external",
+      "target": "A2",
+      "label": "existing health coroutine"
+    },
+    {
+      "id": "AR8",
+      "type": "output",
+      "source": "A2",
+      "target": "external",
+      "label": "liveness payload {ok,service,store}"
+    },
+    {
+      "id": "AR9",
+      "type": "input",
+      "source": "external",
+      "target": "A3",
+      "label": "--check / --heal invocation"
+    },
+    {
+      "id": "AR10",
+      "type": "control",
+      "source": "external",
+      "target": "A3",
+      "label": "fleet standard R7.4; never spawn competing daemon"
+    },
+    {
+      "id": "AR11",
+      "type": "mechanism",
+      "source": "external",
+      "target": "A3",
+      "label": "docker compose + UDS socket probe"
+    },
+    {
+      "id": "AR12",
+      "type": "output",
+      "source": "A3",
+      "target": "external",
+      "label": "healthy patentmcp-${USER} service"
+    },
+    {
+      "id": "AR13",
+      "type": "input",
+      "source": "A1",
+      "target": "A4",
+      "label": "landed /tools endpoint"
+    },
+    {
+      "id": "AR14",
+      "type": "input",
+      "source": "A2",
+      "target": "A4",
+      "label": "landed /health endpoint"
+    },
+    {
+      "id": "AR15",
+      "type": "input",
+      "source": "A3",
+      "target": "A4",
+      "label": "landed self-heal script"
+    },
+    {
+      "id": "AR16",
+      "type": "output",
+      "source": "A4",
+      "target": "external",
+      "label": "updated mcp.json/README + conformant gap matrix row"
+    }
+  ]
+}

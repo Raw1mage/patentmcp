@@ -1,0 +1,84 @@
+[
+  {
+    "id": "TV-R1a",
+    "requirement": "R1",
+    "scenario": "GET /tools returns live schemas",
+    "input": { "method": "GET", "path": "/tools" },
+    "expected": {
+      "status": 200,
+      "body_shape": {
+        "tools": "non-empty array of {name,description,inputSchema}"
+      },
+      "matches": "mcp.list_tools()"
+    }
+  },
+  {
+    "id": "TV-R1b",
+    "requirement": "R1",
+    "scenario": "registry error fails loud (no silent [])",
+    "input": {
+      "method": "GET",
+      "path": "/tools",
+      "condition": "list_tools raises"
+    },
+    "expected": {
+      "status": 500,
+      "body_shape": { "error": "string" },
+      "note": "must NOT return {tools:[]}"
+    }
+  },
+  {
+    "id": "TV-R2a",
+    "requirement": "R2",
+    "scenario": "GET /health liveness",
+    "input": { "method": "GET", "path": "/health" },
+    "expected": {
+      "status": 200,
+      "body_shape": { "ok": true, "service": "patentmcp", "store": "object" }
+    }
+  },
+  {
+    "id": "TV-R2b",
+    "requirement": "R2",
+    "scenario": "GET /healthz alias still works",
+    "input": { "method": "GET", "path": "/healthz" },
+    "expected": {
+      "status": 200,
+      "body_shape": { "ok": true, "service": "patentmcp" },
+      "note": "same payload as /health"
+    }
+  },
+  {
+    "id": "TV-R3a",
+    "requirement": "R3",
+    "scenario": "self-heal check when healthy",
+    "input": {
+      "cmd": "patentmcp-self-heal.sh --check",
+      "state": "socket present"
+    },
+    "expected": { "exit": 0, "action": "none", "idempotent": true }
+  },
+  {
+    "id": "TV-R3b",
+    "requirement": "R3",
+    "scenario": "self-heal heal when unhealthy",
+    "input": {
+      "cmd": "patentmcp-self-heal.sh --heal",
+      "state": "socket missing"
+    },
+    "expected": {
+      "exit": 0,
+      "action": "recreated patentmcp-${USER}",
+      "no_competing_daemon": true
+    }
+  },
+  {
+    "id": "TV-R4a",
+    "requirement": "back-compat",
+    "scenario": "existing surfaces unchanged",
+    "input": {
+      "paths": ["/mcp", "/files/{token}/blob/{rel}", "/skills/{name}.zip", "/"]
+    },
+    "expected": { "all": "still functional after change" }
+  }
+]

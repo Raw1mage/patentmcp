@@ -1,0 +1,64 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A1",
+    "StepName": "Idle",
+    "IsInitial": true,
+    "Actions": [],
+    "TransitionToNext": "tools_request_received OR health_request_received OR selfheal_invoked"
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A1",
+    "StepName": "ServeTools",
+    "IsInitial": false,
+    "Actions": [
+      "call mcp.list_tools()",
+      "project to {name,description,inputSchema}",
+      "serialize JSON"
+    ],
+    "TransitionToNext": "schemas_serialized"
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A1",
+    "StepName": "ToolsError",
+    "IsInitial": false,
+    "Actions": ["return 500 JSON (fail-loud, no silent [] fallback)"],
+    "TransitionToNext": "error_returned"
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A2",
+    "StepName": "ServeHealth",
+    "IsInitial": false,
+    "Actions": [
+      "invoke existing health coroutine",
+      "return {ok,service,store}"
+    ],
+    "TransitionToNext": "liveness_returned"
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A3",
+    "StepName": "SelfHealCheck",
+    "IsInitial": false,
+    "Actions": [
+      "probe UDS socket existence",
+      "optionally curl /health over socket"
+    ],
+    "TransitionToNext": "healthy: back_to_idle; unhealthy: proceed_to_heal"
+  },
+  {
+    "StepNumber": 5,
+    "ModuleRef": "A3",
+    "StepName": "SelfHeal",
+    "IsInitial": false,
+    "Actions": [
+      "docker compose recreate patentmcp-${USER} only",
+      "wait healthy",
+      "never spawn competing daemon"
+    ],
+    "TransitionToNext": "service_recovered"
+  }
+]
