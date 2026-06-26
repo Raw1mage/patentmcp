@@ -261,6 +261,27 @@ def build_app(mcp, store):
     async def health(request):
         return JSONResponse({"ok": True, "service": _SERVICE_MARKER, "store": store.stats()})
 
+    async def tools_json(request):
+        # Machine-readable tool introspection (standard R8.1). Sourced from the
+        # SAME live registry the landing page reads — single source, zero drift.
+        # Fail loud (500 JSON) on registry error; never a silent [] fallback.
+        try:
+            tools = await mcp.list_tools()
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse(
+                {"error": "tool_registry_unavailable", "detail": str(e)},
+                status_code=500,
+            )
+        projected = [
+            {
+                "name": t.name,
+                "description": t.description or "",
+                "inputSchema": getattr(t, "inputSchema", None),
+            }
+            for t in tools
+        ]
+        return JSONResponse({"tools": projected})
+
     async def skill_zip(request):
         skill_dir = _skills_root() / _SKILL_NAME
         if not skill_dir.is_dir():
@@ -290,7 +311,12 @@ def build_app(mcp, store):
 
     app.router.routes.extend([
         Route("/", landing, methods=["GET"]),
+        # Standard liveness path (R8.3) + back-compat alias — same coroutine,
+        # no duplicated logic (DD-2).
+        Route("/health", health, methods=["GET"]),
         Route("/healthz", health, methods=["GET"]),
+        # Machine-readable tool introspection (R8.1) — live registry (DD-1).
+        Route("/tools", tools_json, methods=["GET"]),
         Route("/files/{token}/blob/{rel:path}", blob, methods=["GET"]),
         Route(f"/skills/{_SKILL_NAME}.zip", skill_zip, methods=["GET"]),
     ])

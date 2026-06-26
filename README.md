@@ -12,6 +12,8 @@
 - **取文/產物**:`gpatents_get`(完整摘要+claims)、`gpatents_download_pdf/figure`(代表圖/PDF)。
 - **建表**:`build_screening_table`(search→家族去重→切 Claim1→**欄位隨選 CSV**→handle;>300 擋下)。
 - **檔案交付**:docxmcp 式 token+blob store(`/files/{token}/blob/{rel}`),`stage_file` 落地任意檔回 handle,bytes 不過 context。
+- **端點**:`/mcp`(Streamable HTTP)、`/`(landing)、`/tools`(機器可讀工具 schema,取自 live registry,錯誤直接 500 不靜默)、`/health`(liveness;`/healthz` 為相容別名)、`/files/{token}/blob/{rel}`、`/skills/patentworks.zip`。
+- **生命週期**:`webctl.sh {start|stop|restart|refresh|health|clean|purge}`;`scripts/patentmcp-self-heal.sh {--check|--heal}` 探測 UDS socket,不健康時只重建 `patentmcp-${USER}` compose project(不另起 daemon)。
 
 ### `patentworks`(skill,`skills/patentworks/`)
 專利從業流程,三個 flow 可單用或串成完整旅程:
