@@ -1,0 +1,7 @@
+[
+  { "id": "S1", "text": "Idle", "initial": true },
+  { "id": "S2", "text": "Try Official API" },
+  { "id": "S3", "text": "Try Fallback Resolver" },
+  { "id": "S4", "text": "Download & Store" },
+  { "id": "S5", "text": "Handoff" }
+]

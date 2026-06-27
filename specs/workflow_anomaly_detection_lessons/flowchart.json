@@ -1,0 +1,38 @@
+{
+  "diagram_title": "GPSS Pagination & Claim 1 Fallback Flowchart",
+  "nodes": [
+    { "id": "start", "type": "terminator", "text": "開始" },
+    { "id": "query_gpss", "type": "process", "text": "發送 GPSS 檢索" },
+    { "id": "is_json", "type": "decision", "text": "回應為 JSON？" },
+    { "id": "raise_decode_error", "type": "terminator", "text": "拋出 JSONDecodeError 錯誤" },
+    { "id": "check_pages", "type": "decision", "text": "結果數 > 50？" },
+    { "id": "fetch_paginated", "type": "process", "text": "分頁拉取 + 1s 冷卻" },
+    { "id": "merge_to_csv", "type": "process", "text": "合併結果至 CSV" },
+    { "id": "get_claim1", "type": "process", "text": "請求 Claim 1" },
+    { "id": "query_ppubs", "type": "process", "text": "查詢 PPUBS" },
+    { "id": "ppubs_ok", "type": "decision", "text": "PPUBS 成功取得？" },
+    { "id": "query_gpatents", "type": "process", "text": "降級查詢 Google Patents" },
+    { "id": "gpatents_ok", "type": "decision", "text": "未遭限流 (200)？" },
+    { "id": "fail_fast_block", "type": "terminator", "text": "Fail-Fast 熔斷阻斷" },
+    { "id": "parse_html_claim", "type": "process", "text": "BeautifulSoup 解析 Claim 1" },
+    { "id": "finish", "type": "terminator", "text": "完成並返回資料" }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start", "target": "query_gpss" },
+    { "id": "e2", "source": "query_gpss", "target": "is_json" },
+    { "id": "e3", "source": "is_json", "target": "raise_decode_error", "label": "否 (HTML)" },
+    { "id": "e4", "source": "is_json", "target": "check_pages", "label": "是" },
+    { "id": "e5", "source": "check_pages", "target": "fetch_paginated", "label": "是" },
+    { "id": "e6", "source": "check_pages", "target": "merge_to_csv", "label": "否" },
+    { "id": "e7", "source": "fetch_paginated", "target": "merge_to_csv" },
+    { "id": "e8", "source": "merge_to_csv", "target": "get_claim1" },
+    { "id": "e9", "source": "get_claim1", "target": "query_ppubs" },
+    { "id": "e10", "source": "query_ppubs", "target": "ppubs_ok" },
+    { "id": "e11", "source": "ppubs_ok", "target": "finish", "label": "是" },
+    { "id": "e12", "source": "ppubs_ok", "target": "query_gpatents", "label": "否" },
+    { "id": "e13", "source": "query_gpatents", "target": "gpatents_ok" },
+    { "id": "e14", "source": "gpatents_ok", "target": "fail_fast_block", "label": "否 (403/503)" },
+    { "id": "e15", "source": "gpatents_ok", "target": "parse_html_claim", "label": "是" },
+    { "id": "e16", "source": "parse_html_claim", "target": "finish" }
+  ]
+}

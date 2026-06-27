@@ -140,7 +140,29 @@ search(優先 GPSS, CPC+關鍵詞) → 命中數
 
 ## 五、本生產線的分工對應
 
-- **MCP tool**(patentmcp,皆已上線):`gpss_search`(首選,一次回全欄)、`epo_family/biblio/search`(官方家族/摘要/CQL)、`gpatents_search/get/download_*`(語義+圖)、`build_screening_table`(search→去重→CSV→handle)、`stage_file`(任意檔→handle)。
+- **MCP tool**(patentmcp,皆已上線):`gpss_search`(首選,一次回全欄)、`gpss_download_representative_figure`(GPSS代表圖下載)、`epo_family/biblio/search`(官方家族/摘要/CQL)、`gpatents_search/get/download_*`(語義+圖)、`build_screening_table`(search→去重→CSV→handle)、`stage_file`(任意檔→handle)。
 - **skill**(`patentworks`,已建):router + flows(disclosure/screening/drafting)+ 法域 reference,編排「search → 逐筆消化 → 評分 CSV」。
 - **CSV / docxmcp**:結果落地成 CSV / 報告,經 token+blob handle 交付。
 - 資料來源優先序:GPSS(首選)> EPO(家族/摘要/CQL,零限速)> Google Patents(語義+圖,需節流)> BigQuery(僅便宜 metadata)。
+
+---
+
+## 六、前案檢索與報告組裝 SOP 契約（SOP Contract）
+
+為避免 API 崩潰、限流及產出格式損壞，所有前案檢索與報告編譯任務必須嚴格遵循以下 SOP：
+
+### 1. 先發散後收斂的檢索策略
+* **策略矩陣**：必須使用「CPC + 關鍵字」的多種排列組合（例如 `(A & B) | C`）在 GPSS 進行多次檢索，確保無遺漏。
+* **日誌追蹤**：必須在本地建立並維護 `search_log.md` 表格，詳細記錄每組檢索的布林邏輯、條件、命中數量及檢索庫，以供後續稽核溯源。
+* **大池收斂**：若單次查詢命中數過大（例如大於 1000 件），必須增加更精準的條件以進行限縮，禁止直接無腦下載。
+* **本地合併與去重**：各檢索式的 CSV 必須在本地合併與去重，完成 AI 摘要篩選後，僅針對精選出最相關的 **Top N 核心專利**進行 Claim 1 詳細解讀與 PDF / 代表圖的精準下載。
+
+### 2. Google Patents（gpatents）使用禁忌與 Fail-Fast 熔斷
+* **代表圖下載優先**：若需下載專利（特別是 TW 專利）之代表圖，**必須優先使用** `gpss_download_representative_figure` 工具，以降低對 Google Patents API 的請求頻率。
+* **批量禁令**：**絕對禁止**以 Google Patents 作為批量檢索的主力（其網頁版極度敏感，極易觸發 Block）。
+* **單件 Fallback 定位**：`gpatents` 客戶端僅可作為官方 API（PPUBS / GPSS / EPO）失敗時的**最後備援降級手段**，僅限用於單件專利網頁內容或 PDF 文件的解析下載。
+* **Fail-Fast 熔斷**：在呼叫 `gpatents_*` 工具時，若遭遇 HTTP `403`、`429` 或 `503` 等封鎖與限流狀態，系統必須**立即熔斷退出並拋出錯誤**，嚴禁撰寫任何自製腳本進行 `time.sleep()` 迴圈重試。
+
+### 3. 工具邊界與 Python CSV 處理防護 (Anti-Scripts 規範)
+* **安全 CSV 處理**：對包含多行摘要與 claims 文本的 CSV 檔案，**嚴禁**使用 `awk`、`sed` 等 shell 行式工具進行修改或合併，以防雙引號與逗號格式毀損。必須在 Python 沙盒中呼叫 Python 的標準 `csv.DictReader` 與 `csv.DictWriter` 進行處理。
+* **`docxmcp` 組裝契約**：Word 報告的生成**嚴禁**使用 Python 開發本地腳本操作 OOXML XML 結構或自行 zip 打包。必須完整依賴 `docxmcp_document` (Mode A: `assemble`) 原生工具，將 Markdown 及資產交給 `docxmcp` 的目錄結構（含 `manifest.json`、`chapters/`）進行安全編譯。

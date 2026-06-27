@@ -851,6 +851,9 @@ async def gpatents_search(
 ) -> Dict[str, Any]:
     """Relevance-ranked prior-art search via Google Patents (patents.google.com).
 
+    WARNING: Google Patents is highly sensitive to scraping. Use ONLY as a last resort
+    for single-file retrieval. DO NOT use for batch processing or automated crawling.
+    
     Unlike the BigQuery tools (billed per bytes scanned), this is free and returns
     Google's semantic ranking plus a representative-figure thumbnail and full-PDF
     link for every hit. Default country coverage is US/CN/TW.
@@ -926,6 +929,7 @@ async def build_screening_table(
     """
     # 1) search → normalized records
     if gpss_client.configured():
+        import asyncio
         conditions: List[GPSSCondition] = []
         if cpc:
             conditions.append(GPSSCondition("CS", cpc))
@@ -933,14 +937,46 @@ async def build_screening_table(
             conditions.append(GPSSCondition("TI/AB", keyword))
         if date_from or date_to:
             conditions.append(GPSSCondition("ID", f"{date_from or ''}:{date_to or ''}"))
-        res = await gpss_client.search(
-            conditions=conditions, databases=databases,
-            fields="PN,AN,ID,AD,PR,TI,AB,CL,IC,CS,UC,PA,IN",
-            num=max(num, max_rows), fmt="json",
-        )
-        if not res.get("success") and res.get("error"):
-            return {"success": False, "error": res["error"]}
-        records = _st.gpss_to_records(res)
+        
+        target_num = max(num, max_rows)
+        chunk_size = 50
+        records = []
+        skip = 0
+        
+        while len(records) < target_num:
+            current_num = min(chunk_size, target_num - len(records))
+            res = await gpss_client.search(
+                conditions=conditions, databases=databases,
+                fields="PN,AN,ID,AD,PR,TI,AB,CL,IC,CS,UC,PA,IN",
+                num=current_num, skip=skip, fmt="json",
+            )
+            if not res.get("success"):
+                if len(records) > 0:
+                    logger.warning(
+                        "GPSS search pagination failed at skip=%d: %s",
+                        skip, res.get("error") or res.get("message")
+                    )
+                    break
+                return {"success": False, "error": res.get("error") or res.get("message") or "GPSS search failed"}
+            
+            page_records = _st.gpss_to_records(res)
+            if not page_records:
+                break
+            records.extend(page_records)
+            
+            total_available = res.get("total")
+            if total_available is not None:
+                try:
+                    total_available = int(total_available)
+                except ValueError:
+                    total_available = None
+            
+            if total_available is not None and len(records) >= total_available:
+                break
+                
+            skip += len(page_records)
+            await asyncio.sleep(1.0)
+            
         source = "gpss"
     else:
         q = keyword or cpc or ""
@@ -1011,6 +1047,9 @@ async def gpatents_get(
 ) -> Dict[str, Any]:
     """Fetch a patent's full abstract + claims from its Google Patents page.
 
+    WARNING: Google Patents is highly sensitive to scraping. Use ONLY as a last resort
+    for single-file retrieval. DO NOT use for batch processing or automated crawling.
+    
     Use after gpatents_search to pull the complete claims (the search snippet is
     only an excerpt). CN/JP/etc. are returned as Google's English machine
     translation. abstract + claims are returned in-band (small). When
@@ -1028,6 +1067,181 @@ async def gpatents_get(
     result.pop("description", None)
     result["fulltext"] = _handle(entry)
     return result
+
+
+def clean_html_text(html_text: str) -> str:
+    if not html_text:
+        return ""
+    import re
+    # Remove HTML tags
+    text = re.sub(r'<[^>]+>', ' ', html_text)
+    # Normalize whitespaces
+    return re.sub(r'\s+', ' ', text).strip()
+
+def extract_claim1_text(claims_text: str) -> str:
+    if not claims_text:
+        return "Claim 1 not found."
+    claims_text = claims_text.strip()
+    import re
+    
+    m = re.search(r'1\.\s+(.*?)(?=\s+2\.\s+|\n2\.)', claims_text, re.DOTALL | re.IGNORECASE)
+    if m:
+        return re.sub(r'\s+', ' ', m.group(1).strip())
+        
+    m = re.search(r'1\.\s+(.*)', claims_text, re.DOTALL | re.IGNORECASE)
+    if m:
+        return re.sub(r'\s+', ' ', m.group(1).strip())
+        
+    m = re.search(r'1[\.、](.*?)(?=\s*2[\.、]|\n2[\.、])', claims_text, re.DOTALL)
+    if m:
+        return re.sub(r'\s+', ' ', m.group(1).strip())
+
+    m = re.search(r'1[\.、](.*)', claims_text, re.DOTALL)
+    if m:
+        return re.sub(r'\s+', ' ', m.group(1).strip())
+
+    return claims_text[:1000].strip() + "..."
+
+@mcp.tool()
+async def patent_get_claim1(publication_number: str) -> Dict[str, Any]:
+    """Retrieve the cleaned and normalized Claim 1 text for any given patent publication number.
+
+    Automatically handles US (application and grant paths), CN, TW, EP, WIPO, etc.
+    with fallback chain: PPUBS/BigQuery -> GPSS -> Google Patents Scraper.
+
+    Args:
+        publication_number: Patent publication number (e.g. US20250252737A1, US11875659B2, TW202403664A).
+
+    Returns:
+        Dictionary containing success, publication_number, and the claim1 text.
+    """
+    import re
+    pat = publication_number.strip()
+    
+    # 1. US patents logic
+    if pat.upper().startswith("US"):
+        # clean number (extract digits)
+        clean_num = re.sub(r'^(US)', '', pat, flags=re.IGNORECASE)
+        clean_num = re.sub(r'[A-Z]\d*$', '', clean_num, flags=re.IGNORECASE)
+        
+        try:
+            # Application vs Grant path
+            if pat.upper().endswith("A1") or pat.upper().endswith("A2") or pat.upper().endswith("A9") or (len(clean_num) == 11 and clean_num.startswith(("201", "202"))):
+                # Search in US-PGPUB
+                search_res = await ppubs_client.run_query(
+                    query=f'publicationNumber:"{clean_num}"',
+                    sources=["US-PGPUB"],
+                    limit=1
+                )
+                docs = search_res.get("patents", []) or search_res.get("docs", [])
+                if not docs:
+                    # Alternative query format
+                    search_res = await ppubs_client.run_query(
+                        query=f'"{clean_num}".pn.',
+                        sources=["US-PGPUB"],
+                        limit=1
+                    )
+                    docs = search_res.get("patents", []) or search_res.get("docs", [])
+                
+                if docs:
+                    doc = docs[0]
+                    res = await ppubs_client.get_document(doc["guid"], doc.get("type", "US-PGPUB"))
+                    if "claimsHtml" in res:
+                        plain_claims = clean_html_text(res["claimsHtml"])
+                        claim1 = extract_claim1_text(plain_claims)
+                        return {"success": True, "publication_number": pat, "claim1": claim1}
+            else:
+                # Search in USPAT
+                search_res = await ppubs_client.run_query(
+                    query=f'patentNumber:"{clean_num}"',
+                    sources=["USPAT"],
+                    limit=1
+                )
+                docs = search_res.get("patents", []) or search_res.get("docs", [])
+                if not docs:
+                    # Alternative query format
+                    search_res = await ppubs_client.run_query(
+                        query=f'"{clean_num}".pn.',
+                        sources=["USPAT"],
+                        limit=1
+                    )
+                    docs = search_res.get("patents", []) or search_res.get("docs", [])
+                
+                if docs:
+                    doc = docs[0]
+                    res = await ppubs_client.get_document(doc["guid"], doc.get("type", "USPAT"))
+                    if "claimsHtml" in res:
+                        plain_claims = clean_html_text(res["claimsHtml"])
+                        claim1 = extract_claim1_text(plain_claims)
+                        return {"success": True, "publication_number": pat, "claim1": claim1}
+            
+            logger.warning(f"US patent claims not found in PPUBS for {pat}. Falling back to other sources.")
+        except Exception as e:
+            logger.warning(f"PPUBS error for {pat}: {str(e)}. Falling back to other sources.")
+            
+    # 2. Non-US patents logic (BigQuery -> GPSS -> Scraper fallback)
+    # A) BigQuery
+    if google_bq_client.client is not None:
+        try:
+            m = re.match(r'^([A-Z]{2})(\d+)([A-Z]\d*)?$', pat, re.IGNORECASE)
+            if m:
+                bq_pat = f"{m.group(1).upper()}-{m.group(2)}-{m.group(3) or 'A'}"
+            else:
+                bq_pat = pat
+            
+            bq_res = await google_bq_client.get_patent_claims(bq_pat)
+            if bq_res.get("success") and bq_res.get("claims"):
+                claims_list = bq_res["claims"]
+                if claims_list:
+                    claim1 = claims_list[0].get("claim_text", "")
+                    claim1 = extract_claim1_text(clean_html_text(claim1))
+                    return {"success": True, "publication_number": pat, "claim1": claim1}
+        except Exception as e:
+            logger.warning(f"BigQuery fallback trigger: {str(e)}")
+
+    # B) GPSS Client
+    if gpss_client.configured():
+        try:
+            db = None
+            if pat.upper().startswith("TW"):
+                db = ["TWA", "TWB"]
+            
+            gpss_res = await gpss_client.search(
+                conditions=[GPSSCondition("PN", pat)],
+                databases=db,
+                fields="PN,CL"
+            )
+            if gpss_res.get("success") and gpss_res.get("data"):
+                api = gpss_res["data"].get("gpss-API", {})
+                patent_content = api.get("patent", {}).get("patentcontent", [])
+                if not isinstance(patent_content, list):
+                    patent_content = [patent_content]
+                if patent_content:
+                    claims = patent_content[0].get("claims", {}).get("claim", [])
+                    if not isinstance(claims, list):
+                        claims = [claims]
+                    if claims:
+                        ct = claims[0].get("claim-text", "")
+                        claim1 = " ".join(ct) if isinstance(ct, list) else str(ct or "")
+                        if claim1:
+                            return {"success": True, "publication_number": pat, "claim1": claim1.strip()}
+        except Exception as e:
+            logger.warning(f"GPSS fallback trigger: {str(e)}")
+
+    # C) Google Patents Scraper Fallback
+    try:
+        gpat_res = await gpatents_client.get_patent(pat, include_description=False)
+        if gpat_res.get("success") and gpat_res.get("claims"):
+            claims_list = gpat_res["claims"]
+            if claims_list:
+                claim1 = claims_list[0].get("text", "")
+                claim1 = extract_claim1_text(clean_html_text(claim1))
+                return {"success": True, "publication_number": pat, "claim1": claim1}
+            return {"success": False, "publication_number": pat, "error": "No claims found in gpatents response."}
+        else:
+            return {"success": False, "publication_number": pat, "error": gpat_res.get("error", "Failed to fetch from gpatents.")}
+    except Exception as e:
+        return {"success": False, "publication_number": pat, "error": f"Scraper error: {str(e)}"}
 
 
 @mcp.tool()
@@ -1063,6 +1277,209 @@ async def gpatents_download_figure(figure_url: str, filename: Optional[str] = No
     name = filename or figure_url.rsplit("/", 1)[-1] or "figure.png"
     entry = token_store.put_bytes(data, name)
     return _handle(entry)
+
+
+@mcp.tool()
+async def gpss_download_representative_figure(
+    publication_number: str,
+) -> Dict[str, Any]:
+    """Download a patent's representative figure headlessly from TIPO GPSS into the token store.
+
+    This replicates a browser session to fetch the static representative figure.
+    Returns a handle {token, rel, download_url, bytes, sha256} of the saved image.
+    """
+    import random
+    import re
+    import httpx
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+    
+    pat = publication_number.strip()
+    
+    try:
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0) as client:
+            # Step 1: Visit portal
+            await client.get("https://tiponet.tipo.gov.tw/030_OUT_V1/home.do")
+            
+            # Step 2: Initialize GPSS session
+            await client.get("https://tiponet.tipo.gov.tw/gpss2/")
+            
+            # Step 3: Load search page and bypass client-side JS random redirect
+            rand_val = random.random()
+            gpss_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/gpssbkm?@@{rand_val}"
+            res = await client.get(gpss_url)
+            
+            # Extract INFO parameter
+            m_info = re.search(r'name=["\']?INFO["\']?\s+value=["\']?([A-Za-z0-9]+)["\']?', res.text, re.IGNORECASE)
+            if not m_info:
+                m_info = re.search(r'value=["\']?([A-Za-z0-9]+)["\']?\s+name=["\']?INFO["\']?', res.text, re.IGNORECASE)
+                
+            if not m_info:
+                return {"success": False, "error": "Failed to retrieve INFO token from GPSS session"}
+            
+            info_val = m_info.group(1)
+            
+            # Extract action path
+            m_action = re.search(r'action=["\']?(/gpss[12]/gpsskmc/gpssbkm[^\'"]*)["\']?', res.text, re.IGNORECASE)
+            action_path = m_action.group(1) if m_action else '/gpss2/gpsskmc/gpssbkm'
+            action_url = f"https://tiponet.tipo.gov.tw{action_path}"
+            
+            # Step 4: Search POST
+            data = {
+                "INFO": info_val,
+                "@_21_1_T": "T_XX",
+                "_21_1_T": pat,
+                "@_0_9_T": "T_XX",
+                "_0_9_T": "",
+                "_IMG_檢索.x": "25",
+                "_IMG_檢索.y": "25"
+            }
+            res = await client.post(action_url, data=data)
+            
+            # Handle refresh redirect if any
+            m_refresh = re.search(r'CONTENT=["\']?0;\s*URL=([^"\'>\s]+)["\']?', res.text, re.IGNORECASE)
+            if m_refresh:
+                redirect_url = m_refresh.group(1).strip("'\"")
+                if not redirect_url.startswith("http"):
+                    redirect_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/{redirect_url}"
+                res = await client.get(redirect_url)
+            
+            # Step 5: Follow detail page link
+            m_detail = re.search(r'href=["\']?(/gpss[12]/gpsskmc/gpssbkm\?[^\s\'">]+)[^>]*class=["\']?link02["\']?', res.text, re.IGNORECASE)
+            if not m_detail:
+                return {"success": False, "error": f"Patent detail link for '{pat}' not found in search results"}
+                
+            detail_url = f"https://tiponet.tipo.gov.tw{m_detail.group(1)}"
+            res_detail = await client.get(detail_url)
+            
+            # Extract image URLs
+            img_urls = re.findall(r'/gpss[12]/gpssbkmusr/[^\'" >]+', res_detail.text)
+            img_urls = [url.split()[0] for url in img_urls]
+            img_urls = list(dict.fromkeys(img_urls))
+            
+            # Find representative figure (TWG1)
+            rep_img_url = None
+            for url in img_urls:
+                if "TWG1" in url:
+                    rep_img_url = url
+                    break
+            if not rep_img_url and img_urls:
+                rep_img_url = img_urls[0]
+                
+            if not rep_img_url:
+                return {"success": False, "error": "No representative figure found for this patent"}
+                
+            abs_img_url = f"https://tiponet.tipo.gov.tw{rep_img_url}"
+            
+            # Step 6: Fetch image bytes
+            img_res = await client.get(abs_img_url)
+            if img_res.status_code != 200:
+                return {"success": False, "error": f"Failed to download image (HTTP {img_res.status_code})"}
+                
+            # Put bytes to token store
+            filename = rep_img_url.rsplit("/", 1)[-1] or f"{pat}_figure.png"
+            entry = token_store.put_bytes(img_res.content, filename)
+            return _handle(entry)
+            
+    except Exception as e:
+        return {"success": False, "error": f"GPSS figure download exception: {str(e)}"}
+
+
+@mcp.tool()
+async def fetch_patent_pdf(
+    publication_number: str,
+    sources: Optional[List[str]] = None,
+    filename: Optional[str] = None,
+    include_attempts: bool = False,
+) -> Dict[str, Any]:
+    """Fetch a patent's original PDF for a KNOWN publication number.
+
+    Routes official sources first, then the Google Patents citation fallback:
+      1. epo_images     — EPO OPS official image API (OAuth, no scraping).
+                          Best for EP/WO and many national members.
+      2. google_citation — resolve the true hashed `citation_pdf_url` from the
+                          patent's Google Patents page, then download. This is a
+                          SINGLE known-number page resolution (NOT batch
+                          scraping); use as last resort.
+
+    The PDF bytes are LANDED in the token store and returned as a docxmcp-style
+    handle {token, rel, download_url, bytes, sha256}; bytes never flow through
+    the model context. Hand the token to docxmcp's PDF decompose to extract the
+    original figures.
+
+    sources: attempt order; defaults to ["epo_images", "google_citation"].
+    include_attempts: attach a per-source attempts[] trace to the result.
+    """
+    order = sources or ["epo_images", "google_citation"]
+    attempts: List[Dict[str, Any]] = []
+    name = filename or f"{publication_number}.pdf"
+
+    for src in order:
+        if src == "epo_images":
+            if not epo_client.configured():
+                attempts.append({"source": src, "ok": False, "error": "EPO_NOT_CONFIGURED"})
+                continue
+            try:
+                meta = await epo_client.images(publication_number)
+                if not meta.get("success"):
+                    attempts.append({"source": src, "ok": False,
+                                     "error": meta.get("error", "images lookup failed")})
+                    continue
+                if meta.get("count") == 0:
+                    attempts.append({"source": src, "ok": False, "error": "NO_IMAGES"})
+                    continue
+                data = await epo_client.download_image_pdf(publication_number)
+                if not data:
+                    attempts.append({"source": src, "ok": False, "error": "EMPTY_PDF"})
+                    continue
+                entry = token_store.put_bytes(data, name)
+                result = _handle(entry)
+                result["source"] = src
+                result["provenance"] = {"api": "EPO OPS published-data/images",
+                                        "scraping": False}
+                attempts.append({"source": src, "ok": True, "bytes": entry.size_bytes})
+                if include_attempts:
+                    result["attempts"] = attempts
+                return result
+            except Exception as e:  # noqa: BLE001
+                attempts.append({"source": src, "ok": False, "error": str(e)})
+                continue
+
+        elif src == "google_citation":
+            try:
+                resolved = await gpatents_client.resolve_pdf_url(publication_number)
+                if not resolved.get("success"):
+                    attempts.append({"source": src, "ok": False,
+                                     "error": resolved.get("error", "resolve failed"),
+                                     "http_code": resolved.get("http_code")})
+                    continue
+                pdf_url = resolved["pdf_url"]
+                data = await gpatents_client.fetch_bytes(pdf_url)
+                if not data:
+                    attempts.append({"source": src, "ok": False, "error": "EMPTY_PDF"})
+                    continue
+                entry = token_store.put_bytes(data, name)
+                result = _handle(entry)
+                result["source"] = src
+                result["provenance"] = {"resolved_pdf_url": pdf_url, "scraping": False,
+                                        "note": "single known-number page resolution, not batch scraping"}
+                attempts.append({"source": src, "ok": True, "bytes": entry.size_bytes})
+                if include_attempts:
+                    result["attempts"] = attempts
+                return result
+            except Exception as e:  # noqa: BLE001
+                attempts.append({"source": src, "ok": False, "error": str(e)})
+                continue
+
+        else:
+            attempts.append({"source": src, "ok": False, "error": "UNKNOWN_SOURCE"})
+
+    return {"success": False, "error": "ALL_SOURCES_FAILED",
+            "publication_number": publication_number, "attempts": attempts}
 
 
 # =====================================================================

@@ -1,0 +1,20 @@
+[
+  {
+    "title": "Paginated Search & Claim 1 Fallback Flow",
+    "participants": ["User", "MCP", "GPSS", "PPUBS", "GooglePatents"],
+    "messages": [
+      { "from": "User", "to": "MCP", "text": "build_screening_table(Matrix)" },
+      { "from": "MCP", "to": "GPSS", "text": "query_page_1" },
+      { "from": "GPSS", "to": "MCP", "text": "data_page_1" },
+      { "from": "MCP", "to": "GPSS", "text": "query_page_2 (after cooldown)" },
+      { "from": "GPSS", "to": "MCP", "text": "data_page_2" },
+      { "from": "MCP", "to": "User", "text": "return_csv_handle" },
+      { "from": "User", "to": "MCP", "text": "patent_get_claim1(PN)" },
+      { "from": "MCP", "to": "PPUBS", "text": "get_claim1(PN)" },
+      { "from": "PPUBS", "to": "MCP", "text": "not_found" },
+      { "from": "MCP", "to": "GooglePatents", "text": "get_patent_claims(PN)" },
+      { "from": "GooglePatents", "to": "MCP", "text": "claims_html" },
+      { "from": "MCP", "to": "User", "text": "return_claim1_text" }
+    ]
+  }
+]

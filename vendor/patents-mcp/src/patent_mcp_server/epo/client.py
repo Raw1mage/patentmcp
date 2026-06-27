@@ -1,9 +1,11 @@
 """Client for EPO Open Patent Services (OPS) v3.2.
 
-OAuth2 client_credentials with auto-refresh; JSON responses. Endpoints used:
+OAuth2 client_credentials with auto-refresh. Endpoints used:
   - family/publication/docdb/{cc.num.kind}            INPADOC family
   - published-data/publication/docdb/{...}/biblio     bibliographic data
   - published-data/publication/docdb/{...}/abstract   abstract
+  - published-data/publication/docdb/{...}/images     image availability
+  - published-data/images/{...}/fullimage.pdf         image download
   - published-data/search?q={CQL}                     CQL search
 """
 import asyncio
@@ -79,7 +81,7 @@ class EPOClient:
             self._token_exp = time.monotonic() + int(j.get("expires_in", 1200))
             return self._token
 
-    async def _get(self, path: str) -> Dict[str, Any]:
+    async def _request(self, path: str, headers: Optional[Dict[str, str]] = None) -> httpx.Response:
         async with self._req_lock:
             for attempt in range(self.max_retries + 1):
                 token = await self._token_value()
@@ -88,16 +90,19 @@ class EPOClient:
                            self._cooldown_until - now, 0.0)
                 if wait > 0:
                     await asyncio.sleep(wait)
+                
+                req_headers = {"Authorization": f"Bearer {token}"}
+                if headers:
+                    req_headers.update(headers)
+                
                 try:
-                    resp = await self._client.get(
-                        BASE_URL + path,
-                        headers={"Authorization": f"Bearer {token}",
-                                 "Accept": "application/json"},
-                    )
+                    resp = await self._client.get(BASE_URL + path, headers=req_headers)
                 finally:
                     self._last_req = time.monotonic()
+                
                 if resp.status_code == 404:
-                    return {"_status": 404}
+                    return resp
+                
                 # OPS signals throttling via 403/429 (and X-Throttling-Control).
                 if resp.status_code in (403, 429):
                     backoff = min(60.0, 6.0 * (2 ** attempt))
@@ -108,10 +113,23 @@ class EPOClient:
                                    backoff, attempt + 1, self.max_retries)
                     if attempt < self.max_retries:
                         continue
+                
                 resp.raise_for_status()
-                return resp.json()
+                return resp
             resp.raise_for_status()
-            return resp.json()
+            return resp
+
+    async def _get(self, path: str) -> Dict[str, Any]:
+        resp = await self._request(path, headers={"Accept": "application/json"})
+        if resp.status_code == 404:
+            return {"_status": 404}
+        return resp.json()
+
+    async def _get_binary(self, path: str, accept: str = "*/*") -> bytes:
+        resp = await self._request(path, headers={"Accept": accept})
+        if resp.status_code == 404:
+            return b""
+        return resp.content
 
     # ── family ──────────────────────────────────────────────────────
     async def family(self, pub: str) -> Dict[str, Any]:
@@ -238,6 +256,35 @@ class EPOClient:
                     "count": len(pubs), "results": pubs}
         except Exception as e:  # noqa: BLE001
             return {"success": False, "error": f"parse error: {e}"}
+
+    # ── images ──────────────────────────────────────────────────────
+    async def images(self, pub: str) -> Dict[str, Any]:
+        """Check image availability for a publication."""
+        if not self.configured():
+            return {"success": False, "error": "EPO_CONSUMER_KEY/SECRET not set"}
+        docdb = to_docdb(pub)
+        if not docdb:
+            return {"success": False, "error": f"cannot parse pub number: {pub}"}
+        try:
+            data = await self._get(f"/published-data/publication/docdb/{docdb}/images")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"EPO images failed for {pub}: {e}")
+            return {"success": False, "error": str(e)}
+        if data.get("_status") == 404:
+            return {"success": True, "pub": pub, "count": 0, "images": []}
+        return {"success": True, "pub": pub, "data": data}
+
+    async def download_image_pdf(self, pub: str, range_: str = "1") -> bytes:
+        """Download a patent image PDF page range."""
+        if not self.configured():
+            raise ValueError("EPO_CONSUMER_KEY/SECRET not set")
+        docdb = to_docdb(pub)
+        if not docdb:
+            raise ValueError(f"cannot parse pub number: {pub}")
+        # docdb is CC.NUM.KIND
+        cc, num, kind = docdb.split(".")
+        path = f"/published-data/images/{cc}/{num}/{kind}/fullimage.pdf?Range={range_}"
+        return await self._get_binary(path, accept="application/pdf")
 
     async def close(self):
         await self._client.aclose()

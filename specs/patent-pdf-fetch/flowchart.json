@@ -1,0 +1,31 @@
+{
+  "diagram_title": "Patent PDF Fetch Workflow",
+  "nodes": [
+    { "id": "start", "type": "terminator", "text": "開始" },
+    { "id": "check_source", "type": "decision", "text": "優先權路徑？" },
+    { "id": "epo_path", "type": "process", "text": "EPO OPS Image API" },
+    { "id": "google_path", "type": "process", "text": "Google Patents Metadata" },
+    { "id": "epo_auth", "type": "process", "text": "OAuth 認證 / Token 刷新" },
+    { "id": "epo_img_list", "type": "process", "text": "取得 Image List (DOCDB)" },
+    { "id": "epo_download", "type": "process", "text": "逐頁 PDF 下載與合併" },
+    { "id": "google_scrape", "type": "process", "text": "單件頁面抽 citation_pdf_url" },
+    { "id": "direct_download", "type": "process", "text": "Binary 串流下載 (Token Store)" },
+    { "id": "validate", "type": "decision", "text": "檔案驗證 (Size/Type)" },
+    { "id": "token_ready", "type": "terminator", "text": "產出 Token / URL" },
+    { "id": "fail", "type": "terminator", "text": "失敗 (降級至文字)" }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start", "target": "check_source" },
+    { "id": "e2", "source": "check_source", "target": "epo_path", "label": "官方優先" },
+    { "id": "e3", "source": "check_source", "target": "google_path", "label": "Fallback" },
+    { "id": "e4", "source": "epo_path", "target": "epo_auth" },
+    { "id": "e5", "source": "epo_auth", "target": "epo_img_list" },
+    { "id": "e6", "source": "epo_img_list", "target": "epo_download" },
+    { "id": "e7", "source": "epo_download", "target": "validate" },
+    { "id": "e8", "source": "google_path", "target": "google_scrape" },
+    { "id": "e9", "source": "google_scrape", "target": "direct_download" },
+    { "id": "e10", "source": "direct_download", "target": "validate" },
+    { "id": "e11", "source": "validate", "target": "token_ready", "label": "通過" },
+    { "id": "e12", "source": "validate", "target": "fail", "label": "無效" }
+  ]
+}

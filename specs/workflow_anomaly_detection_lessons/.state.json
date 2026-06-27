@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-06-27T05:03:37.993Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-06-27T05:04:48.184Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "已建立且設計完整 proposal.md, design.md, spec.md, tasks.md 與系統建模圖檔 (IDEF0, GRAFCET, Sequence, Flowchart, Data Schema) 以因應異常偵測前案檢索的優化需求。"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-06-27T05:04:49.408Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "已補齊 handoff.md, test-vectors.json, errors.md, observability.md 等輔助文件，符合 planned 狀態規範。技術規格、測試向量與錯誤處理策略已就緒。"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-06-27T05:18:46.648Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "開始執行實作：著手修改 gpss/client.py, gpatents/client.py, patents.py 以及 Companion Skill 文件以因應異常偵測前案檢索的優化需求。"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-06-27T05:19:02.158Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "實作已完成：GPSS 字典安全檢查與分頁、Google Patents Fail-Fast 熔斷、PPUBS 降級路由及 Companion Skill SOP 已部署。3 項單元測試全數通過（OK）。"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-06-27T07:08:26.598Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user-confirmed graduation"
+    }
+  ]
+}

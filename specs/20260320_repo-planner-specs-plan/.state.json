@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "state": "planned",
+  "state": "verified",
   "profile": [],
   "history": [
     {
@@ -26,6 +26,14 @@
       "by": "TheSmartAI",
       "mode": "promote",
       "reason": "rebuild spec-compliant skeleton with state, data contract, tests, errors, observability, and invariants"
+    },
+    {
+      "from": "planned",
+      "to": "verified",
+      "at": "2026-06-26T15:50:00.000Z",
+      "by": "antigravity",
+      "mode": "promote",
+      "reason": "已完整實作 flows/analysis.md 獨立分析流程，並更新 SKILL.md、screening.md 和 drafting.md 路由與銜接邏輯，完成所有 tasks.md 項目且同步 specs/architecture.md。"
     }
   ]
 }

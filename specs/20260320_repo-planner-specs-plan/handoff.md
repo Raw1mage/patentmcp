@@ -19,10 +19,9 @@
 - `skills/patent-practitioner-workflow.md`
 
 ## Current State
-- Specbase documents now describe PatentWorks as `patentmcp` MCP server + `patentworks` skill.
-- Analysis is specified as a planned source-agnostic layer.
-- No skill behavior has been changed yet.
-- Future implementation should start with `tasks.md` section 3.
+- Specbase documents describe PatentWorks as `patentmcp` MCP server + `patentworks` skill.
+- The analysis flow has been fully implemented under `skills/patentworks/flows/analysis.md` with four distinct scenarios.
+- Skill behaviors in `SKILL.md`, `screening.md`, and `drafting.md` have been updated to route to and consume analysis outputs.
 
 ## Stop Gates In Force
 - Pause before adding `flows/analysis.md` if the user wants only documentation/spec changes.
@@ -37,6 +36,6 @@
 - [x] Architecture SSOT updated
 - [x] Proposal/spec/design aligned
 - [x] Future tasks seeded
-- [ ] Analysis skill implemented
-- [ ] Skill routing updated
-- [ ] Screening/drafting handoff updated
+- [x] Analysis skill implemented
+- [x] Skill routing updated
+- [x] Screening/drafting handoff updated

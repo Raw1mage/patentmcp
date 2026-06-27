@@ -1,0 +1,30 @@
+{
+  "diagram_title": "Patent PDF Retrieval Architecture",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "text": "Resolve Download URL",
+      "inputs": ["Publication Number"],
+      "outputs": ["Hashed PDF URL"],
+      "controls": ["Source Priority Policy"],
+      "mechanisms": ["EPO OPS Images", "Google Metadata Resolver"]
+    },
+    {
+      "id": "A2",
+      "text": "Binary Acquisition",
+      "inputs": ["Hashed PDF URL"],
+      "outputs": ["PDF Binary"],
+      "controls": ["Throttling/Cooldown"],
+      "mechanisms": ["Binary HTTP Client"]
+    },
+    {
+      "id": "A3",
+      "text": "Staging & Handoff",
+      "inputs": ["PDF Binary"],
+      "outputs": ["Token Handle"],
+      "controls": ["Token Store Contract"],
+      "mechanisms": ["_token_store.py"]
+    }
+  ]
+}

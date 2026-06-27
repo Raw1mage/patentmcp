@@ -1,0 +1,28 @@
+[
+  {
+    "name": "PaginationConfig",
+    "fields": [
+      { "name": "limit", "type": "integer" },
+      { "name": "cooldown_sec", "type": "float" }
+    ]
+  },
+  {
+    "name": "ClaimResult",
+    "fields": [
+      { "name": "success", "type": "boolean" },
+      { "name": "publication_number", "type": "string" },
+      { "name": "source", "type": "string" },
+      { "name": "claim1", "type": "string" },
+      { "name": "error_code", "type": "string" }
+    ]
+  },
+  {
+    "name": "ScoringTableResult",
+    "fields": [
+      { "name": "success", "type": "boolean" },
+      { "name": "handle", "type": "string" },
+      { "name": "count", "type": "integer" },
+      { "name": "error_code", "type": "string" }
+    ]
+  }
+]

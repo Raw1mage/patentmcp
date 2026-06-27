@@ -136,7 +136,14 @@ class GPSSClient:
                 data = resp.json()
             except Exception:  # noqa: BLE001
                 return {"success": False, "error": "Expected JSON but parse failed", "raw": text[:500]}
-            api = data.get("gpss-API", data)
+            
+            if not isinstance(data, dict):
+                return {"success": False, "error": f"Expected JSON object but got {type(data).__name__}", "raw": text[:500]}
+            
+            api = data.get("gpss-API") or data
+            if not isinstance(api, dict):
+                return {"success": False, "error": f"Expected JSON object inside gpss-API but got {type(api).__name__}", "raw": text[:500]}
+                
             status = api.get("status")
             message = api.get("message")
             # status=success with a message means "no record found" / error string.

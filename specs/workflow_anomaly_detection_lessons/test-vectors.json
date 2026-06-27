@@ -1,0 +1,38 @@
+[
+  {
+    "id": "V1",
+    "name": "GPSS HTML Error Decoded",
+    "input": {
+      "mock_response": "<html><body>502 Bad Gateway</body></html>"
+    },
+    "expectation": {
+      "success": false,
+      "error_code": "JSON_DECODE_ERROR"
+    }
+  },
+  {
+    "id": "V2",
+    "name": "PPUBS Fallback to Google Patents Claim 1",
+    "input": {
+      "publication_number": "US11923092B2",
+      "mock_ppubs_status": 404
+    },
+    "expectation": {
+      "success": true,
+      "source": "google_patents_fallback",
+      "claim1_contains": "claim 1"
+    }
+  },
+  {
+    "id": "V3",
+    "name": "Google Patents Blocked 403 Fail-Fast",
+    "input": {
+      "publication_number": "US11923092B2",
+      "mock_gpatents_status": 403
+    },
+    "expectation": {
+      "success": false,
+      "error_code": "GPATENTS_403_FORBIDDEN"
+    }
+  }
+]

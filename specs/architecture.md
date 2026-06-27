@@ -52,7 +52,7 @@
   - 負責資料取得、CPC/keyword 查詢、候選去重、建表、取文、PDF/figure/fulltext handle 化。
   - 不負責最終法律裁決；只提供可稽核資料與 AI 預篩欄位。
 - **分析層 (`analysis`, planned skill boundary)**
-  - 負責把任意來源材料正規化為技術特徵、要件對照、差異點、風險/新穎性綜述、drafting basis。
+  - 負責把任意來源材料正規化為技術特徵、要件對照（Claim Chart）、差異點、FTO/無效/前案可專利性比對分析、drafting basis。
   - 輸入來源可為 `retrieval_mcp`、`user_provided`、`file`、`mixed`。
   - 輸出應是結構化、可被 drafting 使用的中間產物，而非直接綁定 CSV 或 MCP schema。
   - CSV 大檔的讀取、切批、抽樣、索引與分工策略由執行 agent 自主決定；架構只要求結果可稽核、來源可追溯、不可捏造證據。
@@ -81,6 +81,7 @@
 
 ## Debug / Observability Map
 - 檢索工具邊界：`vendor/patents-mcp/src/patent_mcp_server/patents.py` 的 MCP tool docstring 與返回 schema。
+- 原始 PDF/圖檔取得邊界（plan `patent-pdf-fetch`, 2026-06）：`fetch_patent_pdf(publication_number, sources?, filename?, include_attempts?)` 統一工具，依序路由 `epo_images`（`EPOClient.images()` + `download_image_pdf()`，EPO OPS 官方影像 API）→ `google_citation`（`GooglePatentsClient.resolve_pdf_url()` 解析專利頁真實雜湊 `citation_pdf_url`）。回 docxmcp 風格 token handle（bytes 不經 model context），token 交 docxmcp `decompose(format=pdf)` 抽圖。端到端實證含 TW 案。文字（claims/全文/圖說）仍走 `google_*` BigQuery + GPSS/USPTO PPUBS。
 - Skill routing：`skills/patentworks/SKILL.md` 的 flow 選擇表。
 - 檢索/分析領域規格：`skills/patent-practitioner-workflow.md`。
 - Flow 契約：`skills/patentworks/flows/*.md`。
@@ -90,9 +91,8 @@
 ## Plan-Builder Spec Package
 - Active plan root: `specs/20260320_repo-planner-specs-plan/`。
 - Core artifacts: `proposal.md`、`spec.md`、`design.md`、`tasks.md`、`handoff.md`、`implementation-spec.md`。
-- 本 package 現在的任務是把 specbase 文件重構為現行 PatentWorks 架構，並為「獨立 analysis skill」建立可執行契約。
-- 本 package 不代表已完成 analysis skill 實作；它定義下一步實作與驗證邊界。
+- 本 package 成功定義了 `analysis` 作為資料來源無關的中介層與輸入輸出契約（已於 2026-06-26 完整實作 `flows/analysis.md` 與前後銜接路由）。
 
 ## Architecture Sync Note
 - 2026-06-15: 已將架構 SSOT 從舊八階段 prompt pipeline 重構為 PatentWorks MCP + skill 現況；新增 analysis 作為資料來源無關的 planned boundary。
-- 後續若新增 `flows/analysis.md`、調整 `SKILL.md` flow router、或修改 MCP table schema，必須同步本檔與 plan package。
+- 2026-06-26: 獨立分析技能流程 `skills/patentworks/flows/analysis.md` 實作完成，並已同步更新 `SKILL.md` 路由表，以及 `screening.md` 與 `drafting.md` 的銜接說明。

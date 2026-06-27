@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-06-26T10:36:53.666Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-06-26T11:03:47.387Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "已補齊並修正 spec.md, design.md, tasks.md 及各項圖模（IDEF0, GRAFCET, Sequence, Data Schema），並包含要求的 Purpose, Requirements, Scenarios, Context 等必填章節。圖模結構已修正為符合驗證器期待的格式（如 grafcet 的 Steps/Transitions 大寫、sequence 的 array 格式）。技術方案已就緒，準備進入實作階段。"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-06-26T11:05:15.939Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "已補齊 handoff.md, test-vectors.json, errors.md, observability.md 並修正章節標題，符合 planned 狀態規範。技術規格、測試向量與錯誤處理策略已就緒。"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-06-26T11:05:17.426Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "所有必要的文件與圖模皆已就緒並通過驗證，準備進入實作階段。首要任務是擴充 EPOClient 以支援二進位下載。"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-06-26T11:21:38.847Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "全 20 tasks 完成: EPO images + Google citation 兩段路由實作、5 單元測試通過、端到端 smoke (TWI854998B → 63頁PDF → docxmcp 抽 ~45 張附圖) 驗證，含 TW 案。三檔 compile 通過，文件 (SOP/flow/architecture) 已同步。"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-06-27T07:08:25.268Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user-confirmed graduation"
+    }
+  ]
+}

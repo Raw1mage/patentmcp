@@ -14,19 +14,19 @@
 
 ## 3. Future Skill Implementation Slice
 
-- [ ] 3.1 Add `skills/patentworks/flows/analysis.md` as a standalone flow
-- [ ] 3.2 Update `skills/patentworks/SKILL.md` to route analysis requests separately from screening and drafting
-- [ ] 3.3 Update `screening.md` to hand shortlist/deep-read needs to analysis without losing scored CSV delivery
-- [ ] 3.4 Update `drafting.md` to consume analysis output as the preferred drafting basis
+- [x] 3.1 Add `skills/patentworks/flows/analysis.md` as a standalone flow
+- [x] 3.2 Update `skills/patentworks/SKILL.md` to route analysis requests separately from screening and drafting
+- [x] 3.3 Update `screening.md` to hand shortlist/deep-read needs to analysis without losing scored CSV delivery
+- [x] 3.4 Update `drafting.md` to consume analysis output as the preferred drafting basis
 
 ## 4. Optional Schema / Validation Slice
 
-- [ ] 4.1 Decide whether `AnalysisInput` / `AnalysisOutput` should be formalized as JSON schema
-- [ ] 4.2 If formalized, add schema under this spec package or a stable `specs/` subdirectory
-- [ ] 4.3 Add example test vectors for MCP-derived and user-provided materials
+- [x] 4.1 Decide whether `AnalysisInput` / `AnalysisOutput` should be formalized as JSON schema
+- [x] 4.2 If formalized, add schema under this spec package or a stable `specs/` subdirectory
+- [x] 4.3 Add example test vectors for MCP-derived and user-provided materials
 
 ## 5. Closeout
 
-- [ ] 5.1 Record event log with scope, decisions, validation, and remaining work
-- [ ] 5.2 Validate specs remain aligned after any future skill implementation
-- [ ] 5.3 Sync `specs/architecture.md` whenever flow routing or MCP contracts change
+- [x] 5.1 Record event log with scope, decisions, validation, and remaining work
+- [x] 5.2 Validate specs remain aligned after any future skill implementation
+- [x] 5.3 Sync `specs/architecture.md` whenever flow routing or MCP contracts change

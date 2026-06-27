@@ -1,0 +1,30 @@
+{
+  "diagram_title": "Anomaly Detection Workflow Ingestion & Retrieval",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "text": "Search & Paginate GPSS",
+      "inputs": ["Matrix Query Terms"],
+      "outputs": ["Merged CSV Handle"],
+      "controls": ["Pagination & Cooldown Limits"],
+      "mechanisms": ["GPSS API", "build_screening_table"]
+    },
+    {
+      "id": "A2",
+      "text": "Resolve Claim 1 Text",
+      "inputs": ["Publication Numbers"],
+      "outputs": ["Claim 1 Text"],
+      "controls": ["Source Priority (PPUBS first)", "Fail-Fast Guards"],
+      "mechanisms": ["PPUBS API", "gpatents Fallback Reader"]
+    },
+    {
+      "id": "A3",
+      "text": "Deduplicate & Assemble Report",
+      "inputs": ["Merged CSV Handle", "Claim 1 Text"],
+      "outputs": ["Structured Report (DOCX)"],
+      "controls": ["docxmcp Schema Specification", "No-Shell CSV Policy"],
+      "mechanisms": ["Python csv Module", "docxmcp tool"]
+    }
+  ]
+}

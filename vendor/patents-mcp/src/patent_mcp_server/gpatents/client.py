@@ -85,15 +85,13 @@ class GooglePatentsClient:
                     last_resp = await self._client.get(url)
                 finally:
                     self._last_req = time.monotonic()
-                if last_resp.status_code in (429, 503):
-                    backoff = min(60.0, 8.0 * (2 ** attempt)) + random.uniform(0, 3)
+                if last_resp.status_code in (403, 429, 503):
+                    backoff = 60.0
                     self._cooldown_until = time.monotonic() + backoff
-                    logger.warning(
-                        "Google Patents %d (rate-limited); cooldown %.0fs, attempt %d/%d",
-                        last_resp.status_code, backoff, attempt + 1, self.max_retries)
-                    if attempt < self.max_retries:
-                        continue  # top-of-loop waits out the cooldown
-                last_resp.raise_for_status()
+                    logger.error(
+                        "Google Patents %d (blocked/throttled). Fail-Fast active. Cooldown parked for %.0fs.",
+                        last_resp.status_code, backoff)
+                    last_resp.raise_for_status()
                 return last_resp
             last_resp.raise_for_status()
             return last_resp
@@ -243,6 +241,36 @@ class GooglePatentsClient:
     def _extract_description(html: str) -> str:
         m = re.search(r'itemprop="description"[^>]*>(.*?)</section>', html, re.S)
         return _text(m.group(1)) if m else ""
+
+    @staticmethod
+    def _extract_pdf_url(html: str) -> Optional[str]:
+        """Extract citation_pdf_url from meta tags."""
+        m = re.search(r'<meta\s+name="citation_pdf_url"\s+content="([^"]+)"', html)
+        if m:
+            url = m.group(1)
+            # DD-3: Strict rejection of guessed paths
+            if "/pdfs/" in url and len(url.split("/")[-1]) < 20:
+                logger.warning(f"Rejected likely guessed PDF URL: {url}")
+                return None
+            return url
+        return None
+
+    async def resolve_pdf_url(self, publication_number: str) -> Dict[str, Any]:
+        """Resolve the true hashed PDF URL for a known publication number."""
+        url = PATENT_URL.format(pub=publication_number)
+        try:
+            resp = await self._get(url)
+            html = resp.text
+            pdf_url = self._extract_pdf_url(html)
+            if pdf_url:
+                return {"success": True, "publication_number": publication_number, "pdf_url": pdf_url}
+            return {"success": False, "error": "NOT_FOUND", "message": "citation_pdf_url not found in page"}
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (429, 503):
+                return {"success": False, "error": "THROTTLED", "http_code": e.response.status_code}
+            return {"success": False, "error": "SERVICE_UNAVAILABLE", "http_code": e.response.status_code}
+        except Exception as e:
+            return {"success": False, "error": "FETCH_FAILURE", "message": str(e)}
 
     async def get_patent(
         self,

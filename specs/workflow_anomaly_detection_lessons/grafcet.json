@@ -1,0 +1,7 @@
+[
+  { "id": "S1", "text": "Idle", "initial": true },
+  { "id": "S2", "text": "Paginated Search (GPSS)" },
+  { "id": "S3", "text": "Extract Claim 1 (PPUBS -> Google)" },
+  { "id": "S4", "text": "Deduplicate Master Pool (Python)" },
+  { "id": "S5", "text": "Assemble Document (docxmcp)" }
+]

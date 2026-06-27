@@ -1,0 +1,29 @@
+[
+  {
+    "id": "V1",
+    "name": "EPO Standard Case",
+    "input": { "publication_number": "US11923092B2" },
+    "expectation": {
+      "source": "epo_images",
+      "mime_type": "application/pdf"
+    }
+  },
+  {
+    "id": "V2",
+    "name": "Google Fallback Case (TW)",
+    "input": { "publication_number": "TWI854998B" },
+    "expectation": {
+      "source": "google_patents_citation_pdf_url",
+      "mime_type": "application/pdf"
+    }
+  },
+  {
+    "id": "V3",
+    "name": "Invalid PN",
+    "input": { "publication_number": "INVALID-123" },
+    "expectation": {
+      "success": false,
+      "reason": "parse_error"
+    }
+  }
+]

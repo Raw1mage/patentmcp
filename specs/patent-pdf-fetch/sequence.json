@@ -1,0 +1,14 @@
+[
+  {
+    "title": "Unified Patent PDF Fetch",
+    "participants": ["User", "MCP", "EPO", "Google", "Store"],
+    "messages": [
+      { "from": "User", "to": "MCP", "text": "fetch_patent_pdf(PN)" },
+      { "from": "MCP", "to": "EPO", "text": "get_images(PN)" },
+      { "from": "EPO", "to": "MCP", "text": "binary_pdf" },
+      { "from": "MCP", "to": "Store", "text": "stage(bytes)" },
+      { "from": "Store", "to": "MCP", "text": "token" },
+      { "from": "MCP", "to": "User", "text": "success(token)" }
+    ]
+  }
+]

@@ -1,0 +1,12 @@
+[
+  {
+    "name": "FetchResult",
+    "fields": [
+      { "name": "success", "type": "boolean" },
+      { "name": "publication_number", "type": "string" },
+      { "name": "source", "type": "string" },
+      { "name": "pdf", "type": "HandleMetadata" },
+      { "name": "attempts", "type": "AttemptRecord[]" }
+    ]
+  }
+]
