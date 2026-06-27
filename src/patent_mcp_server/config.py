@@ -31,6 +31,7 @@ class Config:
     BIGQUERY_LOCATION: str = os.getenv("BIGQUERY_LOCATION", "US")
     BIGQUERY_QUERY_TIMEOUT: int = int(os.getenv("BIGQUERY_QUERY_TIMEOUT", "60"))
     BIGQUERY_MAX_RESULTS: int = int(os.getenv("BIGQUERY_MAX_RESULTS", "1000"))
+    BIGQUERY_MAX_BYTES_BILLED: int = int(os.getenv("BIGQUERY_MAX_BYTES_BILLED", str(10 * 1024 * 1024 * 1024)))
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

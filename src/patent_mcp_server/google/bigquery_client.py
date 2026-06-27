@@ -31,6 +31,7 @@ class GoogleBigQueryClient:
         self.location = config.BIGQUERY_LOCATION
         self.query_timeout = config.BIGQUERY_QUERY_TIMEOUT
         self.max_results = config.BIGQUERY_MAX_RESULTS
+        self.max_bytes_billed = config.BIGQUERY_MAX_BYTES_BILLED
 
         # BigQuery client (sync API, we'll wrap in executor)
         try:
@@ -96,7 +97,10 @@ class GoogleBigQueryClient:
         Returns:
             List of dictionaries representing query results
         """
-        job_config = bigquery.QueryJobConfig(query_parameters=parameters or [])
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=parameters or [],
+            maximum_bytes_billed=self.max_bytes_billed,
+        )
 
         try:
             query_job = self.client.query(
