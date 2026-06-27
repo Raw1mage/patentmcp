@@ -1390,6 +1390,272 @@ async def gpss_download_representative_figure(
 
 
 @mcp.tool()
+async def gpss_download_patent_pdf(
+    publication_number: str,
+) -> Dict[str, Any]:
+    """Download a patent's original PDF headlessly from TIPO GPSS into the token store.
+
+    This replicates a browser session to fetch the patent's PDF document.
+    Returns a handle {token, rel, download_url, bytes, sha256} of the saved PDF.
+    """
+    import random
+    import re
+    import httpx
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+
+    pat = publication_number.strip()
+    # Remove all whitespace
+    pat = re.sub(r'\s+', '', pat)
+    # Remove country prefix
+    pat = re.sub(r'^(?:TW|tw)', '', pat)
+    # Remove trailing kind codes for TW patents:
+    # 1. Certificate numbers like I123456B -> I123456, M123456U -> M123456, D123456 -> D123456
+    m_cert = re.match(r'^([IMD]\d+)[A-Za-z]*$', pat, re.IGNORECASE)
+    if m_cert:
+        pat = m_cert.group(1).upper()
+    else:
+        # 2. Application/Publication numbers like 202412345A -> 202412345, 112123456 -> 112123456
+        m_app = re.match(r'^(\d+)[A-Za-z]*$', pat)
+        if m_app:
+            pat = m_app.group(1)
+
+    try:
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0) as client:
+            # Step 1: Visit portal
+            await client.get("https://tiponet.tipo.gov.tw/030_OUT_V1/home.do")
+            
+            # Step 2: Initialize GPSS session
+            await client.get("https://tiponet.tipo.gov.tw/gpss2/")
+            
+            # Step 3: Load search page and bypass client-side JS random redirect
+            rand_val = random.random()
+            gpss_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/gpssbkm?@@{rand_val}"
+            res = await client.get(gpss_url)
+            
+            # Extract INFO parameter
+            m_info = re.search(r'name=["\']?INFO["\']?\s+value=["\']?([A-Za-z0-9]+)["\']?', res.text, re.IGNORECASE)
+            if not m_info:
+                m_info = re.search(r'value=["\']?([A-Za-z0-9]+)["\']?\s+name=["\']?INFO["\']?', res.text, re.IGNORECASE)
+                
+            if not m_info:
+                return {"success": False, "error": "Failed to retrieve INFO token from GPSS session"}
+            
+            info_val = m_info.group(1)
+            
+            # Extract action path
+            m_action = re.search(r'action=["\']?(/gpss[12]/gpsskmc/gpssbkm[^\'"]*)["\']?', res.text, re.IGNORECASE)
+            action_path = m_action.group(1) if m_action else '/gpss2/gpsskmc/gpssbkm'
+            action_url = f"https://tiponet.tipo.gov.tw{action_path}"
+            
+            # Step 4: Search POST
+            data = {
+                "INFO": info_val,
+                "@_21_1_T": "T_XX",
+                "_21_1_T": pat,
+                "@_0_9_T": "T_XX",
+                "_0_9_T": "",
+                "_IMG_檢索.x": "25",
+                "_IMG_檢索.y": "25"
+            }
+            res = await client.post(action_url, data=data)
+            
+            # Handle refresh redirect if any
+            m_refresh = re.search(r'CONTENT=["\']?0;\s*URL=([^"\'>\s]+)["\']?', res.text, re.IGNORECASE)
+            if m_refresh:
+                redirect_url = m_refresh.group(1).strip("'\"")
+                if not redirect_url.startswith("http"):
+                    redirect_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/{redirect_url}"
+                res = await client.get(redirect_url)
+            
+            # Step 5: Follow detail page link
+            m_detail = re.search(r'href=["\']?(/gpss[12]/gpsskmc/gpssbkm\?[^\s\'">]+)[^>]*class=["\']?link02["\']?', res.text, re.IGNORECASE)
+            if not m_detail:
+                return {"success": False, "error": f"Patent detail link for '{pat}' not found in search results"}
+                
+            detail_url = f"https://tiponet.tipo.gov.tw{m_detail.group(1)}"
+            res_detail = await client.get(detail_url)
+            
+            # Step 6: Find PDF links (harder calls) in detail page
+            harder_links = re.findall(r"harder\s*\(\s*this\s*,\s*['\"]([^'\"]+)['\"]", res_detail.text)
+            if not harder_links:
+                return {"success": False, "error": "No PDF document download links found in patent detail page"}
+                
+            # Filter and choose the best link
+            selected_path = None
+            for path in harder_links:
+                if "TWBA" in path or "TWBP" in path:
+                    selected_path = path
+                    break
+            if not selected_path:
+                selected_path = harder_links[0]
+                
+            # Step 7: Request the intermediate HTML page for the selected PDF
+            pdf_page_url = f"https://tiponet.tipo.gov.tw{selected_path}"
+            res_pdf_page = await client.get(pdf_page_url)
+            
+            # Extract the actual PDF file path from this HTML page
+            m_pdf = re.search(r'/gpss[12]/gpssbkmusr/[^\'" >]+\.pdf', res_pdf_page.text, re.IGNORECASE)
+            if not m_pdf:
+                return {"success": False, "error": "Failed to parse the actual PDF binary path from the GPSS document page"}
+                
+            actual_pdf_url = f"https://tiponet.tipo.gov.tw{m_pdf.group(0)}"
+            
+            # Step 8: Download actual PDF bytes
+            pdf_res = await client.get(actual_pdf_url)
+            if pdf_res.status_code != 200:
+                return {"success": False, "error": f"Failed to download GPSS PDF (HTTP {pdf_res.status_code})"}
+                
+            if not pdf_res.content.startswith(b"%PDF"):
+                return {"success": False, "error": "Downloaded content is not a valid PDF"}
+                
+            # Put bytes to token store
+            filename = actual_pdf_url.rsplit("/", 1)[-1] or f"{pat}_specification.pdf"
+            entry = token_store.put_bytes(pdf_res.content, filename)
+            return _handle(entry)
+            
+    except Exception as e:
+        return {"success": False, "error": f"GPSS PDF download exception: {str(e)}"}
+
+
+@mcp.tool()
+async def gpss_download_patent_xml(
+    publication_number: str,
+) -> Dict[str, Any]:
+    """Download a patent's structured XML specification headlessly from TIPO GPSS into the token store.
+
+    This replicates a browser session to fetch the patent's full-text XML document (best for TW patents).
+    Returns a handle {token, rel, download_url, bytes, sha256} of the saved XML.
+    """
+    import random
+    import re
+    import httpx
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+
+    pat = publication_number.strip()
+    # Remove all whitespace
+    pat = re.sub(r'\s+', '', pat)
+    # Remove country prefix
+    pat = re.sub(r'^(?:TW|tw)', '', pat)
+    # Remove trailing kind codes for TW patents:
+    m_cert = re.match(r'^([IMD]\d+)[A-Za-z]*$', pat, re.IGNORECASE)
+    if m_cert:
+        pat = m_cert.group(1).upper()
+    else:
+        m_app = re.match(r'^(\d+)[A-Za-z]*$', pat)
+        if m_app:
+            pat = m_app.group(1)
+
+    try:
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0) as client:
+            # Step 1: Visit portal
+            await client.get("https://tiponet.tipo.gov.tw/030_OUT_V1/home.do")
+            
+            # Step 2: Initialize GPSS session
+            await client.get("https://tiponet.tipo.gov.tw/gpss2/")
+            
+            # Step 3: Load search page and bypass client-side JS random redirect
+            rand_val = random.random()
+            gpss_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/gpssbkm?@@{rand_val}"
+            res = await client.get(gpss_url)
+            
+            # Extract INFO parameter
+            m_info = re.search(r'name=["\']?INFO["\']?\s+value=["\']?([A-Za-z0-9]+)["\']?', res.text, re.IGNORECASE)
+            if not m_info:
+                m_info = re.search(r'value=["\']?([A-Za-z0-9]+)["\']?\s+name=["\']?INFO["\']?', res.text, re.IGNORECASE)
+                
+            if not m_info:
+                return {"success": False, "error": "Failed to retrieve INFO token from GPSS session"}
+            
+            info_val = m_info.group(1)
+            
+            # Extract action path
+            m_action = re.search(r'action=["\']?(/gpss[12]/gpsskmc/gpssbkm[^\'"]*)["\']?', res.text, re.IGNORECASE)
+            action_path = m_action.group(1) if m_action else '/gpss2/gpsskmc/gpssbkm'
+            action_url = f"https://tiponet.tipo.gov.tw{action_path}"
+            
+            # Step 4: Search POST
+            data = {
+                "INFO": info_val,
+                "@_21_1_T": "T_XX",
+                "_21_1_T": pat,
+                "@_0_9_T": "T_XX",
+                "_0_9_T": "",
+                "_IMG_檢索.x": "25",
+                "_IMG_檢索.y": "25"
+            }
+            res = await client.post(action_url, data=data)
+            
+            # Handle refresh redirect if any
+            m_refresh = re.search(r'CONTENT=["\']?0;\s*URL=([^"\'>\s]+)["\']?', res.text, re.IGNORECASE)
+            if m_refresh:
+                redirect_url = m_refresh.group(1).strip("'\"")
+                if not redirect_url.startswith("http"):
+                    redirect_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/{redirect_url}"
+                res = await client.get(redirect_url)
+            
+            # Step 5: Follow detail page link
+            m_detail = re.search(r'href=["\']?(/gpss[12]/gpsskmc/gpssbkm\?[^\s\'">]+)[^>]*class=["\']?link02["\']?', res.text, re.IGNORECASE)
+            if not m_detail:
+                return {"success": False, "error": f"Patent detail link for '{pat}' not found in search results"}
+                
+            detail_url = f"https://tiponet.tipo.gov.tw{m_detail.group(1)}"
+            res_detail = await client.get(detail_url)
+            
+            # Step 6: Find harder links in detail page
+            harder_links = re.findall(r"harder\s*\(\s*this\s*,\s*['\"]([^'\"]+)['\"]", res_detail.text)
+            if not harder_links:
+                return {"success": False, "error": "No document download links found in patent detail page"}
+                
+            # Filter and choose the TW_GX link (Full-text XML)
+            selected_path = None
+            for path in harder_links:
+                if "TW_GX" in path:
+                    selected_path = path
+                    break
+            if not selected_path:
+                return {"success": False, "error": f"TW_GX (Full-text XML) download link for '{pat}' not found in detail page"}
+                
+            # Step 7: Request the intermediate HTML page for the selected document
+            xml_page_url = f"https://tiponet.tipo.gov.tw{selected_path}"
+            res_xml_page = await client.get(xml_page_url)
+            
+            # Extract the actual dc.xml file path from this Refresh HTML page
+            m_xml = re.search(r'CONTENT=["\']?0;\s*URL=[\'"]?([^\'">\s]+)[\'"]?', res_xml_page.text, re.IGNORECASE)
+            if not m_xml:
+                return {"success": False, "error": "Failed to parse the actual XML path from the GPSS full-text page"}
+                
+            actual_xml_url = f"https://tiponet.tipo.gov.tw{m_xml.group(1)}"
+            
+            # Step 8: Download actual XML bytes
+            xml_res = await client.get(actual_xml_url)
+            if xml_res.status_code != 200:
+                return {"success": False, "error": f"Failed to download GPSS XML (HTTP {xml_res.status_code})"}
+                
+            content = xml_res.content
+            # Check if valid XML structure (allow UTF-8 BOM)
+            if not (content.startswith(b"<?xml") or content.startswith(b"\xef\xbb\xbf<?xml")):
+                return {"success": False, "error": "Downloaded content is not a valid XML specification document"}
+                
+            # Put bytes to token store
+            filename = actual_xml_url.rsplit("/", 1)[-1].split("?")[0] or f"{pat}_specification.xml"
+            entry = token_store.put_bytes(content, filename)
+            return _handle(entry)
+            
+    except Exception as e:
+        return {"success": False, "error": f"GPSS XML download exception: {str(e)}"}
+
+
+@mcp.tool()
 async def fetch_patent_pdf(
     publication_number: str,
     sources: Optional[List[str]] = None,
@@ -1401,7 +1667,9 @@ async def fetch_patent_pdf(
     Routes official sources first, then the Google Patents citation fallback:
       1. epo_images     — EPO OPS official image API (OAuth, no scraping).
                           Best for EP/WO and many national members.
-      2. google_citation — resolve the true hashed `citation_pdf_url` from the
+      2. gpss_pdf       — simulated TIPO GPSS session to fetch the original
+                          patent PDF (best for TW patents).
+      3. google_citation — resolve the true hashed `citation_pdf_url` from the
                           patent's Google Patents page, then download. This is a
                           SINGLE known-number page resolution (NOT batch
                           scraping); use as last resort.
@@ -1411,10 +1679,10 @@ async def fetch_patent_pdf(
     the model context. Hand the token to docxmcp's PDF decompose to extract the
     original figures.
 
-    sources: attempt order; defaults to ["epo_images", "google_citation"].
+    sources: attempt order; defaults to ["epo_images", "gpss_pdf", "google_citation"].
     include_attempts: attach a per-source attempts[] trace to the result.
     """
-    order = sources or ["epo_images", "google_citation"]
+    order = sources or ["epo_images", "gpss_pdf", "google_citation"]
     attempts: List[Dict[str, Any]] = []
     name = filename or f"{publication_number}.pdf"
 
@@ -1445,6 +1713,25 @@ async def fetch_patent_pdf(
                 if include_attempts:
                     result["attempts"] = attempts
                 return result
+            except Exception as e:  # noqa: BLE001
+                attempts.append({"source": src, "ok": False, "error": str(e)})
+                continue
+
+        elif src == "gpss_pdf":
+            try:
+                res_gpss = await gpss_download_patent_pdf(publication_number)
+                if res_gpss.get("success"):
+                    res_gpss["source"] = src
+                    res_gpss["provenance"] = {"api": "TIPO GPSS headless session",
+                                              "scraping": True}
+                    attempts.append({"source": src, "ok": True, "bytes": res_gpss.get("bytes")})
+                    if include_attempts:
+                        res_gpss["attempts"] = attempts
+                    return res_gpss
+                else:
+                    attempts.append({"source": src, "ok": False,
+                                     "error": res_gpss.get("error", "GPSS PDF download failed")})
+                    continue
             except Exception as e:  # noqa: BLE001
                 attempts.append({"source": src, "ok": False, "error": str(e)})
                 continue

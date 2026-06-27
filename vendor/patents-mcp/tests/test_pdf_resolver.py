@@ -73,5 +73,34 @@ class ResolvePdfUrlRoutingTest(unittest.TestCase):
         self.assertIn("TWI854998B.pdf", out["pdf_url"])
 
 
+class GpssPdfDownloadTest(unittest.TestCase):
+    def test_gpss_pdf_download_success(self):
+        from patent_mcp_server.patents import gpss_download_patent_pdf
+        # TWI854998B is a valid TW patent
+        out = asyncio.run(gpss_download_patent_pdf("TWI854998B"))
+        self.assertTrue(out.get("success"), f"Download failed: {out.get('error')}")
+        self.assertIn("token", out)
+        self.assertIn("sha256", out)
+
+    def test_gpss_pdf_download_normalization(self):
+        from patent_mcp_server.patents import gpss_download_patent_pdf
+        # Test with spaces and lowercase TW, e.g. "tw I854998 b"
+        out = asyncio.run(gpss_download_patent_pdf("tw I854998 b"))
+        self.assertTrue(out.get("success"), f"Download failed: {out.get('error')}")
+
+    def test_gpss_xml_download(self):
+        from patent_mcp_server.patents import gpss_download_patent_xml
+        # Test downloading TWI854998B xml format
+        out = asyncio.run(gpss_download_patent_xml("TWI854998B"))
+        self.assertTrue(out.get("success"), f"Download failed: {out.get('error')}")
+        self.assertIn("token", out)
+        self.assertIn("sha256", out)
+        
+        from patent_mcp_server.patents import token_store
+        entry = token_store.resolve(out["token"])
+        content = entry.file_path.read_bytes()
+        self.assertTrue(content.startswith(b"<?xml") or content.startswith(b"\xef\xbb\xbf<?xml"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
