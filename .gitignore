@@ -13,6 +13,14 @@ output/
 *.egg-info/
 **/*.egg-info/
 .specbase/*.sqlite
+build/
+dist/
+wheels/
+*.py[oc]
+.ipynb_checkpoints/
+
+# IPC rendezvous
+.run/
 
 # secrets — never commit
 .env
@@ -21,4 +29,7 @@ output/
 sa-key.json
 *.serviceaccount.json
 **/credentials*.json
+toolrowai-credentials.json
 
+# Test exports
+test_export*.json

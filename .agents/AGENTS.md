@@ -1,5 +1,12 @@
 # Custom rules for the agent
 
+> [!IMPORTANT]
+> **Include 預處理規範 (Include Guard)**：
+> 當您讀取此設定檔時，若發現包含 `#include "絕對路徑"` 語法，您**必須立即**呼叫 `view_file` 工具讀取該路徑之檔案，並將其載入您的 context 中作為本 Session 的核心運作與開發規則。
+> **防重複載入**：若您的 Context 中已預先載入（Preloaded）該路徑之內容，請**直接忽略**該 include 指令，避免重複調用工具與浪費 Token。
+
+#include "/home/pkcs12/.config/opencode/AGENTS.md"
+
 ## 回應行為規範
 
 1. **不要再逐步動作解釋**：

@@ -1,0 +1,30 @@
+{
+  "diagram_title": "Batch Asset Analysis Architecture",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "text": "Fetch Patent Metadata",
+      "inputs": ["Publication Numbers"],
+      "outputs": ["Patent Metadata Records"],
+      "controls": ["BQ Config", "Scraping Rules"],
+      "mechanisms": ["BigQuery Client", "Web Scraper"]
+    },
+    {
+      "id": "A2",
+      "text": "Download Figures",
+      "inputs": ["Publication Numbers"],
+      "outputs": ["Image Binary Files"],
+      "controls": ["503 Cooldown Skip List"],
+      "mechanisms": ["gpatents Client", "GPSS Client"]
+    },
+    {
+      "id": "A3",
+      "text": "Plot Pool Charts",
+      "inputs": ["Patent Metadata Records"],
+      "outputs": ["5 HSL Chart PNGs"],
+      "controls": ["HSL Color Theme"],
+      "mechanisms": ["matplotlib", "pandas"]
+    }
+  ]
+}

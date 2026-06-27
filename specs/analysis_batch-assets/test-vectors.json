@@ -1,0 +1,27 @@
+[
+  {
+    "id": "V1",
+    "name": "Full Claim Retrieval Case",
+    "input": { "publication_number": "US11875659B2", "full": true },
+    "expectation": {
+      "success": true,
+      "contains_long_text": true
+    }
+  },
+  {
+    "id": "V2",
+    "name": "Batch Figure Cooldown Case",
+    "input": { "publication_numbers": ["US11875659B2", "US20250252737A1"] },
+    "expectation": {
+      "success": true
+    }
+  },
+  {
+    "id": "V3",
+    "name": "Pool Analysis Case",
+    "input": { "publication_numbers": ["US11875659B2", "US20250252737A1", "TWI854998B"] },
+    "expectation": {
+      "success": true
+    }
+  }
+]

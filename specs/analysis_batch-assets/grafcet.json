@@ -1,0 +1,7 @@
+[
+  { "id": "S1", "text": "Idle", "initial": true },
+  { "id": "S2", "text": "Fetch Bibliographic Metadata" },
+  { "id": "S3", "text": "Plot Trend & Distributions" },
+  { "id": "S4", "text": "Download Image Binaries with 503 Skip" },
+  { "id": "S5", "text": "Stage Assets & Return Handles" }
+]

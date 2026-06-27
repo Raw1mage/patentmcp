@@ -1,0 +1,15 @@
+[
+  {
+    "title": "Batch Pool Analysis Sequence",
+    "participants": ["User", "MCP", "BigQuery", "Plotter", "Store"],
+    "messages": [
+      { "from": "User", "to": "MCP", "text": "patentmcp_analyze_pool(PNs)" },
+      { "from": "MCP", "to": "BigQuery", "text": "query_metadata(PNs)" },
+      { "from": "BigQuery", "to": "MCP", "text": "records" },
+      { "from": "MCP", "to": "Plotter", "text": "plot(records)" },
+      { "from": "Plotter", "to": "Store", "text": "save_pngs()" },
+      { "from": "Store", "to": "MCP", "text": "handles" },
+      { "from": "MCP", "to": "User", "text": "success(handles)" }
+    ]
+  }
+]

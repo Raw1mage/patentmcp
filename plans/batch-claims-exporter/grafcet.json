@@ -1,0 +1,8 @@
+[
+  { "id": "S1", "text": "Idle", "initial": true },
+  { "id": "S2", "text": "Receive & Normalize Patent Numbers" },
+  { "id": "S3", "text": "Query TIPO (GPSS) for TW/US/CN" },
+  { "id": "S4", "text": "Fallback to USPTO/EPO/BQ APIs" },
+  { "id": "S5", "text": "Fallback to Google Scraper (Last Resort)" },
+  { "id": "S6", "text": "Write JSON, Stage in TokenStore, Return Handles" }
+]

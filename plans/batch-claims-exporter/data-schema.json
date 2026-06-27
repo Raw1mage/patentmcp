@@ -1,0 +1,14 @@
+[
+  {
+    "name": "BatchClaimsResult",
+    "fields": [
+      { "name": "success", "type": "boolean" },
+      { "name": "claims", "type": "object" },
+      { "name": "token", "type": "string" },
+      { "name": "rel", "type": "string" },
+      { "name": "download_url", "type": "string" },
+      { "name": "bytes", "type": "number" },
+      { "name": "sha256", "type": "string" }
+    ]
+  }
+]
