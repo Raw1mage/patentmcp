@@ -896,6 +896,89 @@ def _handle(entry, rel: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+def _get_db_root():
+    from pathlib import Path
+    curr = Path(__file__).resolve()
+    for _ in range(10):
+        if (curr / ".mcp.json").is_file():
+            return curr / "patentdb"
+        curr = curr.parent
+    # Fallback to 5 levels up
+    return Path(__file__).resolve().parent.parent.parent.parent.parent / "patentdb"
+
+
+def _get_patent_country_and_normalized_no(publication_number: str) -> tuple[str, str]:
+    import re
+    pat = re.sub(r'\s+', '', publication_number).upper()
+    
+    # Determine country
+    country = "US"  # Default fallback
+    if pat.startswith("TW"):
+        country = "TW"
+        pat = pat[2:]
+    elif pat.startswith("US"):
+        country = "US"
+        pat = pat[2:]
+    elif pat.startswith("EP"):
+        country = "EP"
+        pat = pat[2:]
+    elif pat.startswith("WO"):
+        country = "WO"
+        pat = pat[2:]
+    elif pat.startswith("CN"):
+        country = "CN"
+        pat = pat[2:]
+    elif re.match(r'^[IMD]\d+', pat):
+        country = "TW"
+    elif re.match(r'^\d{9}$', pat):  # TW application number (9 digits)
+        country = "TW"
+        
+    # Normalize patent number
+    m_cert = re.match(r'^([IMD]\d+)[A-Za-z]*$', pat)
+    if m_cert:
+        pat = m_cert.group(1)
+    else:
+        m_app = re.match(r'^(\d+)[A-Za-z]*$', pat)
+        if m_app:
+            pat = m_app.group(1)
+            
+    return country, pat
+
+
+def _find_local_patent_cache(country: str, norm_pat: str, file_type: str):
+    filename = f"specification.{file_type}"
+    db_root = _get_db_root()
+    path = db_root / country / norm_pat / filename
+    if path.is_file():
+        return path
+    return None
+
+
+def _save_local_patent_cache(country: str, norm_pat: str, file_type: str, data: bytes) -> None:
+    import json
+    import time
+    
+    db_root = _get_db_root()
+    target_dir = db_root / country / norm_pat
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"specification.{file_type}"
+        (target_dir / filename).write_bytes(data)
+        
+        # Write simple metadata.json if not present
+        meta_path = target_dir / "metadata.json"
+        if not meta_path.is_file():
+            meta_data = {
+                "publication_number": f"{country}{norm_pat}",
+                "normalized_number": norm_pat,
+                "country": country,
+                "cached_at": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            meta_path.write_text(json.dumps(meta_data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Failed to save local patent cache for {country}/{norm_pat}: {e}")
+
+
 @mcp.tool()
 async def build_screening_table(
     cpc: Optional[str] = None,
@@ -1424,6 +1507,15 @@ async def gpss_download_patent_pdf(
         if m_app:
             pat = m_app.group(1)
 
+    # Local Cache Priority Check
+    country, norm_pat = _get_patent_country_and_normalized_no(publication_number)
+    cache_path = _find_local_patent_cache(country, norm_pat, "pdf")
+    if cache_path:
+        logger.info(f"Local cache HIT for GPSS PDF: {country}/{norm_pat}")
+        filename = f"{norm_pat}_specification.pdf"
+        entry = token_store.put_bytes(cache_path.read_bytes(), filename)
+        return _handle(entry)
+
     try:
         async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0) as client:
             # Step 1: Visit portal
@@ -1513,6 +1605,9 @@ async def gpss_download_patent_pdf(
             if not pdf_res.content.startswith(b"%PDF"):
                 return {"success": False, "error": "Downloaded content is not a valid PDF"}
                 
+            # Save to Local Cache (Write-Through)
+            _save_local_patent_cache(country, norm_pat, "pdf", pdf_res.content)
+
             # Put bytes to token store
             filename = actual_pdf_url.rsplit("/", 1)[-1] or f"{pat}_specification.pdf"
             entry = token_store.put_bytes(pdf_res.content, filename)
@@ -1554,6 +1649,15 @@ async def gpss_download_patent_xml(
         m_app = re.match(r'^(\d+)[A-Za-z]*$', pat)
         if m_app:
             pat = m_app.group(1)
+
+    # Local Cache Priority Check
+    country, norm_pat = _get_patent_country_and_normalized_no(publication_number)
+    cache_path = _find_local_patent_cache(country, norm_pat, "xml")
+    if cache_path:
+        logger.info(f"Local cache HIT for GPSS XML: {country}/{norm_pat}")
+        filename = f"{norm_pat}_specification.xml"
+        entry = token_store.put_bytes(cache_path.read_bytes(), filename)
+        return _handle(entry)
 
     try:
         async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0) as client:
@@ -1646,6 +1750,9 @@ async def gpss_download_patent_xml(
             if not (content.startswith(b"<?xml") or content.startswith(b"\xef\xbb\xbf<?xml")):
                 return {"success": False, "error": "Downloaded content is not a valid XML specification document"}
                 
+            # Save to Local Cache (Write-Through)
+            _save_local_patent_cache(country, norm_pat, "xml", content)
+
             # Put bytes to token store
             filename = actual_xml_url.rsplit("/", 1)[-1].split("?")[0] or f"{pat}_specification.xml"
             entry = token_store.put_bytes(content, filename)
@@ -1686,6 +1793,17 @@ async def fetch_patent_pdf(
     attempts: List[Dict[str, Any]] = []
     name = filename or f"{publication_number}.pdf"
 
+    # Global Local Cache Priority Check (Read-Through)
+    country, norm_pat = _get_patent_country_and_normalized_no(publication_number)
+    cache_path = _find_local_patent_cache(country, norm_pat, "pdf")
+    if cache_path:
+        logger.info(f"Local cache HIT for fetch_patent_pdf: {country}/{norm_pat}")
+        entry = token_store.put_bytes(cache_path.read_bytes(), name)
+        result = _handle(entry)
+        result["source"] = "local_cache"
+        result["provenance"] = {"path": str(cache_path), "scraping": False}
+        return result
+
     for src in order:
         if src == "epo_images":
             if not epo_client.configured():
@@ -1704,6 +1822,10 @@ async def fetch_patent_pdf(
                 if not data:
                     attempts.append({"source": src, "ok": False, "error": "EMPTY_PDF"})
                     continue
+                
+                # Save to Local Cache (Write-Through)
+                _save_local_patent_cache(country, norm_pat, "pdf", data)
+
                 entry = token_store.put_bytes(data, name)
                 result = _handle(entry)
                 result["source"] = src
@@ -1749,6 +1871,10 @@ async def fetch_patent_pdf(
                 if not data:
                     attempts.append({"source": src, "ok": False, "error": "EMPTY_PDF"})
                     continue
+
+                # Save to Local Cache (Write-Through)
+                _save_local_patent_cache(country, norm_pat, "pdf", data)
+
                 entry = token_store.put_bytes(data, name)
                 result = _handle(entry)
                 result["source"] = src

@@ -101,6 +101,46 @@ class GpssPdfDownloadTest(unittest.TestCase):
         content = entry.file_path.read_bytes()
         self.assertTrue(content.startswith(b"<?xml") or content.startswith(b"\xef\xbb\xbf<?xml"))
 
+    def test_local_cache_priority(self):
+        import shutil
+        from pathlib import Path
+        from patent_mcp_server.patents import fetch_patent_pdf, gpss_download_patent_xml, token_store
+        
+        # Define fake patent path
+        db_root = Path(__file__).resolve().parent.parent.parent.parent / "patentdb"
+        fake_dir = db_root / "TW" / "FAKE12345"
+        
+        # Clean up any existing fake dir
+        shutil.rmtree(fake_dir, ignore_errors=True)
+        fake_dir.mkdir(parents=True, exist_ok=True)
+        
+        pdf_content = b"%PDF-1.4 fake pdf content"
+        xml_content = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><fake_xml></fake_xml>"
+        
+        try:
+            # 1. Write fake cache files
+            (fake_dir / "specification.pdf").write_bytes(pdf_content)
+            (fake_dir / "specification.xml").write_bytes(xml_content)
+            
+            # 2. Test fetch_patent_pdf cache HIT
+            out_pdf = asyncio.run(fetch_patent_pdf("TWFAKE12345"))
+            self.assertTrue(out_pdf.get("success"))
+            self.assertEqual(out_pdf.get("source"), "local_cache")
+            
+            entry_pdf = token_store.resolve(out_pdf["token"])
+            self.assertEqual(entry_pdf.file_path.read_bytes(), pdf_content)
+            
+            # 3. Test gpss_download_patent_xml cache HIT
+            out_xml = asyncio.run(gpss_download_patent_xml("TWFAKE12345"))
+            self.assertTrue(out_xml.get("success"))
+            
+            entry_xml = token_store.resolve(out_xml["token"])
+            self.assertEqual(entry_xml.file_path.read_bytes(), xml_content)
+            
+        finally:
+            # Clean up
+            shutil.rmtree(fake_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
