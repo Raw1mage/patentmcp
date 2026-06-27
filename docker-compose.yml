@@ -22,7 +22,9 @@ services:
       # and the skill tree (skills/) the download route serves.
       context: .
       dockerfile: Dockerfile
-    command: ["--transport", "http", "--uds", "/run/patentmcp/patentmcp.sock"]
+    command: ["--transport", "http", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
     volumes:
       # IPC rendezvous (host ./.run holds the socket once uvicorn binds it).
       - "./.run:/run/patentmcp"
@@ -48,8 +50,7 @@ services:
       EPO_CONSUMER_SECRET: "${EPO_CONSUMER_SECRET:-}"
     restart: unless-stopped
     healthcheck:
-      # Socket existence is the simplest readiness signal once uvicorn binds.
-      test: ["CMD", "test", "-S", "/run/patentmcp/patentmcp.sock"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
       timeout: 2s
       retries: 6
