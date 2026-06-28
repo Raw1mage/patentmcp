@@ -8,7 +8,11 @@ containing 90M+ patent publications from 17+ countries.
 import asyncio
 import logging
 import os
+import sqlite3
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from google.auth import default
@@ -19,6 +23,109 @@ from patent_mcp_server.constants import GooglePatentsTables
 from patent_mcp_server.util.errors import ApiError
 
 logger = logging.getLogger(__name__)
+
+
+class BudgetExceededError(Exception):
+    """Raised when month-to-date BigQuery billed bytes exceed the configured
+    monthly budget. Carries usage context so the tool layer can surface a
+    structured, fail-fast error (no silent fallback)."""
+
+    def __init__(self, used_bytes: int, budget_bytes: int, source: str):
+        self.used_bytes = used_bytes
+        self.budget_bytes = budget_bytes
+        self.source = source
+        super().__init__(
+            f"BigQuery monthly budget exceeded: "
+            f"{used_bytes} / {budget_bytes} bytes billed this month "
+            f"(usage source: {source}). All BigQuery queries are blocked. "
+            f"Use GPSS/EPO/PPUBS instead."
+        )
+
+
+def _current_month_key() -> str:
+    """Return the current UTC month key as 'YYYYMM'."""
+    return datetime.now(timezone.utc).strftime("%Y%m")
+
+
+class BigQueryUsageLedger:
+    """Local SQLite cache of month-to-date BigQuery billed bytes.
+
+    Cheap, low-latency record of usage the MCP itself generated, plus a slot
+    to store the authoritative INFORMATION_SCHEMA reconciled value and the
+    timestamp of the last reconcile. Thread-safe (a single lock guards all
+    writes; the BigQuery client runs queries in a thread pool)."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._lock = threading.Lock()
+        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+        self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.db_path, timeout=10)
+
+    def _init_db(self) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS monthly_usage (
+                    month_key TEXT PRIMARY KEY,
+                    local_bytes INTEGER NOT NULL DEFAULT 0,
+                    reconciled_bytes INTEGER,
+                    reconciled_at REAL
+                )
+                """
+            )
+
+    def add_local_usage(self, billed_bytes: int) -> None:
+        """Accumulate billed bytes from a query this MCP just executed."""
+        if billed_bytes <= 0:
+            return
+        month_key = _current_month_key()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO monthly_usage (month_key, local_bytes)
+                VALUES (?, ?)
+                ON CONFLICT(month_key) DO UPDATE SET
+                    local_bytes = local_bytes + excluded.local_bytes
+                """,
+                (month_key, billed_bytes),
+            )
+
+    def set_reconciled(self, reconciled_bytes: int) -> None:
+        """Store the authoritative INFORMATION_SCHEMA value for this month."""
+        month_key = _current_month_key()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO monthly_usage (month_key, reconciled_bytes, reconciled_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(month_key) DO UPDATE SET
+                    reconciled_bytes = excluded.reconciled_bytes,
+                    reconciled_at = excluded.reconciled_at
+                """,
+                (month_key, reconciled_bytes, time.time()),
+            )
+
+    def read_month(self) -> Dict[str, Any]:
+        """Return this month's ledger row: local_bytes, reconciled_bytes,
+        reconciled_at (all may be 0/None if nothing recorded yet)."""
+        month_key = _current_month_key()
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "SELECT local_bytes, reconciled_bytes, reconciled_at "
+                "FROM monthly_usage WHERE month_key = ?",
+                (month_key,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return {"local_bytes": 0, "reconciled_bytes": None, "reconciled_at": None}
+        return {
+            "local_bytes": row[0] or 0,
+            "reconciled_bytes": row[1],
+            "reconciled_at": row[2],
+        }
 
 
 class GoogleBigQueryClient:
@@ -32,6 +139,19 @@ class GoogleBigQueryClient:
         self.query_timeout = config.BIGQUERY_QUERY_TIMEOUT
         self.max_results = config.BIGQUERY_MAX_RESULTS
         self.max_bytes_billed = config.BIGQUERY_MAX_BYTES_BILLED
+        self.monthly_budget_bytes = config.BIGQUERY_MONTHLY_BUDGET_BYTES
+        self.reconcile_ttl_seconds = config.BIGQUERY_RECONCILE_TTL_SECONDS
+
+        # Local month-to-date usage ledger (cheap cache). Best-effort: if the
+        # ledger cannot be created we degrade to no local accounting rather
+        # than failing the whole client.
+        try:
+            self.usage_ledger: Optional[BigQueryUsageLedger] = BigQueryUsageLedger(
+                config.BIGQUERY_USAGE_DB_PATH
+            )
+        except Exception as e:
+            logger.warning(f"BigQuery usage ledger unavailable: {str(e)}")
+            self.usage_ledger = None
 
         # BigQuery client (sync API, we'll wrap in executor)
         try:
@@ -85,7 +205,8 @@ class GoogleBigQueryClient:
         return result
 
     def _execute_query(
-        self, query: str, parameters: Optional[List] = None
+        self, query: str, parameters: Optional[List] = None,
+        skip_budget_gate: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Execute BigQuery query (sync).
@@ -93,10 +214,30 @@ class GoogleBigQueryClient:
         Args:
             query: SQL query string
             parameters: Optional list of query parameters
+            skip_budget_gate: Internal-only. Set True for the reconcile query
+                (INFORMATION_SCHEMA), which is itself free and must run even
+                when the budget is exhausted, otherwise we could never recover
+                the authoritative usage number.
 
         Returns:
             List of dictionaries representing query results
+
+        Raises:
+            BudgetExceededError: if month-to-date billed bytes exceed the
+                configured monthly budget. Hard-blocks ALL billable queries
+                (fail-fast, no silent fallback).
         """
+        # ── Budget gate (DD-3): hard-block when month-to-date usage exceeds
+        #    the configured monthly budget. ──
+        if not skip_budget_gate:
+            usage = self._get_monthly_usage_sync()
+            if usage["exceeded"]:
+                raise BudgetExceededError(
+                    used_bytes=usage["used_bytes"],
+                    budget_bytes=usage["budget_bytes"],
+                    source=usage["source"],
+                )
+
         job_config = bigquery.QueryJobConfig(
             query_parameters=parameters or [],
             maximum_bytes_billed=self.max_bytes_billed,
@@ -112,9 +253,21 @@ class GoogleBigQueryClient:
             # Convert to list of dicts
             rows = [dict(row) for row in results]
 
+            # Record billed bytes into the local ledger (total_bytes_billed is
+            # the billing-accurate figure; falls back to processed if absent).
+            billed = getattr(query_job, "total_bytes_billed", None)
+            if billed is None:
+                billed = query_job.total_bytes_processed or 0
+            if self.usage_ledger is not None and not skip_budget_gate:
+                try:
+                    self.usage_ledger.add_local_usage(int(billed))
+                except Exception as e:
+                    logger.warning(f"Failed to record BigQuery usage: {str(e)}")
+
             logger.info(
                 f"Query executed successfully, returned {len(rows)} rows, "
-                f"processed {query_job.total_bytes_processed} bytes"
+                f"processed {query_job.total_bytes_processed} bytes, "
+                f"billed {billed} bytes"
             )
 
             return rows
@@ -123,102 +276,120 @@ class GoogleBigQueryClient:
             logger.error(f"BigQuery query failed: {str(e)}")
             raise
 
-    async def search_patents(
-        self,
-        query: str,
-        country: str = "US",
-        limit: int = 100,
-        offset: int = 0,
-        start_date: Optional[int] = None,
-        end_date: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """
-        Search patents using full-text search.
+    def _reconcile_usage_sync(self) -> Optional[int]:
+        """Query INFORMATION_SCHEMA.JOBS_BY_PROJECT for this month's authoritative
+        SUM(total_bytes_billed). This query scans metadata only and is FREE.
 
-        Args:
-            query: Search query string (searches titles and abstracts)
-            country: Country code (US, EP, WO, JP, CN, etc.)
-            limit: Maximum number of results to return
-            offset: Number of results to skip (for pagination)
-            start_date: Optional start date for publication_date filter (YYYYMMDD format, e.g., 20220101)
-            end_date: Optional end date for publication_date filter (YYYYMMDD format, e.g., 20251231)
+        Returns the reconciled byte count, or None if the query fails
+        (e.g. the service account lacks bigquery.jobs.list). Never raises;
+        callers degrade to the local ledger on None."""
+        if not self.client:
+            return None
+        month_key = _current_month_key()
+        # JOBS_BY_PROJECT is region-qualified; self.location drives the view.
+        region = (self.location or "US").lower()
+        sql = f"""
+        SELECT COALESCE(SUM(total_bytes_billed), 0) AS billed
+        FROM `region-{region}`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+        WHERE creation_time >= TIMESTAMP(@month_start)
+          AND job_type = 'QUERY'
+          AND state = 'DONE'
+        """
+        month_start = f"{month_key[:4]}-{month_key[4:]}-01"
+        params = [
+            bigquery.ScalarQueryParameter("month_start", "STRING", month_start)
+        ]
+        try:
+            rows = self._execute_query(sql, params, skip_budget_gate=True)
+            if rows:
+                reconciled = int(rows[0].get("billed", 0) or 0)
+                if self.usage_ledger is not None:
+                    self.usage_ledger.set_reconciled(reconciled)
+                return reconciled
+        except Exception as e:
+            logger.warning(
+                f"BigQuery usage reconcile (INFORMATION_SCHEMA) failed: {str(e)}. "
+                "Degrading to local ledger."
+            )
+        return None
+
+    def _get_monthly_usage_sync(self) -> Dict[str, Any]:
+        """Compute month-to-date usage with the hybrid strategy (DD-1/DD-2):
+        trust the local ledger as a cheap cache, reconcile against the
+        authoritative INFORMATION_SCHEMA view when the cache is stale (older
+        than the reconcile TTL) or has never been reconciled.
 
         Returns:
-            Dictionary containing search results with patent metadata
+            {
+              used_bytes: int,            # the figure the gate acts on
+              budget_bytes: int,
+              exceeded: bool,
+              source: str,                # authoritative | cached | cached-degraded | none
+              last_reconciled_at: float|None,
+            }
         """
-        try:
-            # Build date filter conditions
-            date_conditions = []
-            if start_date is not None:
-                date_conditions.append("publication_date >= @start_date")
-            if end_date is not None:
-                date_conditions.append("publication_date <= @end_date")
-
-            date_filter = ""
-            if date_conditions:
-                date_filter = "AND " + " AND ".join(date_conditions)
-
-            # Build SQL query
-            sql = f"""
-            SELECT
-                publication_number,
-                title_localized,
-                abstract_localized,
-                publication_date,
-                filing_date,
-                grant_date,
-                inventor_harmonized,
-                assignee_harmonized,
-                cpc,
-                ipc,
-                family_id,
-                country_code,
-                application_number
-            FROM `{self.dataset_id}.{GooglePatentsTables.PUBLICATIONS}`
-            WHERE
-                country_code = @country
-                AND (
-                    LOWER(title_localized[SAFE_OFFSET(0)].text) LIKE @query
-                    OR LOWER(abstract_localized[SAFE_OFFSET(0)].text) LIKE @query
-                )
-                {date_filter}
-            ORDER BY publication_date DESC
-            LIMIT @limit
-            OFFSET @offset
-            """
-
-            parameters = [
-                bigquery.ScalarQueryParameter("country", "STRING", country),
-                bigquery.ScalarQueryParameter("query", "STRING", f"%{query.lower()}%"),
-                bigquery.ScalarQueryParameter("limit", "INT64", limit),
-                bigquery.ScalarQueryParameter("offset", "INT64", offset),
-            ]
-
-            # Add date parameters if provided
-            if start_date is not None:
-                parameters.append(
-                    bigquery.ScalarQueryParameter("start_date", "INT64", start_date)
-                )
-            if end_date is not None:
-                parameters.append(
-                    bigquery.ScalarQueryParameter("end_date", "INT64", end_date)
-                )
-
-            results = await self.query_async(sql, parameters)
-
+        budget = self.monthly_budget_bytes
+        if self.usage_ledger is None:
+            # No ledger: try a live reconcile; if that fails too, we cannot
+            # know usage. Per no-silent-fallback, treat unknown as NOT exceeded
+            # but mark source=none so callers can see the blind spot.
+            reconciled = self._reconcile_usage_sync()
+            if reconciled is not None:
+                return {
+                    "used_bytes": reconciled, "budget_bytes": budget,
+                    "exceeded": reconciled >= budget,
+                    "source": "authoritative", "last_reconciled_at": time.time(),
+                }
             return {
-                "success": True,
-                "count": len(results),
-                "start_date": start_date,
-                "end_date": end_date,
-                "results": results,
+                "used_bytes": 0, "budget_bytes": budget, "exceeded": False,
+                "source": "none", "last_reconciled_at": None,
             }
 
-        except Exception as e:
-            logger.error(f"Error searching Google Patents: {str(e)}")
-            return ApiError.create(
-                message=f"Failed to search Google Patents: {str(e)}", status_code=500
-            )
+        row = self.usage_ledger.read_month()
+        reconciled_at = row.get("reconciled_at")
+        stale = (
+            reconciled_at is None
+            or (time.time() - reconciled_at) > self.reconcile_ttl_seconds
+        )
+
+        if stale:
+            reconciled = self._reconcile_usage_sync()
+            if reconciled is not None:
+                return {
+                    "used_bytes": reconciled, "budget_bytes": budget,
+                    "exceeded": reconciled >= budget,
+                    "source": "authoritative", "last_reconciled_at": time.time(),
+                }
+            # Reconcile failed — degrade to the local ledger. Use the max of
+            # local accumulation and the last known reconciled value so we
+            # never UNDER-count after a restart.
+            degraded = max(row.get("local_bytes", 0), row.get("reconciled_bytes") or 0)
+            return {
+                "used_bytes": degraded, "budget_bytes": budget,
+                "exceeded": degraded >= budget,
+                "source": "cached-degraded", "last_reconciled_at": reconciled_at,
+            }
+
+        # Fresh cache: trust reconciled baseline + any local accrual since.
+        used = max(
+            row.get("reconciled_bytes") or 0,
+            row.get("local_bytes", 0),
+        )
+        return {
+            "used_bytes": used, "budget_bytes": budget,
+            "exceeded": used >= budget,
+            "source": "cached", "last_reconciled_at": reconciled_at,
+        }
+
+    async def get_monthly_usage(self, force_reconcile: bool = False) -> Dict[str, Any]:
+        """Async wrapper around the usage computation. When force_reconcile is
+        True, always hit INFORMATION_SCHEMA first."""
+        loop = asyncio.get_event_loop()
+        if force_reconcile:
+            await loop.run_in_executor(self.executor, self._reconcile_usage_sync)
+        return await loop.run_in_executor(
+            self.executor, self._get_monthly_usage_sync
+        )
 
     async def get_patent_by_number(
         self, publication_number: str
@@ -234,7 +405,11 @@ class GoogleBigQueryClient:
         """
         try:
             sql = f"""
-            SELECT *
+            SELECT
+                publication_number, title_localized, abstract_localized,
+                publication_date, filing_date, grant_date,
+                inventor_harmonized, assignee_harmonized,
+                cpc, ipc, family_id, country_code, application_number
             FROM `{self.dataset_id}.{GooglePatentsTables.PUBLICATIONS}`
             WHERE publication_number = @publication_number
             LIMIT 1
@@ -381,284 +556,6 @@ class GoogleBigQueryClient:
             )
             return ApiError.create(
                 message=f"Failed to fetch description: {str(e)}",
-                status_code=500,
-            )
-
-    async def search_by_inventor(
-        self,
-        inventor_name: str,
-        country: str = "US",
-        limit: int = 100,
-        offset: int = 0,
-        start_date: Optional[int] = None,
-        end_date: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """
-        Search patents by inventor name.
-
-        Args:
-            inventor_name: Inventor name to search for
-            country: Country code (US, EP, WO, JP, CN, etc.)
-            limit: Maximum number of results to return
-            offset: Number of results to skip (for pagination)
-            start_date: Optional start date for publication_date filter (YYYYMMDD format, e.g., 20220101)
-            end_date: Optional end date for publication_date filter (YYYYMMDD format, e.g., 20251231)
-
-        Returns:
-            Dictionary containing search results
-        """
-        try:
-            # Build date filter conditions
-            date_conditions = []
-            if start_date is not None:
-                date_conditions.append("publication_date >= @start_date")
-            if end_date is not None:
-                date_conditions.append("publication_date <= @end_date")
-
-            date_filter = ""
-            if date_conditions:
-                date_filter = "AND " + " AND ".join(date_conditions)
-
-            sql = f"""
-            SELECT
-                publication_number,
-                title_localized,
-                publication_date,
-                inventor_harmonized,
-                assignee_harmonized,
-                country_code
-            FROM `{self.dataset_id}.{GooglePatentsTables.PUBLICATIONS}`
-            WHERE
-                country_code = @country
-                AND EXISTS (
-                    SELECT 1 FROM UNNEST(inventor_harmonized) AS inv
-                    WHERE LOWER(inv.name) LIKE @inventor_name
-                )
-                {date_filter}
-            ORDER BY publication_date DESC
-            LIMIT @limit
-            OFFSET @offset
-            """
-
-            parameters = [
-                bigquery.ScalarQueryParameter("country", "STRING", country),
-                bigquery.ScalarQueryParameter(
-                    "inventor_name", "STRING", f"%{inventor_name.lower()}%"
-                ),
-                bigquery.ScalarQueryParameter("limit", "INT64", limit),
-                bigquery.ScalarQueryParameter("offset", "INT64", offset),
-            ]
-
-            # Add date parameters if provided
-            if start_date is not None:
-                parameters.append(
-                    bigquery.ScalarQueryParameter("start_date", "INT64", start_date)
-                )
-            if end_date is not None:
-                parameters.append(
-                    bigquery.ScalarQueryParameter("end_date", "INT64", end_date)
-                )
-
-            results = await self.query_async(sql, parameters)
-
-            return {
-                "success": True,
-                "count": len(results),
-                "inventor": inventor_name,
-                "start_date": start_date,
-                "end_date": end_date,
-                "results": results,
-            }
-
-        except Exception as e:
-            logger.error(f"Error searching by inventor: {str(e)}")
-            return ApiError.create(
-                message=f"Failed to search by inventor: {str(e)}",
-                status_code=500,
-            )
-
-    async def search_by_assignee(
-        self,
-        assignee_name: str,
-        country: str = "US",
-        limit: int = 100,
-        offset: int = 0,
-        start_date: Optional[int] = None,
-        end_date: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """
-        Search patents by assignee/company name.
-
-        Args:
-            assignee_name: Assignee/company name to search for
-            country: Country code (US, EP, WO, JP, CN, etc.)
-            limit: Maximum number of results to return
-            offset: Number of results to skip (for pagination)
-            start_date: Optional start date for publication_date filter (YYYYMMDD format, e.g., 20220101)
-            end_date: Optional end date for publication_date filter (YYYYMMDD format, e.g., 20251231)
-
-        Returns:
-            Dictionary containing search results
-        """
-        try:
-            # Build date filter conditions
-            date_conditions = []
-            if start_date is not None:
-                date_conditions.append("publication_date >= @start_date")
-            if end_date is not None:
-                date_conditions.append("publication_date <= @end_date")
-
-            date_filter = ""
-            if date_conditions:
-                date_filter = "AND " + " AND ".join(date_conditions)
-
-            sql = f"""
-            SELECT
-                publication_number,
-                title_localized,
-                publication_date,
-                inventor_harmonized,
-                assignee_harmonized,
-                country_code
-            FROM `{self.dataset_id}.{GooglePatentsTables.PUBLICATIONS}`
-            WHERE
-                country_code = @country
-                AND EXISTS (
-                    SELECT 1 FROM UNNEST(assignee_harmonized) AS asn
-                    WHERE LOWER(asn.name) LIKE @assignee_name
-                )
-                {date_filter}
-            ORDER BY publication_date DESC
-            LIMIT @limit
-            OFFSET @offset
-            """
-
-            parameters = [
-                bigquery.ScalarQueryParameter("country", "STRING", country),
-                bigquery.ScalarQueryParameter(
-                    "assignee_name", "STRING", f"%{assignee_name.lower()}%"
-                ),
-                bigquery.ScalarQueryParameter("limit", "INT64", limit),
-                bigquery.ScalarQueryParameter("offset", "INT64", offset),
-            ]
-
-            # Add date parameters if provided
-            if start_date is not None:
-                parameters.append(
-                    bigquery.ScalarQueryParameter("start_date", "INT64", start_date)
-                )
-            if end_date is not None:
-                parameters.append(
-                    bigquery.ScalarQueryParameter("end_date", "INT64", end_date)
-                )
-
-            results = await self.query_async(sql, parameters)
-
-            return {
-                "success": True,
-                "count": len(results),
-                "assignee": assignee_name,
-                "start_date": start_date,
-                "end_date": end_date,
-                "results": results,
-            }
-
-        except Exception as e:
-            logger.error(f"Error searching by assignee: {str(e)}")
-            return ApiError.create(
-                message=f"Failed to search by assignee: {str(e)}",
-                status_code=500,
-            )
-
-    async def search_by_cpc(
-        self,
-        cpc_code: str,
-        country: str = "US",
-        limit: int = 100,
-        offset: int = 0,
-        start_date: Optional[int] = None,
-        end_date: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """
-        Search patents by CPC (Cooperative Patent Classification) code.
-
-        Args:
-            cpc_code: CPC code to search for (e.g., G06N3/08)
-            country: Country code (US, EP, WO, JP, CN, etc.)
-            limit: Maximum number of results to return
-            offset: Number of results to skip (for pagination)
-            start_date: Optional start date for publication_date filter (YYYYMMDD format, e.g., 20220101)
-            end_date: Optional end date for publication_date filter (YYYYMMDD format, e.g., 20251231)
-
-        Returns:
-            Dictionary containing search results
-        """
-        try:
-            # Build date filter conditions
-            date_conditions = []
-            if start_date is not None:
-                date_conditions.append("publication_date >= @start_date")
-            if end_date is not None:
-                date_conditions.append("publication_date <= @end_date")
-
-            date_filter = ""
-            if date_conditions:
-                date_filter = "AND " + " AND ".join(date_conditions)
-
-            sql = f"""
-            SELECT
-                publication_number,
-                title_localized,
-                publication_date,
-                inventor_harmonized,
-                assignee_harmonized,
-                cpc,
-                country_code
-            FROM `{self.dataset_id}.{GooglePatentsTables.PUBLICATIONS}`
-            WHERE
-                country_code = @country
-                AND EXISTS (
-                    SELECT 1 FROM UNNEST(cpc) AS c
-                    WHERE c.code LIKE @cpc_code
-                )
-                {date_filter}
-            ORDER BY publication_date DESC
-            LIMIT @limit
-            OFFSET @offset
-            """
-
-            parameters = [
-                bigquery.ScalarQueryParameter("country", "STRING", country),
-                bigquery.ScalarQueryParameter("cpc_code", "STRING", f"{cpc_code}%"),
-                bigquery.ScalarQueryParameter("limit", "INT64", limit),
-                bigquery.ScalarQueryParameter("offset", "INT64", offset),
-            ]
-
-            # Add date parameters if provided
-            if start_date is not None:
-                parameters.append(
-                    bigquery.ScalarQueryParameter("start_date", "INT64", start_date)
-                )
-            if end_date is not None:
-                parameters.append(
-                    bigquery.ScalarQueryParameter("end_date", "INT64", end_date)
-                )
-
-            results = await self.query_async(sql, parameters)
-
-            return {
-                "success": True,
-                "count": len(results),
-                "cpc_code": cpc_code,
-                "start_date": start_date,
-                "end_date": end_date,
-                "results": results,
-            }
-
-        except Exception as e:
-            logger.error(f"Error searching by CPC code: {str(e)}")
-            return ApiError.create(
-                message=f"Failed to search by CPC code: {str(e)}",
                 status_code=500,
             )
 

@@ -32,6 +32,22 @@ class Config:
     BIGQUERY_QUERY_TIMEOUT: int = int(os.getenv("BIGQUERY_QUERY_TIMEOUT", "60"))
     BIGQUERY_MAX_RESULTS: int = int(os.getenv("BIGQUERY_MAX_RESULTS", "1000"))
     BIGQUERY_MAX_BYTES_BILLED: int = int(os.getenv("BIGQUERY_MAX_BYTES_BILLED", str(10 * 1024 * 1024 * 1024)))
+    # Monthly budget gate. Default 1 TiB = the BigQuery on-demand free tier.
+    # When the project's month-to-date billed bytes exceed this, ALL BigQuery
+    # queries are hard-blocked (fail-fast, no silent fallback).
+    BIGQUERY_MONTHLY_BUDGET_BYTES: int = int(
+        os.getenv("BIGQUERY_MONTHLY_BUDGET_BYTES", str(1024 * 1024 * 1024 * 1024))
+    )
+    # Local SQLite usage ledger (cheap cache of month-to-date billed bytes).
+    BIGQUERY_USAGE_DB_PATH: str = os.getenv(
+        "BIGQUERY_USAGE_DB_PATH",
+        os.path.join(os.path.expanduser("~"), ".patentmcp", "bq_usage.sqlite"),
+    )
+    # How long the local ledger is trusted before reconciling against the
+    # authoritative INFORMATION_SCHEMA.JOBS_BY_PROJECT view (seconds).
+    BIGQUERY_RECONCILE_TTL_SECONDS: int = int(
+        os.getenv("BIGQUERY_RECONCILE_TTL_SECONDS", "900")
+    )
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
