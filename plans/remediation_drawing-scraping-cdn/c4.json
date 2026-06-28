@@ -1,0 +1,34 @@
+{
+  "diagram_title": "Patent Figure Retrieval Remediation — C4 Component Diagram",
+  "diagram_level": "component",
+  "systems": [
+    {
+      "id": "SYS1",
+      "name": "patentmcp MCP Server",
+      "description": "Single async FastMCP process exposing patent retrieval/figure tools.",
+      "external": false
+    }
+  ],
+  "containers": [
+    {"id": "CT1", "name": "Tool Layer (patents.py)", "description": "MCP tool entrypoints for scraping, PDF fetch, figure extraction.", "technology": "Python FastMCP", "systemRef": "SYS1"},
+    {"id": "CT2", "name": "Google Patents Client", "description": "gpatents/client.py query + flatten layer.", "technology": "httpx async client", "systemRef": "SYS1"},
+    {"id": "CT3", "name": "Token Store", "description": "docxmcp-style token/blob store for landed bytes.", "technology": "Python store", "systemRef": "SYS1"},
+    {"id": "CT4", "name": "Companion Skill", "description": "patentworks flows documenting figure priority chain.", "technology": "Markdown skill", "systemRef": "SYS1"}
+  ],
+  "components": [
+    {"id": "C1", "name": "GPSS Scrape Throttle", "description": "Module-level asyncio.Lock + random delay shared by GPSS scraping tools (A).", "technology": "asyncio", "containerRef": "CT1", "moduleRef": "A1", "filePath": "src/patent_mcp_server/patents.py"},
+    {"id": "C2", "name": "fetch_patent_pdf EPO single-page guard", "description": "pdfinfo page-count check; downgrade on <=1 (F).", "technology": "poppler subprocess", "containerRef": "CT1", "moduleRef": "A2", "filePath": "src/patent_mcp_server/patents.py"},
+    {"id": "C3", "name": "extract_representative_figure", "description": "FIG.1 locate + high-DPI render to PNG (D).", "technology": "poppler subprocess + Pillow", "containerRef": "CT1", "moduleRef": "A3", "filePath": "src/patent_mcp_server/patents.py"},
+    {"id": "C4", "name": "gpatents_download_figure 403 guard", "description": "Explicit CDN_FORBIDDEN downgrade signal (B).", "technology": "httpx", "containerRef": "CT1", "moduleRef": "A4", "filePath": "src/patent_mcp_server/patents.py"},
+    {"id": "C5", "name": "_flatten resolution tag", "description": "Annotate representative_figure_resolution=thumbnail (E).", "technology": "Python", "containerRef": "CT2", "moduleRef": "A5", "filePath": "src/patent_mcp_server/gpatents/client.py"},
+    {"id": "C6", "name": "put_bytes handle", "description": "Lands PNG/PDF bytes and returns token handle.", "technology": "Python store", "containerRef": "CT3", "moduleRef": "A3", "filePath": "src/patent_mcp_server/_token_store.py"},
+    {"id": "C7", "name": "Figure Priority Chain Doc", "description": "Skill text: gpss -> pdf pipeline; thumbnails banned for reports.", "technology": "Markdown", "containerRef": "CT4", "moduleRef": "A5", "filePath": "skills/patentworks/SKILL.md"}
+  ],
+  "relationships": [
+    {"id": "REL1", "source": "C1", "target": "C2", "description": "serialized GPSS PDF feeds fetch fallback", "technology": "internal call"},
+    {"id": "REL2", "source": "C2", "target": "C3", "description": "PDF token handed to figure extractor", "technology": "token handle"},
+    {"id": "REL3", "source": "C4", "target": "C3", "description": "403 downgrade routes to PDF pipeline", "technology": "downgrade hint"},
+    {"id": "REL4", "source": "C3", "target": "C6", "description": "renders PNG and lands bytes", "technology": "put_bytes"},
+    {"id": "REL5", "source": "C5", "target": "C7", "description": "thumbnail tag grounds skill warning", "technology": "data field"}
+  ]
+}

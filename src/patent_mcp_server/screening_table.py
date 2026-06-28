@@ -165,8 +165,7 @@ def _as_list(x: Any) -> List[Any]:
 
 
 def gpss_to_records(gpss_json: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """GPSS search JSON → records. Verified against a live userCode response:
-    rows live at gpss-API.patent.patentcontent[]; fields are nested objects."""
+    """GPSS search JSON → records. Robust type handling for nested data structures."""
     api = gpss_json.get("data", {}).get("gpss-API") or gpss_json.get("gpss-API", {})
     rows = _as_list(_g(api, "patent", "patentcontent"))
     recs = []
@@ -175,20 +174,58 @@ def gpss_to_records(gpss_json: Dict[str, Any]) -> List[Dict[str, Any]]:
         claims = _as_list(_g(r, "claims", "claim"))
         claim1 = ""
         if claims:
-            ct = claims[0].get("claim-text", "")
-            claim1 = " ".join(ct) if isinstance(ct, list) else str(ct or "")
+            first_claim = claims[0]
+            if isinstance(first_claim, dict):
+                ct = first_claim.get("claim-text", "")
+                claim1 = " ".join(ct) if isinstance(ct, list) else str(ct or "")
+            else:
+                claim1 = str(first_claim)
         abstract = _g(r, "abstract", "p")
         if isinstance(abstract, list):
             abstract = " ".join(str(x) for x in abstract)
-        applicants = "; ".join(
-            (a.get("english-name") or a.get("name") or "")
-            for a in _as_list(_g(r, "parties", "applicants", "applicant")))
-        inventors = "; ".join(
-            (i.get("english-name") or i.get("name") or "")
-            for i in _as_list(_g(r, "parties", "inventors", "inventor")))
-        cpc = "; ".join(c.get("keyValue", "") for c in _as_list(_g(r, "classifications-cpc", "cpc"))[:6])
-        ipc = "; ".join(c.get("keyValue", "") for c in _as_list(_g(r, "classifications-ipc", "ipc"))[:6])
+        
+        # Safe applicant parse
+        applicants_list = _as_list(_g(r, "parties", "applicants", "applicant"))
+        applicant_names = []
+        for a in applicants_list:
+            if isinstance(a, dict):
+                name = a.get("english-name") or a.get("name") or ""
+                if name: applicant_names.append(name)
+            else:
+                applicant_names.append(str(a))
+        applicants = "; ".join(applicant_names)
+        
+        # Safe inventor parse
+        inventors_list = _as_list(_g(r, "parties", "inventors", "inventor"))
+        inventor_names = []
+        for i in inventors_list:
+            if isinstance(i, dict):
+                name = i.get("english-name") or i.get("name") or ""
+                if name: inventor_names.append(name)
+            else:
+                inventor_names.append(str(i))
+        inventors = "; ".join(inventor_names)
+        
+        # Safe CPC/IPC parse
+        cpc = "; ".join(
+            (c.get("keyValue", "") if isinstance(c, dict) else str(c))
+            for c in _as_list(_g(r, "classifications-cpc", "cpc"))[:6]
+        )
+        ipc = "; ".join(
+            (c.get("keyValue", "") if isinstance(c, dict) else str(c))
+            for c in _as_list(_g(r, "classifications-ipc", "ipc"))[:6]
+        )
+        
+        # Safe Priority claim parse
         prio = _as_list(_g(r, "priority-claims", "priority-claim"))
+        prio_date = ""
+        if prio:
+            first_prio = prio[0]
+            if isinstance(first_prio, dict):
+                prio_date = first_prio.get("date", "")
+            else:
+                prio_date = str(first_prio)
+                
         recs.append({
             "pubno": _g(r, "publication-reference", "doc-number"),
             "appno": _g(r, "application-reference", "doc-number"),
@@ -198,7 +235,7 @@ def gpss_to_records(gpss_json: Dict[str, Any]) -> List[Dict[str, Any]]:
             "family_id": "",  # GPSS doesn't expose INPADOC family; use epo_family
             "cpc": cpc,
             "ipc": ipc,
-            "prio_date": (prio[0].get("date", "") if prio else ""),
+            "prio_date": prio_date,
             "app_date": _g(r, "application-reference", "date"),
             "pub_date": _g(r, "publication-reference", "date"),
             "assignee": applicants,

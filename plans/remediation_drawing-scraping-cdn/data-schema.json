@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BR_20260628 remediation data contracts",
+  "definitions": {
+    "TokenHandle": {
+      "type": "object",
+      "required": ["token", "rel", "download_url", "bytes", "sha256"],
+      "properties": {
+        "token": { "type": "string" },
+        "rel": { "type": "string" },
+        "download_url": { "type": "string" },
+        "bytes": { "type": "integer" },
+        "sha256": { "type": "string" }
+      }
+    },
+    "ExtractRepresentativeFigureResult": {
+      "type": "object",
+      "required": ["success"],
+      "properties": {
+        "success": { "type": "boolean" },
+        "token": { "type": "string" },
+        "rel": { "type": "string" },
+        "download_url": { "type": "string" },
+        "bytes": { "type": "integer" },
+        "sha256": { "type": "string" },
+        "page_number": { "type": "integer", "description": "1-based PDF page that was rendered" },
+        "dpi": { "type": "integer", "default": 200 },
+        "locate_method": { "type": "string", "enum": ["fig1_text", "refnum_density_fallback"] },
+        "error": { "type": "string", "enum": ["NO_FIGURE_PAGE", "NO_PDF", "RENDER_FAILED"] },
+        "source_pdf": { "type": "object", "description": "provenance of the PDF used" }
+      }
+    },
+    "CdnForbiddenDowngrade": {
+      "type": "object",
+      "required": ["success", "error", "downgrade_hint"],
+      "properties": {
+        "success": { "const": false },
+        "error": { "const": "CDN_FORBIDDEN" },
+        "downgrade_hint": { "type": "string", "const": "use extract_representative_figure (PDF pipeline)" },
+        "url": { "type": "string" },
+        "http_code": { "type": "integer", "const": 403 }
+      }
+    },
+    "FetchPdfAttempt": {
+      "type": "object",
+      "required": ["source", "ok"],
+      "properties": {
+        "source": { "type": "string", "enum": ["epo_images", "gpss_pdf", "google_citation", "local_cache"] },
+        "ok": { "type": "boolean" },
+        "error": { "type": "string", "enum": ["EPO_NOT_CONFIGURED", "NO_IMAGES", "EMPTY_PDF", "EPO_BIBLIO_ONLY_1PAGE", "UNKNOWN_SOURCE", "resolve failed"] },
+        "pages": { "type": "integer", "description": "page count when page-count guard ran (F)" },
+        "bytes": { "type": "integer" }
+      }
+    },
+    "GpatentsSearchResultItem": {
+      "type": "object",
+      "properties": {
+        "publication_number": { "type": "string" },
+        "representative_figure_url": { "type": ["string", "null"] },
+        "representative_figure_resolution": {
+          "type": "string",
+          "enum": ["thumbnail"],
+          "description": "E: present when a thumbnail URL exists; warns it is index-grade, not report-grade"
+        },
+        "pdf_url": { "type": ["string", "null"] }
+      }
+    },
+    "ScrapeThrottleConfig": {
+      "type": "object",
+      "description": "A: env-tunable single-thread scraping throttle",
+      "properties": {
+        "GPSS_SCRAPE_MIN_DELAY": { "type": "number", "default": 1.0 },
+        "GPSS_SCRAPE_MAX_DELAY": { "type": "number", "default": 3.0 }
+      }
+    }
+  }
+}

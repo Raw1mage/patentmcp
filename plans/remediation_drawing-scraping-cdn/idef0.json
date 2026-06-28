@@ -1,0 +1,33 @@
+{
+  "diagram_title": "Patent Figure Retrieval Remediation (BR_20260628)",
+  "node_reference": "A0",
+  "activities": [
+    { "id": "A1", "title": "Throttle GPSS Scraping Requests", "description": "Serialize all tipo.gov.tw scraping via a shared lock + random delay (A)", "decomposition": null },
+    { "id": "A2", "title": "Fetch Patent PDF With Source Fallback", "description": "Route epo_images / gpss_pdf / google_citation; detect EPO single-page biblio (F)", "decomposition": null },
+    { "id": "A3", "title": "Extract Representative Figure Page", "description": "Locate FIG.1 page in PDF, render high-DPI PNG (D)", "decomposition": null },
+    { "id": "A4", "title": "Download CDN Figure With Downgrade Signal", "description": "Fetch patentimages figure; emit explicit 403 downgrade hint (B)", "decomposition": null },
+    { "id": "A5", "title": "Annotate Thumbnail Resolution Level", "description": "Flag representative_figure_url as thumbnail in search results (E)", "decomposition": null }
+  ],
+  "arrows": [
+    { "id": "AR1", "source": "EXTERNAL", "target": "A1:input", "label": "publication_number", "type": "input" },
+    { "id": "AR2", "source": "EXTERNAL", "target": "A1:control", "label": "Single-thread guardrail + delay env", "type": "control" },
+    { "id": "AR3", "source": "EXTERNAL", "target": "A1:mechanism", "label": "asyncio.Lock + TIPO GPSS session", "type": "mechanism" },
+    { "id": "AR4", "source": "A1:output", "target": "A2:input", "label": "GPSS PDF bytes / handle", "type": "input" },
+    { "id": "AR5", "source": "EXTERNAL", "target": "A2:input", "label": "publication_number", "type": "input" },
+    { "id": "AR6", "source": "EXTERNAL", "target": "A2:control", "label": "EPO single-page (<=1) downgrade rule", "type": "control" },
+    { "id": "AR7", "source": "EXTERNAL", "target": "A2:mechanism", "label": "EPO OPS API / pdfinfo / token store", "type": "mechanism" },
+    { "id": "AR8", "source": "A2:output", "target": "A3:input", "label": "PDF token handle", "type": "input" },
+    { "id": "AR9", "source": "EXTERNAL", "target": "A3:control", "label": "FIG.1 locate rule, skip cover page", "type": "control" },
+    { "id": "AR10", "source": "EXTERNAL", "target": "A3:mechanism", "label": "poppler pdftotext/pdftoppm + Pillow", "type": "mechanism" },
+    { "id": "AR11", "source": "A3:output", "target": "EXTERNAL", "label": "Representative figure PNG handle", "type": "output" },
+    { "id": "AR12", "source": "EXTERNAL", "target": "A4:input", "label": "figure_url (CDN)", "type": "input" },
+    { "id": "AR13", "source": "EXTERNAL", "target": "A4:control", "label": "403 -> explicit downgrade, no auto-retry", "type": "control" },
+    { "id": "AR14", "source": "EXTERNAL", "target": "A4:mechanism", "label": "gpatents http client + token store", "type": "mechanism" },
+    { "id": "AR15", "source": "A4:output", "target": "A3:control", "label": "CDN_FORBIDDEN -> use PDF pipeline", "type": "control" },
+    { "id": "AR16", "source": "EXTERNAL", "target": "A5:input", "label": "gpatents search result item", "type": "input" },
+    { "id": "AR17", "source": "EXTERNAL", "target": "A5:control", "label": "thumbnail-not-for-report rule", "type": "control" },
+    { "id": "AR18", "source": "EXTERNAL", "target": "A5:mechanism", "label": "_flatten in gpatents client", "type": "mechanism" },
+    { "id": "AR19", "source": "A5:output", "target": "EXTERNAL", "label": "result + resolution level", "type": "output" },
+    { "id": "AR20", "source": "A2:output", "target": "EXTERNAL", "label": "PDF handle + attempts trace", "type": "output" }
+  ]
+}

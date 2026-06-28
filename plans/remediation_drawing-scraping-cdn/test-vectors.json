@@ -1,0 +1,84 @@
+[
+    {
+      "id": "TV-A1",
+      "requirement": "A",
+      "name": "GPSS scraping serialized + delayed",
+      "given": "monkeypatch httpx + asyncio.sleep recorder; fire 3 concurrent gpss_download_representative_figure",
+      "when": "await all 3",
+      "then": {
+        "max_concurrent_http": 1,
+        "sleep_calls": 3,
+        "each_sleep_in_range": [1.0, 3.0]
+      }
+    },
+    {
+      "id": "TV-A2",
+      "requirement": "A",
+      "name": "env override of delay bounds",
+      "given": "GPSS_SCRAPE_MIN_DELAY=0.5, GPSS_SCRAPE_MAX_DELAY=1.5",
+      "when": "call one scraping tool",
+      "then": { "each_sleep_in_range": [0.5, 1.5] }
+    },
+    {
+      "id": "TV-B1",
+      "requirement": "B",
+      "name": "CDN 403 explicit downgrade",
+      "given": "mock httpx GET returns 403 for figure_url",
+      "when": "gpatents_download_figure(url)",
+      "then": {
+        "success": false,
+        "error": "CDN_FORBIDDEN",
+        "downgrade_hint_present": true,
+        "http_code": 403
+      }
+    },
+    {
+      "id": "TV-D1",
+      "requirement": "D",
+      "name": "vector PDF FIG.1 located and rendered",
+      "given": "test PDF: page1=cover, page2 contains 'FIG. 1'",
+      "when": "extract_representative_figure via stubbed fetch_patent_pdf",
+      "then": {
+        "success": true,
+        "page_number": 2,
+        "rel_ends_with": ".png",
+        "bytes_gt": 0
+      }
+    },
+    {
+      "id": "TV-D2",
+      "requirement": "D",
+      "name": "scanned PDF no text -> NO_FIGURE_PAGE",
+      "given": "test PDF with no extractable text on any page",
+      "when": "extract_representative_figure",
+      "then": { "success": false, "error": "NO_FIGURE_PAGE" }
+    },
+    {
+      "id": "TV-E1",
+      "requirement": "E",
+      "name": "thumbnail resolution tag present",
+      "given": "gpatents xhr item with patent.thumbnail set",
+      "when": "_flatten(item)",
+      "then": { "representative_figure_resolution": "thumbnail" }
+    },
+    {
+      "id": "TV-E2",
+      "requirement": "E",
+      "name": "no thumbnail -> no tag noise",
+      "given": "gpatents xhr item with empty thumbnail",
+      "when": "_flatten(item)",
+      "then": { "representative_figure_url": null }
+    },
+    {
+      "id": "TV-F1",
+      "requirement": "F",
+      "name": "EPO single-page biblio downgrade",
+      "given": "mock epo_client.images count>0; download returns 1-page PDF (pdfinfo Pages: 1)",
+      "when": "fetch_patent_pdf(PN, sources=['epo_images','gpss_pdf'], include_attempts=True)",
+      "then": {
+        "epo_attempt_error": "EPO_BIBLIO_ONLY_1PAGE",
+        "epo_attempt_pages": 1,
+        "continued_to_next_source": true
+      }
+    }
+]

@@ -8,9 +8,11 @@ This file provides a Model Context Protocol (MCP) server that exposes tools for 
 
 The server uses stdio transport for command-line tools, following the MCP standard.
 """
+import asyncio
 import os
 import json
 import logging
+import random
 import sys
 from typing import Any, Dict, List, Optional, Union
 
@@ -67,6 +69,28 @@ gpatents_client = GooglePatentsClient()  # Google Patents web endpoint (ranked s
 gpss_client = GPSSClient()  # TIPO GPSS official REST API (CPC/IPC + claims search, US/CN, JSON)
 epo_client = EPOClient()  # EPO OPS official API (INPADOC family, citations, biblio, legal)
 token_store = default_store()  # docxmcp-compatible token store for file delivery
+
+# ---------------------------------------------------------------------
+# GPSS scraping single-thread guardrail (BR_20260628 A).
+# TIPO (tiponet.tipo.gov.tw) is fronted by Cloudflare. Parallel scraping
+# trips a Managed Challenge that silently hangs the connection. Every
+# self-built GPSS scraping tool (figure / pdf / xml) MUST serialize through
+# this single module-level lock (Concurrency=1) and pace requests with a
+# random delay. Single-process async server -> asyncio.Lock is sufficient.
+_GPSS_SCRAPE_LOCK = asyncio.Lock()
+_GPSS_SCRAPE_MIN_DELAY = float(os.getenv("GPSS_SCRAPE_MIN_DELAY", "1.0"))
+_GPSS_SCRAPE_MAX_DELAY = float(os.getenv("GPSS_SCRAPE_MAX_DELAY", "3.0"))
+
+
+async def _gpss_scrape_pace() -> None:
+    """Random inter-request delay, called INSIDE _GPSS_SCRAPE_LOCK before the
+    actual HTTP session so serialized requests are also throttled."""
+    lo, hi = _GPSS_SCRAPE_MIN_DELAY, _GPSS_SCRAPE_MAX_DELAY
+    if hi < lo:
+        lo, hi = hi, lo
+    delay = random.uniform(lo, hi)
+    logger.debug("GPSS scrape acquired lock, sleeping %.2fs before request", delay)
+    await asyncio.sleep(delay)
 
 # =====================================================================
 # Unified USPTO Patents Tool
@@ -1478,14 +1502,229 @@ async def gpatents_download_figure(figure_url: str, filename: Optional[str] = No
     Pass the `representative_figure_url` from a gpatents_search result. Returns a
     docxmcp-style handle {token, rel, download_url, bytes, sha256}; the image
     bytes are stored, never returned through the model context.
+
+    BR_20260628 B: Google Storage (patentimages CDN) enables anti-hotlink on
+    recently-published patents and returns 403. We surface that as an EXPLICIT
+    downgrade signal (CDN_FORBIDDEN) — never silently retry or auto-redirect.
+    Callers should switch to extract_representative_figure (PDF pipeline).
     """
+    import httpx
     try:
         data = await gpatents_client.fetch_bytes(figure_url)
+    except httpx.HTTPStatusError as e:  # noqa: BLE001
+        if e.response.status_code == 403:
+            return {
+                "success": False,
+                "error": "CDN_FORBIDDEN",
+                "downgrade_hint": "use extract_representative_figure (PDF pipeline)",
+                "url": figure_url,
+                "http_code": 403,
+            }
+        return {"success": False, "error": f"HTTP {e.response.status_code}", "url": figure_url}
     except Exception as e:  # noqa: BLE001
         return {"success": False, "error": str(e)}
     name = filename or figure_url.rsplit("/", 1)[-1] or "figure.png"
     entry = token_store.put_bytes(data, name)
     return _handle(entry)
+
+
+# ---------------------------------------------------------------------
+# extract_representative_figure — PDF -> FIG.1 page -> high-DPI PNG (BR_20260628 D)
+# Uses poppler CLI (pdfinfo/pdftotext/pdftoppm), NOT PyMuPDF (AGPL). poppler is a
+# native subprocess固化進工具, not an ad-hoc scraping script.
+# ---------------------------------------------------------------------
+
+import re as _re_fig
+
+# First-figure markers across EN / zh-Hans / zh-Hant.
+_FIG1_PATTERNS = [
+    _re_fig.compile(r"\bFIG\.?\s*1\b", _re_fig.IGNORECASE),
+    _re_fig.compile(r"\bFIGURE\s*1\b", _re_fig.IGNORECASE),
+    _re_fig.compile(r"图\s*1\b"),
+    _re_fig.compile(r"圖\s*1\b"),
+    _re_fig.compile(r"第\s*1\s*圖"),
+    _re_fig.compile(r"第\s*1\s*图"),
+]
+# Reference-numeral density signal (e.g. "10", "12a") used as a fallback when
+# no explicit FIG.1 token is present.
+_REFNUM_RE = _re_fig.compile(r"\b\d{1,3}[a-z]?\b")
+
+
+def _pdf_page_count(pdf_path: str) -> int:
+    """Page count via `pdfinfo`. Returns 0 on failure."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["pdfinfo", pdf_path], capture_output=True, text=True, timeout=30
+        )
+        for line in out.stdout.splitlines():
+            if line.lower().startswith("pages:"):
+                return int(line.split(":", 1)[1].strip())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pdfinfo failed for %s: %s", pdf_path, e)
+    return 0
+
+
+def _pdf_bytes_page_count(data: bytes) -> int:
+    """Page count of an in-memory PDF via `pdfinfo` over a temp file (BR_20260628 F)."""
+    import tempfile
+    import os as _os
+    fd, tmp = tempfile.mkstemp(suffix=".pdf")
+    try:
+        with _os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        return _pdf_page_count(tmp)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pdf bytes page count failed: %s", e)
+        return 0
+    finally:
+        try:
+            _os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _pdf_page_text(pdf_path: str, page: int) -> str:
+    """Extract one page's text via `pdftotext -f N -l N -layout`. '' on failure."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["pdftotext", "-f", str(page), "-l", str(page), "-layout", pdf_path, "-"],
+            capture_output=True, text=True, timeout=30,
+        )
+        return out.stdout or ""
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pdftotext failed for %s p%d: %s", pdf_path, page, e)
+        return ""
+
+
+def _locate_figure_page(pdf_path: str) -> Dict[str, Any]:
+    """Locate the representative-figure page in a PDF.
+
+    Strategy (BR_20260628 D, DD-4):
+      1. Skip page 1 (cover / biblio).
+      2. Find the first page whose text matches a FIG.1 marker.
+      3. Fallback: the page (>=2) with the highest reference-numeral density.
+      4. If neither works (e.g. scanned PDF with no text layer), return None
+         page with method='none' — caller fails explicitly, never guesses.
+    """
+    pages = _pdf_page_count(pdf_path)
+    if pages <= 0:
+        return {"page": None, "method": "none", "pages": pages}
+    start = 2 if pages >= 2 else 1
+    best_refnum_page = None
+    best_refnum_count = -1
+    for p in range(start, pages + 1):
+        text = _pdf_page_text(pdf_path, p)
+        if not text.strip():
+            continue
+        for pat in _FIG1_PATTERNS:
+            if pat.search(text):
+                return {"page": p, "method": "fig1_text", "pages": pages}
+        count = len(_REFNUM_RE.findall(text))
+        if count > best_refnum_count:
+            best_refnum_count = count
+            best_refnum_page = p
+    if best_refnum_page is not None and best_refnum_count >= 5:
+        return {"page": best_refnum_page, "method": "refnum_density_fallback", "pages": pages}
+    return {"page": None, "method": "none", "pages": pages}
+
+
+def _render_page_png(pdf_path: str, page: int, dpi: int = 200) -> Optional[bytes]:
+    """Render one PDF page to PNG bytes via `pdftoppm -r DPI -f N -l N -png`."""
+    import subprocess
+    import tempfile
+    import os as _os
+    with tempfile.TemporaryDirectory() as td:
+        prefix = _os.path.join(td, "page")
+        try:
+            subprocess.run(
+                ["pdftoppm", "-r", str(dpi), "-f", str(page), "-l", str(page),
+                 "-png", pdf_path, prefix],
+                capture_output=True, text=True, timeout=120, check=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pdftoppm render failed for %s p%d: %s", pdf_path, page, e)
+            return None
+        for fn in sorted(_os.listdir(td)):
+            if fn.endswith(".png"):
+                with open(_os.path.join(td, fn), "rb") as fh:
+                    return fh.read()
+    return None
+
+
+@mcp.tool()
+async def extract_representative_figure(
+    publication_number: str,
+    dpi: int = 200,
+) -> Dict[str, Any]:
+    """Extract a patent's representative figure as a high-resolution PNG (BR_20260628 D).
+
+    Replaces the failed "pick the biggest object" heuristic (which selected
+    full-page OCR text scans on scanned PDFs). Pipeline:
+      1. Obtain the patent PDF via fetch_patent_pdf (epo_images / gpss_pdf /
+         google_citation, with EPO single-page biblio downgrade).
+      2. Locate the first FIG. 1 page with pdftotext (skips the cover page);
+         falls back to highest reference-numeral density page.
+      3. Render that page at `dpi` (default 200) with pdftoppm.
+
+    Returns a docxmcp-style handle {token, rel, download_url, bytes, sha256}
+    plus page_number / dpi / locate_method. On failure returns an EXPLICIT error
+    (NO_PDF / NO_FIGURE_PAGE / RENDER_FAILED) — it never inserts a wrong page.
+
+    Use this for report-grade figures; NEVER use representative_figure_url
+    thumbnails (60x80 index images) for deliverables.
+    """
+    import tempfile
+    import os as _os
+
+    # Step 1: ensure a PDF (reuse the unified fetch tool + its fallback chain).
+    pdf_res = await fetch_patent_pdf(publication_number)
+    if not pdf_res.get("success"):
+        return {"success": False, "error": "NO_PDF",
+                "publication_number": publication_number,
+                "detail": pdf_res.get("error"), "attempts": pdf_res.get("attempts")}
+
+    # Resolve the landed PDF to an on-disk path (poppler needs a filesystem
+    # path). blob_path returns the real file inside the token namespace.
+    try:
+        src_pdf_path = str(token_store.blob_path(pdf_res["token"], pdf_res["rel"]))
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "error": "NO_PDF",
+                "publication_number": publication_number,
+                "detail": f"fetched PDF token could not be resolved: {e}"}
+
+    with tempfile.TemporaryDirectory() as td:
+        # Copy into a private temp path so a TTL reap mid-render can't pull it.
+        pdf_path = _os.path.join(td, "patent.pdf")
+        import shutil as _shutil
+        _shutil.copyfile(src_pdf_path, pdf_path)
+
+        # Step 2: locate the figure page.
+        loc = _locate_figure_page(pdf_path)
+        if loc["page"] is None:
+            return {"success": False, "error": "NO_FIGURE_PAGE",
+                    "publication_number": publication_number,
+                    "pages": loc.get("pages"),
+                    "detail": "No FIG.1 marker and no usable text layer "
+                              "(likely a scanned PDF without OCR)."}
+
+        # Step 3: render the page.
+        png = _render_page_png(pdf_path, loc["page"], dpi=dpi)
+        if not png:
+            return {"success": False, "error": "RENDER_FAILED",
+                    "publication_number": publication_number,
+                    "page_number": loc["page"]}
+
+    name = f"{publication_number}_FIG_p{loc['page']}.png"
+    entry = token_store.put_bytes(png, name)
+    result = _handle(entry)
+    result["page_number"] = loc["page"]
+    result["dpi"] = dpi
+    result["locate_method"] = loc["method"]
+    result["source_pdf"] = {"source": pdf_res.get("source"),
+                            "provenance": pdf_res.get("provenance")}
+    return result
 
 
 @mcp.tool()
@@ -1496,11 +1735,22 @@ async def gpss_download_representative_figure(
 
     This replicates a browser session to fetch the static representative figure.
     Returns a handle {token, rel, download_url, bytes, sha256} of the saved image.
+
+    BR_20260628 A: serialized through _GPSS_SCRAPE_LOCK (Concurrency=1) + a random
+    inter-request delay, so parallel calls cannot trip Cloudflare's Managed
+    Challenge on tiponet.tipo.gov.tw.
     """
-    import random
+    async with _GPSS_SCRAPE_LOCK:
+        await _gpss_scrape_pace()
+        return await _gpss_download_representative_figure_impl(publication_number)
+
+
+async def _gpss_download_representative_figure_impl(
+    publication_number: str,
+) -> Dict[str, Any]:
     import re
     import httpx
-    
+
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -1606,8 +1856,18 @@ async def gpss_download_patent_pdf(
 
     This replicates a browser session to fetch the patent's PDF document.
     Returns a handle {token, rel, download_url, bytes, sha256} of the saved PDF.
+
+    BR_20260628 A: serialized through _GPSS_SCRAPE_LOCK (Concurrency=1) + a random
+    inter-request delay. The local-cache fast path also runs under the lock; this
+    is cheap and keeps the single-thread guarantee simple and total.
     """
-    import random
+    async with _GPSS_SCRAPE_LOCK:
+        return await _gpss_download_patent_pdf_impl(publication_number)
+
+
+async def _gpss_download_patent_pdf_impl(
+    publication_number: str,
+) -> Dict[str, Any]:
     import re
     import httpx
 
@@ -1751,8 +2011,17 @@ async def gpss_download_patent_xml(
 
     This replicates a browser session to fetch the patent's full-text XML document (best for TW patents).
     Returns a handle {token, rel, download_url, bytes, sha256} of the saved XML.
+
+    BR_20260628 A: serialized through _GPSS_SCRAPE_LOCK (Concurrency=1) + a random
+    inter-request delay, sharing the single guardrail with the figure/pdf tools.
     """
-    import random
+    async with _GPSS_SCRAPE_LOCK:
+        return await _gpss_download_patent_xml_impl(publication_number)
+
+
+async def _gpss_download_patent_xml_impl(
+    publication_number: str,
+) -> Dict[str, Any]:
     import re
     import httpx
 
@@ -1948,7 +2217,16 @@ async def fetch_patent_pdf(
                 if not data:
                     attempts.append({"source": src, "ok": False, "error": "EMPTY_PDF"})
                     continue
-                
+
+                # BR_20260628 F: EPO OPS only serves biblio (cover) pages for many
+                # CN/TW patents — a 1-page PDF with no specification figures. Never
+                # land such a PDF as a figure source; downgrade to the next source.
+                epo_pages = _pdf_bytes_page_count(data)
+                if epo_pages <= 1:
+                    attempts.append({"source": src, "ok": False,
+                                     "error": "EPO_BIBLIO_ONLY_1PAGE", "pages": epo_pages})
+                    continue
+
                 # Save to Local Cache (Write-Through)
                 _save_local_patent_cache(country, norm_pat, "pdf", data)
 
@@ -1956,7 +2234,7 @@ async def fetch_patent_pdf(
                 result = _handle(entry)
                 result["source"] = src
                 result["provenance"] = {"api": "EPO OPS published-data/images",
-                                        "scraping": False}
+                                        "scraping": False, "pages": epo_pages}
                 attempts.append({"source": src, "ok": True, "bytes": entry.size_bytes})
                 if include_attempts:
                     result["attempts"] = attempts

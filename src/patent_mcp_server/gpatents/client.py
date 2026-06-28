@@ -148,6 +148,11 @@ class GooglePatentsClient:
             "assignee": p.get("assignee"),
             "language": p.get("language"),
             "representative_figure_url": (IMAGE_BASE + thumb) if thumb else None,
+            # BR_20260628 E: this URL is a LOW-RES INDEX THUMBNAIL (~60x80 px),
+            # NOT a report-grade figure. Flag the resolution level so callers /
+            # skills never embed it in deliverables — use the PDF pipeline
+            # (extract_representative_figure) for high-resolution figures.
+            "representative_figure_resolution": "thumbnail" if thumb else None,
             "pdf_url": (IMAGE_BASE + pdf) if pdf else None,
             "num_figures": len(p.get("figures", []) or []),
             "family_country_status": country_status,

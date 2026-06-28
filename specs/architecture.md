@@ -81,7 +81,14 @@
 
 ## Debug / Observability Map
 - 檢索工具邊界：`vendor/patents-mcp/src/patent_mcp_server/patents.py` 的 MCP tool docstring 與返回 schema。
-- 原始 PDF/圖檔取得邊界（plan `patent-pdf-fetch`, 2026-06）：`fetch_patent_pdf(publication_number, sources?, filename?, include_attempts?)` 統一工具，依序路由 `epo_images`（`EPOClient.images()` + `download_image_pdf()`，EPO OPS 官方影像 API）→ `google_citation`（`GooglePatentsClient.resolve_pdf_url()` 解析專利頁真實雜湊 `citation_pdf_url`）。回 docxmcp 風格 token handle（bytes 不經 model context），token 交 docxmcp `decompose(format=pdf)` 抽圖。端到端實證含 TW 案。文字（claims/全文/圖說）仍走 `google_*` BigQuery + GPSS/USPTO PPUBS。
+- 原始 PDF/圖檔取得邊界（plan `patent-pdf-fetch`, 2026-06）：`fetch_patent_pdf(publication_number, sources?, filename?, include_attempts?)` 統一工具，依序路由 `epo_images`（`EPOClient.images()` + `download_image_pdf()`，EPO OPS 官方影像 API）→ `gpss_pdf`（TIPO 單線程）→ `google_citation`（`GooglePatentsClient.resolve_pdf_url()` 解析專利頁真實雜湊 `citation_pdf_url`）。回 docxmcp 風格 token handle（bytes 不經 model context），token 交 docxmcp `decompose(format=pdf)` 抽圖。端到端實證含 TW 案。文字（claims/全文/圖說）仍走 `google_*` BigQuery + GPSS/USPTO PPUBS。
+- 代表圖抓取與降級邊界（plan `remediation_drawing-scraping-cdn`, 2026-06, BR_20260628）：
+  - **單線程節流（A）**：所有 GPSS 抓圖工具（`gpss_download_representative_figure` / `_patent_pdf` / `_patent_xml`）共用 module-level `_GPSS_SCRAPE_LOCK`（`patents.py`）序列化（Concurrency=1）+ `_gpss_scrape_pace()` 隨機延遲（env `GPSS_SCRAPE_MIN/MAX_DELAY`，預設 1~3s），防 Cloudflare Managed Challenge。
+  - **CDN 403 降級（B）**：`gpatents_download_figure` 偵測 patentimages 403 → 顯式回 `CDN_FORBIDDEN` + downgrade_hint（不靜默重試）。
+  - **代表圖高階工具（D）**：`extract_representative_figure(publication_number, dpi=200)` 用 poppler CLI（`pdfinfo`/`pdftotext`/`pdftoppm`，非 PyMuPDF/AGPL）定位首個 FIG.1 頁（跳封面）→ 高 DPI 渲染 PNG handle；無法定位回 `NO_FIGURE_PAGE`，取代失效的「選最大檔案」策略。
+  - **縮圖等級標註（E）**：`GooglePatentsClient._flatten` 對 `representative_figure_url` 加 `representative_figure_resolution: "thumbnail"`；skill 警告縮圖禁用於報告。
+  - **EPO 單頁降級（F）**：`fetch_patent_pdf` epo_images 分支以 `_pdf_bytes_page_count`（pdfinfo）偵測頁數 ≤ 1，記 `EPO_BIBLIO_ONLY_1PAGE` 並 continue 下一來源，不落地著錄摘要當代表圖。
+  - 跨容器 token 中轉（C，host-pipe SOP）：patentmcp 與 docxmcp 獨立容器/獨立 named volume，token 不互通。**不改 compose**（docxmcp 有 bind-mount ban / AC-01）；改採 host-side pipe：patentmcp blob 端點（TCP `localhost:8000/files/{token}/blob/{rel}`）→ docxmcp 官方攝取入口（`docxmcp_stage_dir` 或 `POST /files` tarball），bytes 不經 model context。SOP 固化於 `skills/patentworks/reference/priorsearch/pdf-figure-extraction.md` §3.4；已實證（50026 bytes PDF 完整搬移）。共用 named volume（方案 B）留待 docxmcp 自身 spec 流程。
 - Skill routing：`skills/patentworks/SKILL.md` 的 flow 選擇表。
 - 檢索/分析領域規格：`skills/patent-practitioner-workflow.md`。
 - Flow 契約：`skills/patentworks/flows/*.md`。

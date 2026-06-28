@@ -42,6 +42,10 @@ disclosure(交底書)→ screening(查新)→ analysis(分析)→ drafting(起�
    - **③ USPTO PPUBS**(`uspto_patents`)——美國案完整全文 + 附圖文字說明用 `method="ppubs_get_full_document"`。
    - **④ Google Patents BigQuery(`google_*`)——合法註冊 API,不是爬蟲,別跟 `gpatents_*` 混為一談**。走 `GOOGLE_APPLICATION_CREDENTIALS` service account 查 `patents-public-data` 公開資料集(ToS 乾淨、不被限速封鎖)。實測 `google_get_patent_claims` / `google_get_patent_description` 對 US 案乾淨回傳**全部請求項 + 完整說明書全文(含 BRIEF DESCRIPTION OF THE DRAWINGS 逐圖文字說明)**。涵蓋 US/EP/WO/JP/CN/KR/GB/DE/FR/CA/AU(**不含 TW**,TW 走 ①GPSS)。**⚠️ 計費與成本風險警告**：由於 BigQuery 是按查詢掃描的資料欄位量計費，執行模糊檢索（如 `google_search_*`）會對巨大公開資料表進行全表掃描，極易爆出高額帳單（曾有單次檢索累積達 10 TB 掃描量而產生約 60 美金費用的案例）。**防護機制**：(1) 系統已在 `config.py` 限制單次查詢掃描量上限為 10 GB (`BIGQUERY_MAX_BYTES_BILLED=10737418240`)，超量查詢會被自動阻斷並報錯；(2) 建議透過 GCP CLI 限制專案的每日查詢上限（例如 `gcloud alpha services quota update --service=bigquery.googleapis.com --consumer=projects/YOUR_PROJECT_ID --metric=bigquery.googleapis.com/quota/query/usage --unit="1/d/{project}" --value=10240 --force`）以維持在每月 1 TB 的免費額度內。**限制**:只有文字(claims/description/書目),**沒有圖檔影像**;適合單號精確取文(`get_patent*`)，大批量全文掃描應極力避免。
    - **⑤ Google Patents 網頁爬蟲(`gpatents_*`)——最後手段**。`gpatents_*`(`gpatents_search`/`gpatents_get`/`gpatents_download_*`)爬 patents.google.com 網頁,**非官方、極易被限速封鎖(實測連續 timeout / storage 403 / 頁面 503)**。只在 ①②③④ 都填不了某欄位時才用(它獨有的是 `representative_figure_url` 代表圖縮圖),且須預期失敗、設早退(連 3 次失敗即放棄)。**切勿委派子代理去吸收會 timeout 的 `gpatents_*` 輸出**——子代理會反覆 `worker_dead`。
+   - **⛔ 爬蟲授權與防護天條 (Scraping & Concurrency Guardrails)**：
+     1. **明確口頭同意**：在任何 Session 中使用 `gpatents_*` 爬蟲或自製爬蟲（如 GPSS 抓圖/PDF）前，**必須先獲得用戶的明確口頭同意**，嚴禁擅自執行。
+     2. **單線程限速執行**：所有自製或模擬網頁爬蟲（如 TIPO GPSS 的圖片/PDF 抓取、Google Patents 網頁請求等），**永遠只准單線程（Concurrency=1）順序執行**，且每次請求之間必須強制隨機延遲 1~3 秒，避免被 Cloudflare JS Challenge 或防護牆封鎖。
+     3. **零臨時腳本繞道**：嚴禁 AI 代理為了繞過工具缺陷而私下撰寫臨時 Python 爬取/下載腳本。有任何工具與下載缺陷一律提報 `patentmcp` Bug Report，由核心工具層修正。
    - ⚠️ **`google_*`(BigQuery 合法 API)≠ `gpatents_*`(網頁爬蟲)**:工具名都含 "google" 但後端與合法性完全不同。要逐字 claims / 全文 / 圖說,優先用 `google_get_patent*`(④),不要因為名字有 google 就避開。
    - PDF 二進位下載端點(`gpatents_download_pdf` / `uspto ppubs_download_patent_pdf`)本部署實測**系統性故障**;但**原始附圖的文字說明**可由 ④`google_get_patent_description` 或 ③USPTO PPUBS 可靠取得。原始圖檔影像不可得時走 `reference/priorsearch/pdf-figure-extraction.md` 的降級路徑。
 
@@ -51,22 +55,34 @@ disclosure(交底書)→ screening(查新)→ analysis(分析)→ drafting(起�
 
 ## 專利工作池資料樹規範 (Data Tree Specification)
 
-為了確保專利檢索、統計圖表繪製、報告編譯 (docxmcp) 之間的資料流一致性，各專案工作目錄的中間產物必須遵守以下資料樹規範，並與 `docxmcp` 的 `manifest` 結構調和：
+為了確保專利檢索、統計圖表繪製、報告編譯 (docxmcp) 之間的資料流一致性，各專案工作目錄的資料結構與中間產物必須遵守以下資料樹規範，並與 `docxmcp` 的 `manifest` 結構調和：
 
 ### 1. 目錄結構
-每一個專案的工作池目錄應包含以下核心檔案與子目錄：
+各專案工作目錄必須物理隔離交付物與中間產物。交付物僅存放在根目錄，中間產物則依其性質分流至三個專用子目錄中：
+
 ```
 <project_dir>/
-├── manifest.json              # 資料池與產出物 manifest 設定檔 (與 docxmcp 調和)
-├── candidates.csv             # 結構化專利候選池 (包含 20 篇以上專利)
-├── build_xlsx.py              # 生成與美化 Excel 專利表腳本 (使用 openpyxl)
-├── build_charts.py            # 繪製統計圖表腳本 (使用 matplotlib)
-├── build_docx_pkg.py          # 打包為 docxmcp Mode-A 包的腳本
-├── build_html.py              # 生成 HTML 預覽報告的腳本
-├── <project_name>_技術洞察報告.md   # 技術洞察報告原始 Markdown 檔案 (SSOT)
-├── <project_name>_技術洞察報告.docx # 最終經由 docxmcp 產出的 Word 報告
-└── assets/
-    └── figures/               # 存放 build_charts.py 所繪製的 5 張統計圖表 (PNG)
+├── <project_name>_技術洞察報告.docx # 最終交付物：經由 docxmcp 產出的 Word 報告
+├── <project_name>_專利彙整表.xlsx   # 最終交付物：由所有檢索資料彙整而成的單一試算表
+│
+├── input/                           # 中間產物：業主提供的原始資料 (例如：技術揭露書、原始想法材料)
+│
+├── search/                          # 中間產物：所有檢索得到的原始與結構化資料 (可依檔案類型細分)
+│   ├── csv/                         # 存放 candidates.csv (包含 20 篇以上專利之結構化候選池)
+│   ├── json/                        # 存放 raw_patents.json、us_claims.json 等 API 原始回傳資料
+│   ├── pdfs/                        # 存放檢索到的專利全文 PDF 檔案
+│   └── html/                        # 存放檢索網頁快照或 HTML 格式資料
+│
+└── output/                          # 中間產物：用來組成與生成報告的材料 (包含 docxmcp 組成 docx 的結構)
+    ├── <project_name>_技術洞察報告.md # 技術洞察報告原始 Markdown 檔案 (Markdown 屬於中間產出)
+    ├── manifest.json                # 資料池與產出物 manifest 設定檔 (與 docxmcp 調和)
+    ├── build_xlsx.py                # 生成與美化 Excel 專利表腳本 (使用 openpyxl)
+    ├── build_charts.py              # 繪製統計圖表腳本 (使用 matplotlib)
+    ├── build_docx_pkg.py            # 打包為 docxmcp Mode-A 包的腳本
+    ├── build_html.py                # 生成 HTML 預覽報告的腳本
+    ├── assets/                      # 存放繪圖與靜態資源
+    │   └── figures/                 # 存放 build_charts.py 繪製的 5 張統計圖表 (PNG)
+    └── chapters/                    # 存放 docxmcp 各章節內容的 XML 或結構化檔案
 ```
 
 ### 2. 中間產物 Manifest 規範 (`manifest.json`)

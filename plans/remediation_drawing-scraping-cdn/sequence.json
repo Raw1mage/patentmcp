@@ -1,0 +1,44 @@
+[
+  {
+    "title": "extract_representative_figure — Vector PDF to PNG",
+    "participants": ["Caller", "MCP", "Poppler", "Store"],
+    "messages": [
+      { "from": "Caller", "to": "MCP", "text": "extract_representative_figure(PN)" },
+      { "from": "MCP", "to": "MCP", "text": "ensure PDF via fetch_patent_pdf" },
+      { "from": "MCP", "to": "Poppler", "text": "pdfinfo page count" },
+      { "from": "MCP", "to": "Poppler", "text": "pdftotext per page, locate FIG.1 (skip cover)" },
+      { "from": "MCP", "to": "Poppler", "text": "pdftoppm -r 200 render page N" },
+      { "from": "MCP", "to": "Store", "text": "put_bytes(PNG)" },
+      { "from": "Store", "to": "MCP", "text": "token" },
+      { "from": "MCP", "to": "Caller", "text": "handle + page_number" }
+    ]
+  },
+  {
+    "title": "Scanned PDF no text layer — explicit failure",
+    "participants": ["Caller", "MCP", "Poppler"],
+    "messages": [
+      { "from": "MCP", "to": "Poppler", "text": "pdftotext: no text extracted" },
+      { "from": "MCP", "to": "MCP", "text": "refnum density fallback; still none" },
+      { "from": "MCP", "to": "Caller", "text": "{success:false, error:NO_FIGURE_PAGE}" }
+    ]
+  },
+  {
+    "title": "GPSS concurrent scraping serialized (A)",
+    "participants": ["Caller", "MCP", "TIPO"],
+    "messages": [
+      { "from": "Caller", "to": "MCP", "text": "acquire _GPSS_SCRAPE_LOCK" },
+      { "from": "MCP", "to": "MCP", "text": "asyncio.sleep(random.uniform(1,3))" },
+      { "from": "MCP", "to": "TIPO", "text": "single serialized scraping session" },
+      { "from": "MCP", "to": "Caller", "text": "release lock, return handle" }
+    ]
+  },
+  {
+    "title": "EPO biblio-only PDF downgrade (F)",
+    "participants": ["MCP", "EPO", "Poppler"],
+    "messages": [
+      { "from": "MCP", "to": "EPO", "text": "download image PDF (CN/TW)" },
+      { "from": "MCP", "to": "Poppler", "text": "pdfinfo: pages == 1" },
+      { "from": "MCP", "to": "MCP", "text": "record EPO_BIBLIO_ONLY_1PAGE, continue to gpss_pdf" }
+    ]
+  }
+]
