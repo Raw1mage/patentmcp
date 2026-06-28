@@ -1971,6 +1971,51 @@ async def _gpss_download_representative_figure_impl(
             g2_series = sorted(u for u in img_urls if _is_g2(u))
             g1_thumbs = [u for u in img_urls if _is_g1(u)]
 
+            # GUARD against silently returning a NEIGHBOUR patent's figure.
+            # The GPSS headless search POST is fuzzy: when the requested patent's
+            # images are not yet in the GPSS image库 (e.g. a very recent
+            # publication), the search can land on an adjacent result and the
+            # detail page — and ALL its figure URLs — belong to a DIFFERENT
+            # patent. The figure filename embeds the publication number
+            # (<C>G2<NUMBER>_<NNN>), so compare its digit core to the requested
+            # number; on mismatch fail LOUD instead of handing back the wrong
+            # patent's drawing.
+            def _req_core(s):
+                # Requested pubno: strip country prefix + kind suffix, keep the
+                # digit core. "CN120543023A" -> "120543023", "US20230081319A1"
+                # -> "20230081319", "TWI854998B" -> "854998".
+                t = re.sub(r"^[A-Za-z]+", "", (s or "").strip())
+                m = re.search(r"\d+", t)
+                return m.group(0) if m else ""
+
+            def _fig_core(fname):
+                # Figure filename embeds the number AFTER the G1/G2 marker:
+                # "CNG2120672280A_000.jpg" -> "120672280",
+                # "USG220230081319A1_000.png" -> "20230081319",
+                # "TWG1202503567A.png" -> "202503567". Strip everything up to and
+                # including G1/G2 so the marker's own digit ("2") is not glued on.
+                m = re.search(r"G[12](\d+)", fname, re.IGNORECASE)
+                return m.group(1) if m else ""
+
+            req_core = _req_core(pat)
+            all_candidates = g2_series + g1_thumbs + img_urls
+            if req_core and all_candidates:
+                got_core = _fig_core(all_candidates[0].rsplit("/", 1)[-1])
+                if got_core and got_core != req_core:
+                    return {
+                        "success": False,
+                        "error": (
+                            "GPSS detail page resolved to a DIFFERENT patent — "
+                            "the requested patent's figures are not in the GPSS "
+                            "image库 (often a very recent publication). Refusing "
+                            "to return a neighbour's figure."
+                        ),
+                        "requested": pat,
+                        "resolved_figure": all_candidates[0].rsplit("/", 1)[-1],
+                        "requested_number_core": req_core,
+                        "resolved_number_core": got_core,
+                    }
+
             async def _grab(rel_url):
                 r = await client.get(f"https://tiponet.tipo.gov.tw{rel_url}")
                 if r.status_code != 200:

@@ -212,5 +212,51 @@ class GpssFigureUrlClassificationTest(unittest.TestCase):
         self.assertFalse(base.endswith("?1559877649"))
 
 
+# ── G2: neighbour-patent guard (pubno core comparison) ───────────────
+# GPSS headless search is fuzzy: when the requested patent's images are not
+# yet in the GPSS image库 (very recent publications), the detail page can
+# resolve to a NEIGHBOUR patent whose figure filename embeds a DIFFERENT
+# number. The figure filename embeds the number AFTER the G1/G2 marker, so the
+# marker's own digit must not be glued onto the core (the誤殺 bug).
+class GpssNeighbourGuardTest(unittest.TestCase):
+    @staticmethod
+    def _req_core(s):
+        import re
+        t = re.sub(r"^[A-Za-z]+", "", (s or "").strip())
+        m = re.search(r"\d+", t)
+        return m.group(0) if m else ""
+
+    @staticmethod
+    def _fig_core(fname):
+        import re
+        m = re.search(r"G[12](\d+)", fname, re.IGNORECASE)
+        return m.group(1) if m else ""
+
+    def test_req_core_strips_prefix(self):
+        self.assertEqual(self._req_core("CN120543023A"), "120543023")
+        self.assertEqual(self._req_core("US20230081319A1"), "20230081319")
+        self.assertEqual(self._req_core("TWI854998B"), "854998")
+
+    def test_fig_core_not_glued_to_marker_digit(self):
+        # The G2's "2" must NOT be glued onto the number.
+        self.assertEqual(self._fig_core("CNG2120672280A_000.jpg"), "120672280")
+        self.assertEqual(self._fig_core("USG220230081319A1_000.png"), "20230081319")
+        self.assertEqual(self._fig_core("TWG1202503567A.png"), "202503567")
+
+    def test_match_passes_for_same_patent(self):
+        # CN120672280A -> its own figure: cores equal -> NO guard fire.
+        self.assertEqual(
+            self._req_core("CN120672280A"),
+            self._fig_core("CNG2120672280A_000.jpg"),
+        )
+
+    def test_mismatch_fires_for_neighbour(self):
+        # CN120543023A requested, but page resolved CN121094816A's figure.
+        self.assertNotEqual(
+            self._req_core("CN120543023A"),
+            self._fig_core("CNG2121094816A_000.jpg"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
