@@ -57,6 +57,7 @@ from patent_mcp_server._token_store import default_store
 from patent_mcp_server import _file_server
 from patent_mcp_server import screening_table as _st
 from patent_mcp_server import search_audit as _sa
+from patent_mcp_server import patentdb_store as _pdb
 from patent_mcp_server.constants import Defaults, GooglePatentsCountries
 from patent_mcp_server.util.errors import ApiError
 
@@ -944,29 +945,87 @@ def _find_local_patent_cache(country: str, norm_pat: str, file_type: str):
     return None
 
 
-def _save_local_patent_cache(country: str, norm_pat: str, file_type: str, data: bytes) -> None:
+def _save_local_patent_cache(
+    country: str,
+    norm_pat: str,
+    file_type: str,
+    data: bytes,
+    *,
+    figure_name: Optional[str] = None,
+    biblio: Optional[Dict[str, Any]] = None,
+    acquisition_cost: str = "low",
+    source: Optional[str] = None,
+) -> Optional[str]:
+    """Write-through blob cache + patentdb register side-effect.
+
+    file_type: "pdf" / "xml" → specification.<type>; "figure" → figures/<figure_name>.
+    biblio: optional full bibliographic fields to enrich metadata.json + patentdb.
+    Returns the relative blob path under patentdb root (for register), or None.
+    """
     import json
     import time
-    
+    import hashlib
+
     db_root = _get_db_root()
     target_dir = db_root / country / norm_pat
+    rel_path = None
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"specification.{file_type}"
-        (target_dir / filename).write_bytes(data)
-        
-        # Write simple metadata.json if not present
+        if file_type == "figure":
+            fig_dir = target_dir / "figures"
+            fig_dir.mkdir(parents=True, exist_ok=True)
+            fname = figure_name or "representative.png"
+            (fig_dir / fname).write_bytes(data)
+            rel_path = f"{country}/{norm_pat}/figures/{fname}"
+        else:
+            filename = f"specification.{file_type}"
+            (target_dir / filename).write_bytes(data)
+            rel_path = f"{country}/{norm_pat}/{filename}"
+
+        # metadata.json — enrich with full biblio when provided, else keep/seed stub
         meta_path = target_dir / "metadata.json"
-        if not meta_path.is_file():
+        meta_data: Dict[str, Any] = {}
+        if meta_path.is_file():
+            try:
+                meta_data = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                meta_data = {}
+        if not meta_data:
             meta_data = {
                 "publication_number": f"{country}{norm_pat}",
                 "normalized_number": norm_pat,
                 "country": country,
-                "cached_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                "cached_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
-            meta_path.write_text(json.dumps(meta_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        if biblio:
+            # only fill missing keys (progressive merge, do not clobber)
+            for k, v in biblio.items():
+                if v and not meta_data.get(k):
+                    meta_data[k] = v
+        meta_path.write_text(json.dumps(meta_data, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception as e:
         logger.warning(f"Failed to save local patent cache for {country}/{norm_pat}: {e}")
+        return None
+
+    # patentdb register side-effect (DD-7): never block the download path
+    try:
+        sha = hashlib.sha256(data).hexdigest()
+        blobs: Dict[str, Any] = {}
+        if file_type == "figure":
+            blobs["figures"] = [{"name": figure_name or "representative.png",
+                                 "path": rel_path, "sha256": sha}]
+        else:
+            blobs[file_type] = {"path": rel_path, "sha256": sha}
+        _pdb.put(
+            f"{country}{norm_pat}",
+            fields=biblio or {},
+            blobs=blobs,
+            acquisition_cost=acquisition_cost,
+        )
+    except Exception as e:
+        logger.warning(f"patentdb register failed for {country}/{norm_pat}: {e}")
+
+    return rel_path
 
 
 @mcp.tool()
@@ -1078,6 +1137,15 @@ async def build_screening_table(
     columns = _st.resolve_columns(purpose, extra_fields, exclude_fields)
     data = _st.build_csv(deduped, columns)
     entry = token_store.put_bytes(data, filename)
+
+    # DD-11: inline-absorb bibliographic fields into the global patentdb the moment
+    # the CSV lands — records are already in memory, so this costs zero extra toolcall
+    # and zero network. Side-effect only (DD-7): never block the search result.
+    absorbed = None
+    try:
+        absorbed = _pdb.import_records(deduped, acquisition_cost="low")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"patentdb inline absorb failed: {e}")
     # Honest gaps: family is unavailable from BOTH GPSS and Google search
     # (neither exposes an INPADOC family_id), so surface it regardless of source
     # (BR_20260628 C). legal_status/citations are never in-band either.
@@ -2930,6 +2998,107 @@ async def search_audit(
             "error": str(e),
             "hint": "matrix-log.jsonl 必須存在且為每行一筆 JSON 查詢紀錄（schema 見 priorsearch.md §0）。",
         }
+
+
+@mcp.tool()
+async def patentdb_put(
+    publication_number: str,
+    fields: Optional[Dict[str, Any]] = None,
+    blobs: Optional[Dict[str, Any]] = None,
+    acquisition_cost: Optional[str] = None,
+    overwrite: bool = False,
+) -> Dict[str, Any]:
+    """Upsert ONE patent's bibliographic record into the global patentdb structured layer.
+
+    patentdb is a PASSIVELY-ACCUMULATED, cost-weighted, cross-project bibliographic
+    store (sqlite). Records are SPARSE by design — a patent may enter with only a
+    pubno + title, fields filled in progressively over time. Upsert is a PROGRESSIVE
+    MERGE: existing non-empty values are kept (COALESCE), only NULL fields are filled,
+    unless overwrite=true.
+
+    Only bibliographic FACTS live here — NO per-project screening/relevance scores
+    (those stay in the project's candidates.csv).
+
+    Args:
+        publication_number: e.g. "US20230081319A1" / "TWI854998B" / "CN120543023A".
+        fields: bibliographic field subset — any of: title_orig, title_en, abstract,
+            claim1, applicants, inventors, application_no, application_date,
+            publication_date, priority_date, cpc_codes, ipc_codes, family_id, kind.
+        blobs: {"pdf":{"path","sha256"}, "xml":{"path","sha256"},
+            "figures":[{"name","path","sha256"}]} — file-system paths only.
+        acquisition_cost: coarse cost tier "high"/"low"/"free" (DD-9). Mark "high" for
+            data fetched from BigQuery/EPO/consented-scraping so it is never re-fetched.
+        overwrite: when true, incoming non-empty values replace existing ones.
+
+    Returns:
+        {pubno, action: created|updated|unchanged, merged_fields?, completeness}.
+    """
+    try:
+        return _pdb.put(
+            publication_number,
+            fields=fields,
+            blobs=blobs,
+            acquisition_cost=acquisition_cost,
+            overwrite=overwrite,
+        )
+    except Exception as e:
+        logger.warning(f"patentdb_put failed for {publication_number}: {e}")
+        return {"error": "patentdb_put_failed", "detail": str(e), "pubno": publication_number}
+
+
+@mcp.tool()
+async def patentdb_query(
+    publication_number: Optional[str] = None,
+    fts: Optional[str] = None,
+    country: Optional[str] = None,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """Query the global patentdb bibliographic store (NO project/screening dimension).
+
+    This is the LIBRARY-SIDE entry for "腳踏兩條船" (DD-12): while analysing a case
+    from its own search files, ALSO query patentdb for relevant targets the current
+    search did not surface — cross-project accumulation may already hold a prior-art
+    hit that nails this case, saving fresh API quota.
+
+    Modes (pass exactly one primary filter):
+        publication_number: exact lookup → full record + completeness flags.
+        fts: full-text search over title/abstract/claim1. ≥3 chars uses FTS5 (trigram,
+            CJK-aware); <3 chars (e.g. 2-char CJK term) falls back to LIKE scan.
+        country: TW/US/CN/EP/WO — list recent records for that jurisdiction.
+        (no filter): most-recent records + total count.
+
+    Returns include `completeness` flags so the caller can judge whether to go fetch
+    missing pieces (passive accumulation: fetch only what's missing).
+    """
+    try:
+        return _pdb.query(
+            publication_number=publication_number,
+            fts=fts,
+            country=country,
+            limit=limit,
+        )
+    except Exception as e:
+        logger.warning(f"patentdb_query failed: {e}")
+        return {"error": "patentdb_query_failed", "detail": str(e)}
+
+
+@mcp.tool()
+async def patentdb_import_csv(csv_path: str) -> Dict[str, Any]:
+    """Bulk-import BIBLIOGRAPHIC fields from a candidates.csv into patentdb.
+
+    Imports ONLY bibliographic columns (pubno/title/abstract/claim1/cpc/family/dates);
+    per-project screening columns (relevance/score/tech_gist/reason) are IGNORED — they
+    stay in the project CSV (DD-2). Each row → progressive-merge upsert (DD-4). The whole
+    file is wrapped in a single transaction (DD-10, million-scale friendly).
+
+    Default trigger is INLINE from the search tool when a CSV lands (DD-11); this manual
+    tool is the back-fill entry for historical CSVs.
+    """
+    try:
+        return _pdb.import_csv(csv_path)
+    except Exception as e:
+        logger.warning(f"patentdb_import_csv failed for {csv_path}: {e}")
+        return {"error": "patentdb_import_csv_failed", "detail": str(e), "csv": csv_path}
 
 
 def main():

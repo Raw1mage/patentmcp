@@ -11,10 +11,13 @@
 ```
 priorart_<topic>/                    ← 工作資料夾根(一案一夾)
 ├── 00_campaign.md                   ← 檢索計畫:主題/IPC錨點/三地/日期/件數目標/硬條件
-├── 01_search/                       ← 檢索中間產物
+├── 01_search/                       ← 檢索中間產物(完整 search history;API quota 換來的資料一律落地,見保存契約)
 │   ├── probes.md                    ← 校準探針結果(各錨點小量試打的命中量級)
 │   ├── matrix-log.jsonl             ← 完整檢索矩陣紀錄(每行一筆查詢,結構化 schema)← 可復現核心 + search_audit 機檢來源
-│   └── raw/                         ← 子代理落地的原始 JSON(大檔,不進主 context)
+│   └── raw/                         ← 每一次 API 呼叫的原始回應(大檔,不進主 context;命名固定)
+│       ├── Q<NN>.json               ← 每條 matrix 查詢的完整原始回應(對應 matrix-log 的 raw_ref)
+│       ├── probe_<地區>_<群>.json    ← 校準探針原始回應(TW/CN/US × 概念群 A-E)
+│       └── full_<pubno>.json        ← shortlist 深挖取的逐字 claims/全文/家族原始回應
 ├── 02_pool/                         ← 專利池
 │   ├── candidates.csv               ← 去重+硬條件篩選後的候選池(書目+技術摘要+情境分類+1-5級相關性)
 │   └── shortlist.json               ← 針對所有評等為 5 級相關性專利的深挖數據(包含逐字 Claim 1、代表圖路徑與完整圖說文字)
@@ -65,6 +68,53 @@ priorart_<topic>/                    ← 工作資料夾根(一案一夾)
 | `axis.concept_group` | 對應 campaign 概念群 A-E | 未在 campaign 定義 |
 | `axis.boolean` | `AND`/`OR`/`SINGLE` | 全程 SINGLE 單詞海撈 |
 | `hits` | 命中數(0 也記) | 漏記 |
+| `raw_ref` | 該查詢原始回應落地路徑(`raw/Q<NN>.json`) | 留空 / 指向不存在的檔 |
+
+### Search-history 保存契約(硬規定:每滴 API quota 都要落地)
+
+**動機**:檢索的原始回應是用 **API quota 換來的有限資源**——GPSS REST、BigQuery(按掃描量計費)、EPO(每週 4GB 上限)每一次呼叫都有實質成本。若只把蒸餾後的 `candidates.csv` 留下、丟棄原始回應,則任何複查、改良、重新評分、補欄位都得**重新花 quota 再打一次**,這是浪費。`01_search/` 必須是一份**完整、自足、可離線復現**的 search history。
+
+**硬規則(交付前必檢,違反即不合格):**
+
+1. **每一次 API 呼叫的原始回應一律落地 `01_search/raw/`,不得只進主 context 後丟棄。** 包含:matrix 正式查詢(`Q<NN>.json`)、校準探針(`probe_<地區>_<群>.json`)、shortlist 深挖的逐字 claims/全文/家族(`full_<pubno>.json`)。命名固定見 §0 樹。
+2. **matrix-log 每一行的 `raw_ref` 必須指向實際存在的檔。** `search_audit` PASS 不代表 history 完整;`raw_ref` 懸空(指向不存在的檔)是 history 殘缺,等同浪費了那次 quota。
+3. **零命中也要落地。** 零命中的原始回應(空 result set)是有效的負面證據,證明該分類×關鍵字組合確實查過,避免日後重打。
+4. **probes.md 記命中量級,raw/ 記探針原始回應。** 兩者並存——`probes.md` 是人讀的校準摘要,`probe_*.json` 是機器可復現的原始證據。
+5. **下載的原始 PDF / 代表圖落地 `03_assets/patents/`(見 §5),不留在 token store。** token store 會過期清除;用 quota(或同意後的軟性抓取)換來的 PDF/圖一律複製進工作資料夾。
+6. **完工自檢:`raw/` 的檔數應 ≥ matrix-log 行數 + probe 數 + shortlist 深挖數。** 缺檔代表有 quota 換來的資料沒落地——回補,不得交付殘缺 history。
+
+> 一句話:**凡是花 quota 打出去的,回應就要進 `01_search/`。** 蒸餾池(`candidates.csv`)是衍生視圖,原始回應(`raw/`)才是不可再生的一手證據。
+
+### `01_search/index.jsonl` — 檢索行為索引檔(必備)
+
+`matrix-log.jsonl` 記的是**檢索式的結構化軸**(供 `search_audit` 機檢);`index.jsonl` 記的是**每次撈取行為的人讀帳本**——用了什麼檢索式、從哪個來源/資料庫撈、撈回幾筆、原始回應實體落在哪。兩者並存:matrix-log 是機檢真相,index 是復現與稽核帳本。
+
+**每一次撈取(matrix 查詢 / 探針 / 單件深挖 / PDF·圖下載)都 append 一行:**
+
+```json
+{
+  "ts": "2026-06-28T18:07:00+08:00",
+  "kind": "matrix_query",
+  "query_id": "Q07",
+  "tool": "gpss_search",
+  "request": {"database": "USA", "class_scheme": "cpc", "class_codes": ["G06Q20/02"], "keywords": ["milestone payment"], "boolean": "AND", "date_from": "2015-01-01", "date_to": "2026-06-28"},
+  "hits": 42,
+  "artifact": "raw/Q07.json",
+  "bytes": 51234
+}
+```
+
+| `kind` | 用途 | `artifact` 指向 |
+|---|---|---|
+| `matrix_query` | 正式矩陣查詢 | `raw/Q<NN>.json` |
+| `probe` | 校準探針 | `raw/probe_<地區>_<群>.json` |
+| `deep_dive` | shortlist 逐字 claims/全文/家族 | `raw/full_<pubno>.json` |
+| `entity_download` | 單件實體(PDF/XML/圖) | `03_assets/patents/<PN>/...` 或 patentdb 路徑(見 §5) |
+
+**硬規則:**
+1. **每一筆撈取行為都有 index 一行,`artifact` 必指向實際存在的檔。** index 行數應 = `raw/` 檔數 + 實體下載數;對不上代表有資料沒記帳或沒落地。
+2. **單件實體下載(PDF/XML/圖)必記 `entity_download` 行**,並在 `request` 記公開號、來源工具、是否經同意爬取(`scraping: true/false`),`artifact` 指向落地路徑。
+3. **index 是離線可復現的帳本**——任何後續 AI 讀 `index.jsonl` 就能知道「這個池子的每一筆是怎麼來的、原始檔在哪」,不必重打 API。
 
 ### `02_pool/candidates.csv` 欄位格式(統一真相)
 
@@ -147,6 +197,7 @@ priorart_<topic>/                    ← 工作資料夾根(一案一夾)
 4. 主代理**兩段複核**(先過程、再產物——順序不可顛倒):
    1. **檢索強度閘(先)**:對 `01_search/matrix-log.jsonl` 跑 `search_audit(matrix_log_path=..., campaign_path="00_campaign.md")`。**verdict 必須 PASS** 才能前進;若 `FAIL`,讀 `gaps` 逐條補檢索(回 step 3 補錨點/概念群/三地/布林/筆數),**不得跳過、不得帶 FAIL 進交付**。`WARN`(分佈偏斜)應評估是否補強。
    2. **池子品質複核(後)**:正規 CSV parser(非 awk)確認 `candidates.csv` 件數、無欄位錯位、無重複公開號、相關性（1-5級）標記齊全、三地與情境分佈合理。
+4.5 **腳踏兩條船——並查 patentdb 全域庫(DD-12)**:除了本案線上檢索,**並行 `patentdb_query`**(FTS 主題詞 / country / 分類)查跨案累積的全域書目庫,看有沒有本案沒撈到、但適合的分析標的。命中的庫存前案**併入 `candidates.csv`**(來源標 `from_patentdb`),一起評分、一起進報告。庫越大,新案越省 quota、覆蓋越廣——這是 patentdb 對專案的正回饋。注意:patentdb 是被動累加的常用資產,不保證涵蓋偏門領域,查無命中屬正常,不取代線上檢索矩陣。
 
 ### C. 重點前案深挖(針對所有評等為 5 級相關性的專利進行，不再受限於固定數量限制) → `02_pool/shortlist.json`
 5. 針對所有評等為 5 級的重點專利，逐件取**逐字 Claim 1 + 完整全文/圖說**,依法域選來源：
@@ -173,11 +224,47 @@ priorart_<topic>/                    ← 工作資料夾根(一案一夾)
 - §5 策略建議
 - §6 檢索限制與誠實缺口
 
-## 5. 原始專利 PDF / 代表圖
+## 5. 原始專利 PDF / 代表圖(全域 patentdb 為實體庫,每案一致採用)
 
-- **能力現況**(實證):見 `../reference/priorsearch/pdf-figure-extraction.md`。摘要——文字(claims/description/圖說)走 `google_*` BigQuery + GPSS/USPTO PPUBS;**原始 PDF/圖檔**走 `fetch_patent_pdf` 統一工具(已實作、端到端驗證,含 TW 案)。
-- **原始 PDF 的合法取得**:針對 shortlist 的**已知專利號**,逐件呼叫 `fetch_patent_pdf(publication_number="<PN>")` → 內部依序試 `epo_images`(EPO OPS 官方影像 API)→ `google_citation`(從專利頁解析真實雜湊 `citation_pdf_url` 再下載)。回 docxmcp 風格 token handle,把 token 交給 docxmcp `decompose(format=pdf)` 抽圖,圖檔落 `03_assets/patents/`。**這是「針對已知專利的逐件下載」,非批量爬取**——量小、目標明確、合法。⚠️ 不要自己拼 `/pdfs/<PN>.pdf`(錯誤路徑,GCS 回 403);真實 URL 是帶雜湊的 `/xx/yy/zz/<hash>/<PN>.pdf`,由工具自動解析。SOP 見 `pdf-figure-extraction.md`。
-- **取不到圖檔影像時**:以「逐字 Claim 1 + 附圖文字說明」(§3-C)替代,並在報告 §4/§6 誠實標註。
+### 5.1 patentdb — 跨專案專利資產庫(雙層,架構工具,每次檢索都一致採用)
+
+patentdb 是 patentmcp repo 內的**跨專案全域專利庫**,目的是**積累已檢索的書目與實體、跨案複用、減少重複上網的 API/頻寬成本**——同一件專利在 A 案查過/下載過,B 案直接命中本地,不再花 quota。它是**雙層**架構(規範見 `patentdb/README.md`):
+
+| 層 | 實體 | 角色 |
+|---|---|---|
+| **結構化層** | `patentdb.sqlite` | 全域書目統一資料庫——一件專利一列、FTS5 全文檢索、跨案複用、承載百萬級書目 |
+| **實體 blob 層** | `<國別>/<正規化號>/` | PDF/XML/figures + `metadata.json`,下載工具 write-through 落地 |
+
+```
+patentdb/                            ← 全域庫(patentmcp repo 根,非工作資料夾)
+├── patentdb.sqlite                  ← 結構化層:patents 書目表 + patents_fts 全文(trigram, CJK)
+└── <國別>/                          ← 實體 blob 層 TW/US/CN/EP/WO...
+    └── <正規化專利號>/                ← I854998 / 20230081319 / 120543023...
+        ├── metadata.json            ← 完整書目詮釋(pubno/title 多語/申請號/日期/發明人/申請人/摘要/CPC/IPC)
+        ├── specification.pdf        ← 原檔 PDF
+        ├── specification.xml        ← 結構化全文 XML(GPSS dc.xml;TW 案最佳)
+        └── figures/                 ← 由 PDF/XML 抽出的圖式
+```
+
+**自動化現況(已實作,非手動)**:書目與實體的入庫**由工具自動完成,不需 AI 手動填**——
+- `build_screening_table` 拿到 CSV 的當下**inline 自動吸收書目**進 `patentdb.sqlite`(DD-11,零額外 toolcall)。
+- `fetch_patent_pdf` / `gpss_download_patent_pdf/xml` 下載成功即 **write-through** 落 blob + register 書目(side-effect,失敗不阻斷)。
+- 三個工具供主動操作:`patentdb_query`(pubno 精查 / FTS / country 過濾,回 completeness)、`patentdb_put`(漸進 upsert)、`patentdb_import_csv`(回填歷史 CSV)。
+
+**取用協定(每件一致流程):**
+
+1. **先查本地**:要某件書目/實體前,先 `patentdb_query(publication_number="<PN>")` 或看 `patentdb/<國別>/<正規化號>/`。命中就直接用,**不重打 API**(這正是 patentdb 存在的理由)。
+2. **未命中才下載**:逐件 `fetch_patent_pdf(publication_number="<PN>")`(內部試 `epo_images` 官方 → `google_citation` 雜湊 URL);TW 結構化全文走 GPSS `dc.xml`。**逐件、目標明確、合法。**⚠️ 不要自己拼 `/pdfs/<PN>.pdf`(GCS 回 403)。
+3. **自動落地**:下載成功工具自動寫 blob + register 書目進 sqlite(含 sha256 + acquisition_cost)。抽圖用 docxmcp `decompose(format=pdf)`,圖落該件 `figures/`。
+4. **工作資料夾引用,不重複存**:`priorart_<topic>/03_assets/patents/` 對 patentdb 實體建引用/複本,報告引用其路徑。單一真相在 patentdb。
+5. **記帳**:每次實體下載在 `01_search/index.jsonl` append `entity_download`(見 §0),`artifact` 指向 patentdb 路徑,記 `scraping: true/false`。
+
+> 一句話:**書目與實體的家是全域 `patentdb/`。** 先查 patentdb、未命中才下載、取得即自動入庫——每滴 quota 換來的資料跨案複用,不重複花。
+
+### 5.2 能力現況與降級
+
+- **能力現況**(實證):見 `../reference/priorsearch/pdf-figure-extraction.md`。文字(claims/description/圖說)走 GPSS/USPTO PPUBS(+ BigQuery,注意預算);**原始 PDF/圖檔**走 `fetch_patent_pdf`(已實作、端到端驗證,含 TW 案)。代表圖另有 `extract_representative_figure`(掃描版回 `NO_FIGURE_PAGE_BUT_IMAGES_PRESENT` + image_count,提示人工挑選)、`gpss_download_representative_figure`(GPSS headless,需同意爬取)、`batch_download_figures`(單線批量軟性抓圖,需同意)。
+- **取不到圖檔影像時**:以「逐字 Claim 1 + 附圖文字說明」(§3-C)替代,並在報告 §4/§6 誠實標註缺口(不可靜默略過)。
 
 ## Token 紀律
 探針只取必要欄;巨量召回由子代理落地 `01_search/raw/`、不回主 context;完整 claims/全文只對 shortlist 取;每讀一篇蒸餾成 ~50 token 寫回 `candidates.csv`。
