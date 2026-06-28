@@ -71,3 +71,29 @@
 * A：修復後，`fetch_patent_pdf`（預設不允許爬蟲）對三件案應回「官方來源無此 PDF，需授權 GPSS 抓取」，而非靜默回 `scraping:true` 的 PDF。
 * C：`extract_representative_figure(US20230081319A1)` 應回「PDF 含 20 個影像、建議第 N 頁」而非 `NO_FIGURE_PAGE`。
 * D：`ppubs_get_full_document(publication_number="US20230081319A1")` 一次取得全文。
+
+---
+
+## 5. 驗證 FOLLOW-UP（2026-06-28，AI 實測，依 AGENTS.md Friction→BR 閉環）
+
+容器已 rebuild + 重啟（`Up 2 minutes`），工具已 surface 進 session（`mcpapp-patentmcp_*`）。逐項實測：
+
+- **A — PASS ✅**：`fetch_patent_pdf(US20230081319A1, allow_scraping=false, include_attempts=true)` 回 `source:"google_citation"`、`scraping:false`、`note:"single known-number page resolution, not batch scraping"`，且 `attempts` 陣列逐級透明（epo_images→gpss_pdf `SKIPPED_SCRAPING_NOT_AUTHORIZED`→google_citation ok）。對 CN120543023A（官方無此 PDF）回 `error:"SCRAPING_REQUIRED"` + `hint:"...需 allow_scraping=True 並取得使用者授權"`，不再靜默走爬蟲。**完全符合修復意圖。**
+- **B — PASS ✅**：`extract_representative_figure` / `patent_get_claim1` 皆接受 `publication_number`，不再 `patent_number` 試錯。`patent_get_claim1(US20230081319A1)` 回完整 claim1、`source:"tipo"`。
+- **D — PASS（間接）✅**：`ppubs_batch_get_claims` 與 `patent_get_claim1` 補抓 US claim1 可靠（本 session 兩次驗證）。
+- **C — 部分修復，殘留二階缺陷 ⚠️**：容器內已部署碼確認含 `NO_FIGURE_PAGE_BUT_IMAGES_PRESENT` + `image_count`（`patents.py:1733`），分級邏輯到位。但**實測 US20230081319A1 與 CN120543023A 仍回舊的 `NO_FIGURE_PAGE` + `pages:0`**。根因：`pages:0` 表示 `extract_representative_figure` **內部根本沒載到 PDF**，新分級分支（PDF 有 image 但無 FIG.1 → 回 `_BUT_IMAGES_PRESENT`）在 PDF 載入失敗時走不到。而 `fetch_patent_pdf(US20230081319A1)` 明明能經 google_citation 取得 1.4MB PDF——**`extract_representative_figure` 的 PDF 取得路徑未複用 `fetch_patent_pdf` 的官方多源 attempts 邏輯**，自己那條取 PDF 失敗就直接 `NO_FIGURE_PAGE`。
+  - **追加建議修復（C-2）**：`extract_representative_figure` 應先呼叫（或內部複用）`fetch_patent_pdf` 的多源取得鏈拿到 PDF，再跑 FIG.1 定位 + 失敗分級。否則新增的 `_BUT_IMAGES_PRESENT` 分支在實務上幾乎觸發不到（取 PDF 那關就先掛了）。
+  - **驗證手段**：修復後 `extract_representative_figure(US20230081319A1)` 應回 `NO_FIGURE_PAGE_BUT_IMAGES_PRESENT` + `image_count:20`（該 PDF 實含 20 個 image XObject），而非 `pages:0` 的 `NO_FIGURE_PAGE`。
+
+### C-2 RCA 更正與修復（2026-06-28 後續偵查，Resolved ✅）
+
+**C-2 的 RCA 判斷錯誤** — 真因不是「未複用 `fetch_patent_pdf`」。
+
+- **反證**：HEAD 源碼 `patents.py:1703` **早就複用了** `fetch_patent_pdf(publication_number, allow_scraping=True)`（commit `99d8497` 加複用、`012cfbc` 加 `allow_scraping`），容器內部署碼亦確認有此行。`fetch_patent_pdf(US20230081319A1)` live 實測成功回 1.44MB PDF（`source:local_cache`），早已過了 `NO_PDF` gate。所以「取 PDF 那關先掛了」的推測不成立。
+- **真因**：**容器內 poppler 四件套全部 MISSING** — `pdfinfo` / `pdftotext` / `pdfimages` / `pdftoppm` 都不存在（`dpkg -l | grep poppler` → `poppler-utils NOT installed`）。`Dockerfile` 從頭到尾沒有 `apt-get install poppler-utils`。host 上有 poppler（`/usr/bin/pdfinfo`），所以開發時本機測得到，但容器內整條 PDF 處理鏈從未能運作。
+- **Causal chain**：`fetch_patent_pdf` ✅ 成功 → `_locate_figure_page` → `_pdf_page_count` 跑 `pdfinfo`（binary 不存在）→ except 回 0 → `pages<=0` → `page:None` → `_pdf_image_count` 跑 `pdfimages`（也不存在）→ fail-safe 回 0 → `image_count>0` 為 False → **走不到** `NO_FIGURE_PAGE_BUT_IMAGES_PRESENT` 分支 → 落 flat `NO_FIGURE_PAGE` + `pages:0`。與實測完全吻合。
+- **Blast radius**：此缺陷連帶使 BR_20260628 **D/F** 的所有 poppler 路徑（頁數偵測 / FIG.1 定位 / 高解析渲染 / EPO 單頁降級）在容器內全部失效，不只 C。
+- **修復**：`Dockerfile` base 層加 `apt-get install -y --no-install-recommends poppler-utils`，`docker compose up -d --build --force-recreate` 重建容器。
+- **驗證 PASS ✅**：重建後容器內 `pdfinfo/pdftotext/pdfimages/pdftoppm` 皆在 `/usr/bin/`。live `extract_representative_figure(US20230081319A1)` 回 `NO_FIGURE_PAGE_BUT_IMAGES_PRESENT` + `image_count:20` + `pages:20`，完全符合 BR §5 驗證手段（不再是 `pages:0` 的 flat `NO_FIGURE_PAGE`）。
+
+**總結**：A/B/D 線上生效 PASS；**C 與 C-2 均 Resolved** — C-2 真因為容器漏裝 poppler-utils（非 fetch 邏輯），已修 Dockerfile + 重建驗證通過。USPC 退場（commit b7c5b0a）確認：search_audit 仍支援 uspc 軸（line 164）但不再強制，符合 BR 意圖。
