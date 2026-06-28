@@ -2874,11 +2874,10 @@ async def search_audit(
 
     Reads a campaign's `matrix-log.jsonl` (one query per line; schema in
     priorsearch.md §0) and scores breadth against floor thresholds (design DD-2):
-      - min_class_anchors=3   distinct class codes across IPC/CPC/USPC
+      - min_class_anchors=3   distinct class codes across IPC/CPC
       - min_concept_groups=3  distinct campaign concept groups (A-E) touched
       - min_jurisdictions=3   TW + CN + US all searched
       - min_boolean_combos=2  at least 2 boolean shapes (not all SINGLE-word dragnet)
-      - uspc_required=True     US search must include >=1 USPC-anchored query
       - min_queries=12         minimum cartesian coverage
 
     `00_campaign.md` may RAISE any floor (never lower) and may declare an explicit

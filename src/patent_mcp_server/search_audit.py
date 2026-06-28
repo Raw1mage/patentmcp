@@ -15,8 +15,8 @@ matrix-log.jsonl line schema (see priorsearch.md §0 / design DD-1):
       "source": "gpss",                 # gpss|epo|uspto|google
       "database": "USA",                # TWA/TWB/CNA/CNB/USA/USB | epo/google region
       "axis": {
-        "class_codes": ["G06Q50/08"],   # IPC/CPC/USPC codes used (>=0)
-        "class_scheme": "ipc",          # ipc|cpc|uspc
+        "class_codes": ["G06Q50/08"],   # IPC/CPC codes used (>=0)
+        "class_scheme": "ipc",          # ipc|cpc
         "keywords": ["escrow"],         # keywords for this query
         "concept_group": "A",           # campaign concept group A-E
         "boolean": "AND",               # AND|OR|SINGLE
@@ -148,7 +148,6 @@ def compute_coverage(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     concept_groups: Set[str] = set()
     jurisdictions: Set[str] = set()
     boolean_shapes: Set[str] = set()
-    uspc_in_axis = False
     per_jurisdiction: Dict[str, int] = {}
     per_database: Dict[str, int] = {}
 
@@ -160,9 +159,6 @@ def compute_coverage(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         cg = axis.get("concept_group")
         if isinstance(cg, str) and cg.strip():
             concept_groups.add(cg.strip().upper())
-        scheme = (axis.get("class_scheme") or "").strip().lower()
-        if scheme == "uspc" and (axis.get("class_codes")):
-            uspc_in_axis = True
         b = (axis.get("boolean") or "").strip().upper()
         if b:
             boolean_shapes.add(b)
@@ -180,7 +176,6 @@ def compute_coverage(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "jurisdictions": len(jurisdictions),
         "boolean_combos": len([b for b in boolean_shapes if b != "SINGLE"]) or
                           (1 if boolean_shapes else 0),
-        "uspc_in_axis": uspc_in_axis,
         "queries": len(records),
         "_jurisdiction_set": sorted(jurisdictions),
         "per_jurisdiction": per_jurisdiction,
@@ -226,7 +221,7 @@ def audit(matrix_log_path: str, campaign_path: Optional[str] = None) -> Dict[str
     if cov["class_anchors"] < thresholds["min_class_anchors"]:
         gaps.append(
             f"分類錨點不足：{cov['class_anchors']} < {thresholds['min_class_anchors']}"
-            f"（需跨 IPC/CPC/USPC 至少 {thresholds['min_class_anchors']} 個不同分類碼）")
+            f"（需跨 IPC/CPC 至少 {thresholds['min_class_anchors']} 個不同分類碼）")
     if cov["concept_groups"] < thresholds["min_concept_groups"]:
         gaps.append(
             f"關鍵字概念群不足：{cov['concept_groups']} < {thresholds['min_concept_groups']}"
@@ -266,7 +261,6 @@ def audit(matrix_log_path: str, campaign_path: Optional[str] = None) -> Dict[str
             "concept_groups": cov["concept_groups"],
             "jurisdictions": cov["jurisdictions"],
             "boolean_combos": cov["boolean_combos"],
-            "uspc_in_axis": cov["uspc_in_axis"],
             "queries": cov["queries"],
         },
         "thresholds": {k: v for k, v in thresholds.items()},
