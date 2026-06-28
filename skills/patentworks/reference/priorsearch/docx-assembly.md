@@ -25,6 +25,7 @@
 
 - 完整 `#`/`##`/`###` 標題階層(decompose-must-build-hierarchy:flat dump 會讓 assemble 無法套模板編號)。
 - 圖片引用用**契約格式**:`![alt](media/figN.png){width=6in}`。
+- **貼圖尺寸必須限制在頁面可列印範圍內(長、寬都不可超出)**。`{width=N}` 只設寬度,Word 等比縮放高度——直式長圖在 `width=6in` 仍可能超出頁底被切成兩半。每張圖須同時對「寬」和「高」設限:寬不超過可列印寬(A4 直式 cht 模板約 ≤6.3in,`width=6in` 為安全預設)、若等比縮放後高度會超出可列印高(約 ≤9.0in,扣掉圖說),改用 `{height=...}` 以高度為準縮放,確保整張圖落在同一頁不被截斷。寬版統計圖(fig1~5)寧可轉橫式或放橫向版面,也不要硬塞進直欄縮到看不清。此為文件編輯能力,主規範見 doc-workflow B.5「Table and figure rules」;assemble 後須以 render 預覽確認無圖片被切邊/跨頁,非只看 `probe ok=True`。
 
 > **標題階層是文件編輯能力,歸 docxmcp 的 companion skill `doc-workflow`,不是 patentworks 的專屬職責。** 撰寫 `body.md` 時的「主動標題化紀律」(每個該標題化的段落必須打成 `##`/`###`,而非留成內文)由 doc-workflow A.2.2 統一規範。**本報告是 greenfield Mode A authoring(從零寫,無 signals.json)**,務必先 `skill(name="doc-workflow")` 載入,遵守其 greenfield 標題紀律與 `標N{內,點,號}` depth-aware 樣式契約。
 >
