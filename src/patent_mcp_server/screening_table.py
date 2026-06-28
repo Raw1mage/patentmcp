@@ -164,6 +164,35 @@ def _as_list(x: Any) -> List[Any]:
     return x if isinstance(x, list) else [x]
 
 
+# Common claim-block boilerplate headers that carry no substantive claim text.
+_CLAIM1_BOILERPLATE = {
+    "what is claimed is", "we claim", "i claim", "claims", "the claims",
+    "what i claim", "what we claim", "what is claimed", "what we claim is",
+    "what i claim is",
+}
+
+
+def _claim1_is_empty(claim1: str) -> bool:
+    """True when claim1 has no substantive content.
+
+    A claim1 is considered empty when, after stripping whitespace and trailing
+    punctuation, it is the empty string OR matches a known boilerplate header
+    (case-insensitive) such as "What is claimed is:" with no actual claim body.
+    Such records need a fallback to patent_get_claim1 / PPUBS.
+    """
+    if not claim1:
+        return True
+    import re
+    norm = re.sub(r"\s+", " ", str(claim1)).strip()
+    if not norm:
+        return True
+    # strip surrounding/trailing punctuation for boilerplate comparison
+    stripped = norm.strip(" :：.。,，;；-—").lower()
+    if not stripped:
+        return True
+    return stripped in _CLAIM1_BOILERPLATE
+
+
 def gpss_to_records(gpss_json: Dict[str, Any]) -> List[Dict[str, Any]]:
     """GPSS search JSON → records. Robust type handling for nested data structures."""
     api = gpss_json.get("data", {}).get("gpss-API") or gpss_json.get("gpss-API", {})
@@ -232,6 +261,7 @@ def gpss_to_records(gpss_json: Dict[str, Any]) -> List[Dict[str, Any]]:
             "title": _g(r, "patent-title", "english-title") or _g(r, "patent-title", "chinese-title"),
             "abstract": str(abstract or ""),
             "claim1": claim1,
+            "claim1_empty": _claim1_is_empty(claim1),
             "family_id": "",  # GPSS doesn't expose INPADOC family; use epo_family
             "cpc": cpc,
             "ipc": ipc,

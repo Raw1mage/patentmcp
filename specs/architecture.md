@@ -90,6 +90,15 @@
   - **縮圖等級標註（E）**：`GooglePatentsClient._flatten` 對 `representative_figure_url` 加 `representative_figure_resolution: "thumbnail"`；skill 警告縮圖禁用於報告。
   - **EPO 單頁降級（F）**：`fetch_patent_pdf` epo_images 分支以 `_pdf_bytes_page_count`（pdfinfo）偵測頁數 ≤ 1，記 `EPO_BIBLIO_ONLY_1PAGE` 並 continue 下一來源，不落地著錄摘要當代表圖。
   - 跨容器 token 中轉（C，host-pipe SOP）：patentmcp 與 docxmcp 獨立容器/獨立 named volume，token 不互通。**不改 compose**（docxmcp 有 bind-mount ban / AC-01）；改採 host-side pipe：patentmcp blob 端點（TCP `localhost:8000/files/{token}/blob/{rel}`）→ docxmcp 官方攝取入口（`docxmcp_stage_dir` 或 `POST /files` tarball），bytes 不經 model context。SOP 固化於 `skills/patentworks/reference/priorsearch/pdf-figure-extraction.md` §3.4；已實證（50026 bytes PDF 完整搬移）。共用 named volume（方案 B）留待 docxmcp 自身 spec 流程。
+- 取文/取圖工具契約強化邊界（plan `br20260628_tooling_skill_gpss_gaps`, 2026-06-28, 三份 BR）：
+  - **顯式爬蟲 gate（BR③-A）**：`fetch_patent_pdf(publication_number, ..., allow_scraping=False)`。預設 `allow_scraping=False` 時 `gpss_pdf`（provenance scraping=True）來源被**跳過**（attempts 記 `SKIPPED_SCRAPING_NOT_AUTHORIZED`，不執行抓取）；若官方來源（epo_images/google_citation/local_cache）全 miss 且唯一剩被跳過的 gpss_pdf，回 `SCRAPING_REQUIRED` + hint。**fail-fast 顯式 gate,非靜默 fallback**（符合天條 §11）。內部抓圖呼叫端 `extract_representative_figure` 傳 `allow_scraping=True`；`patentmcp_batch_download_figures` 經前者間接走 gpss,已涵蓋。
+  - **參數命名統一（BR③-B）**：取圖/取文工具家族 canonical `publication_number`（單）/ `publication_numbers`（複）;舊名 `patent_number`/`patent_numbers` 保留為 alias(向後相容)。`uspto_patents` 內 `patent_number`（PPUBS patentNumber 語義）不變。
+  - **代表圖失敗分級（BR③-C）**：`extract_representative_figure` locate 失敗時用 `_pdf_image_count`（`pdfimages -list`）偵測內嵌影像;image_count>0 回 `NO_FIGURE_PAGE_BUT_IMAGES_PRESENT`（帶 image_count/pages,提示圖在 PDF 內、定位器對無文字層失效）,=0 才維持 `NO_FIGURE_PAGE`。修正掃描版偽陰性。
+  - **PPUBS 便利包裝（BR③-D）**：抽出 `_ppubs_resolve_patent_by_number` 共用 pub→guid 解析;`uspto_patents(method="ppubs_get_full_document", publication_number=...)` 無 guid 時自動解析,不需手動串兩段。
+  - **GPSS claim1 空旗標（BR①-D）**：`screening_table.gpss_to_records` 用 `_claim1_is_empty`（空字串或剝樣板前綴後無內文）對每筆 record 加 `claim1_empty` 旗標,作為 fallback 到 ③PPUBS 的觸發訊號。
+  - **GPSS uspc/family 缺口（BR①-B/C, DD-7）**：無 TIPO GPSS API 官方欄位規格證據,依反幻覺原則**不臆造 uspc 欄位碼**;USPC 軸走 `uspto_patents` PPUBS `CCL/<class>/<subclass>`,family 走 `epo_family`,均落 `patentworks/SKILL.md §5` 文件記載。
+  - **skill §5 來源梯窮舉門檻（BR②）**：`patentworks/SKILL.md §5` 新增 Exhaustion Gate（宣告任一欄位缺失前須逐級走完來源梯並留證）、更新工具清單（補載 fetch_patent_pdf/extract_representative_figure/patentmcp_batch_download_figures/ppubs_batch_get_claims,刪除過時「PDF 端點系統性故障」論斷）、重寫爬蟲天條天平（同意後批量軟性機制是正規合規路徑,`scraping:true` 非違規證據）。
+  - **工具未 surface（BR①-A, OUT-OF-SCOPE）**：patentmcp 工具未注入 opencode session 工具目錄,屬 opencode `enablement.json`/MCP App 註冊側,非本 repo 可修;待轉 opencode 處理。
 - Skill routing：`skills/patentworks/SKILL.md` 的 flow 選擇表。
 - 檢索/分析領域規格：`skills/patent-practitioner-workflow.md`。
 - Flow 契約：`skills/patentworks/flows/*.md`。
@@ -104,3 +113,4 @@
 ## Architecture Sync Note
 - 2026-06-15: 已將架構 SSOT 從舊八階段 prompt pipeline 重構為 PatentWorks MCP + skill 現況；新增 analysis 作為資料來源無關的 planned boundary。
 - 2026-06-26: 獨立分析技能流程 `skills/patentworks/flows/analysis.md` 實作完成，並已同步更新 `SKILL.md` 路由表，以及 `screening.md` 與 `drafting.md` 的銜接說明。
+- 2026-06-28: 處理三份 BR(plan `br20260628_tooling_skill_gpss_gaps`)。`patents.py` + `screening_table.py` 工具層強化(顯式爬蟲 gate / 參數命名統一 + alias / 代表圖失敗分級 / PPUBS 便利包裝 / GPSS claim1_empty 旗標,20 tests 全過);`patentworks/SKILL.md §5` 加來源梯窮舉門檻 + 工具清單更新 + 爬蟲天條天平重寫。BR①-A(工具未 surface)判定為 opencode side、非本 repo 範圍。詳見 Debug/Observability Map 對應段落。

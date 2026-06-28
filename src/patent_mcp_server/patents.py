@@ -49,7 +49,7 @@ logger = logging.getLogger('uspto_patent_mcp')
 # Import USPTO client implementations
 from patent_mcp_server.uspto.ppubs_uspto_gov import PpubsClient
 from patent_mcp_server.uspto.api_uspto_gov import ApiUsptoClient
-from patent_mcp_server.google.bigquery_client import GoogleBigQueryClient
+from patent_mcp_server.google.bigquery_client import GoogleBigQueryClient, BudgetExceededError
 from patent_mcp_server.gpatents.client import GooglePatentsClient
 from patent_mcp_server.gpss.client import GPSSClient, GPSSCondition
 from patent_mcp_server.epo.client import EPOClient
@@ -189,6 +189,45 @@ class _GpssScrapeSession:
 # Unified USPTO Patents Tool
 # =====================================================================
 
+async def _ppubs_resolve_patent_by_number(patent_number: Union[str, int]) -> Dict[str, Any]:
+    """Resolve a PPUBS patent hit (guid + type) from a patent/publication number.
+
+    Reuses the patentNumber query + ".pn." alternative-query lookup shared by
+    ppubs_get_patent_by_number / ppubs_get_full_document. Returns the matched
+    patent dict (with at least "guid" and "type"), or {"error": True, ...} when
+    the upstream query errored or no patent matched.
+    """
+    patent_number = str(patent_number)
+
+    search_query = f'patentNumber:"{patent_number}"'
+    logger.info(f"Searching for patent with query: {search_query}")
+    result = await ppubs_client.run_query(query=search_query, sources=["USPAT"], limit=1)
+    if result.get("error", False):
+        return result
+
+    if result.get("patents") and len(result["patents"]) > 0:
+        patent = result["patents"][0]
+        logger.info(f"Found patent: {patent.get('guid')}")
+        return patent
+    if result.get("docs") and len(result["docs"]) > 0:
+        patent = result["docs"][0]
+        logger.info(f"Found patent: {patent.get('guid')}")
+        return patent
+
+    # Alternative query format
+    alternative_query = f'"{patent_number}".pn.'
+    logger.info(f"No results found, trying alternative query: {alternative_query}")
+    result = await ppubs_client.run_query(query=alternative_query, sources=["USPAT"], limit=1)
+    if result.get("error", False):
+        return result
+
+    if result.get("patents") and len(result["patents"]) > 0:
+        return result["patents"][0]
+    if result.get("docs") and len(result["docs"]) > 0:
+        return result["docs"][0]
+    return {"error": True, "message": f"Patent {patent_number} not found"}
+
+
 @mcp.tool()
 async def uspto_patents(
     method: str,
@@ -205,6 +244,8 @@ async def uspto_patents(
     source_type: Optional[str] = None,
     # Patent number parameters (for ppubs_get_patent_by_number and ppubs_download_patent_pdf)
     patent_number: Optional[Union[str, int]] = None,
+    # Publication number convenience param (for ppubs_get_full_document without a guid)
+    publication_number: Optional[Union[str, int]] = None,
     # Application number parameter (for all get_app_* methods)
     app_num: Optional[str] = None,
     # Search applications parameters (for search_applications and download_applications)
@@ -277,7 +318,11 @@ async def uspto_patents(
         british_equivalents: For ppubs_search_*: Include British spellings (default: True)
         guid: For ppubs_get_full_document: Document unique identifier
         source_type: For ppubs_get_full_document: Document type (USPAT or US-PGPUB)
-        patent_number: For ppubs_get_patent_by_number/ppubs_download_patent_pdf: Patent number
+        publication_number: For ppubs_get_full_document: convenience — when guid/
+            source_type are omitted, resolve the document from this publication
+            number (same pub->guid lookup as ppubs_get_patent_by_number).
+        patent_number: For ppubs_get_patent_by_number/ppubs_download_patent_pdf: Patent number.
+            Also accepted as an alias of publication_number for ppubs_get_full_document.
         app_num: For get_app_*: U.S. Patent Application Number (e.g., 14412875)
         q: For search_*/download_*: Search query string
         offset: For search_*/download_*: Starting position (default: 0)
@@ -335,66 +380,28 @@ async def uspto_patents(
         )
 
     elif method == "ppubs_get_full_document":
-        if not guid or not source_type:
-            return {"error": True, "message": "guid and source_type parameters are required for ppubs_get_full_document"}
-        return await ppubs_client.get_document(guid, source_type)
+        if guid and source_type:
+            return await ppubs_client.get_document(guid, source_type)
+        # Convenience: resolve via publication/patent number (same pub->guid
+        # lookup used by ppubs_get_patent_by_number) when no guid is supplied.
+        pub_for_doc = publication_number or patent_number
+        if not pub_for_doc:
+            return {"error": True,
+                    "message": ("guid+source_type, or publication_number "
+                                "(patent_number alias), is required for "
+                                "ppubs_get_full_document")}
+        patent = await _ppubs_resolve_patent_by_number(pub_for_doc)
+        if patent.get("error"):
+            return patent
+        return await ppubs_client.get_document(patent["guid"], patent["type"])
 
     elif method == "ppubs_get_patent_by_number":
         if not patent_number:
             return {"error": True, "message": "patent_number parameter is required for ppubs_get_patent_by_number"}
 
-        # Convert to string if integer
-        patent_number = str(patent_number)
-
-        # First search for the patent using specific field
-        search_query = f'patentNumber:"{patent_number}"'
-        logger.info(f"Searching for patent with query: {search_query}")
-
-        result = await ppubs_client.run_query(
-            query=search_query,
-            sources=["USPAT"],
-            limit=1
-        )
-
-        if result.get("error", False):
-            return result
-
-        # Handle different response structures
-        if result.get("patents") and len(result["patents"]) > 0:
-            patent = result["patents"][0]
-            logger.info(f"Found patent: {patent.get('guid')}")
-        elif result.get("docs") and len(result["docs"]) > 0:
-            patent = result["docs"][0]
-            logger.info(f"Found patent: {patent.get('guid')}")
-        else:
-            # Try alternative query format
-            alternative_query = f'"{patent_number}".pn.'
-            logger.info(f"No results found, trying alternative query: {alternative_query}")
-
-            result = await ppubs_client.run_query(
-                query=alternative_query,
-                sources=["USPAT"],
-                limit=1
-            )
-
-            if result.get("error", False):
-                return result
-
-            if not result.get("patents") and not result.get("docs"):
-                return {
-                    "error": True,
-                    "message": f"Patent {patent_number} not found"
-                }
-
-            if result.get("patents") and len(result["patents"]) > 0:
-                patent = result["patents"][0]
-            elif result.get("docs") and len(result["docs"]) > 0:
-                patent = result["docs"][0]
-            else:
-                return {
-                    "error": True,
-                    "message": f"Patent {patent_number} not found"
-                }
+        patent = await _ppubs_resolve_patent_by_number(patent_number)
+        if patent.get("error"):
+            return patent
 
         # Now get the full document
         return await ppubs_client.get_document(patent["guid"], patent["type"])
@@ -684,57 +691,6 @@ async def uspto_patents(
 # =====================================================================
 
 @mcp.tool()
-async def google_search_patents(
-    query: str,
-    country: str = GooglePatentsCountries.US,
-    limit: int = Defaults.SEARCH_LIMIT,
-    offset: int = 0,
-    start_date: Optional[int] = None,
-    end_date: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Search Google Patents Public Datasets using BigQuery
-
-    Searches patent titles and abstracts for the specified query string.
-    Returns patent publication number, title, abstract, dates, inventors,
-    assignees, and classification codes.
-
-    Args:
-        query: Search query string (searches titles and abstracts)
-        country: Country code (US, EP, WO, JP, CN, KR, GB, DE, FR, CA, AU)
-        limit: Maximum number of results to return (default: 100, max: 500)
-        offset: Number of results to skip for pagination (default: 0)
-        start_date: Optional start date for publication_date filter (YYYYMMDD format, e.g., 20220101)
-        end_date: Optional end date for publication_date filter (YYYYMMDD format, e.g., 20251231)
-
-    Returns:
-        Dictionary containing search results with patent metadata
-    """
-    if limit > Defaults.SEARCH_LIMIT_MAX:
-        return ApiError.validation_error(
-            f"Limit cannot exceed {Defaults.SEARCH_LIMIT_MAX}", "limit"
-        )
-
-    if country not in GooglePatentsCountries.ALL:
-        return ApiError.validation_error(
-            f"Invalid country code. Must be one of: "
-            f"{', '.join(GooglePatentsCountries.ALL)}",
-            "country",
-        )
-
-    try:
-        result = await google_bq_client.search_patents(
-            query, country, limit, offset, start_date, end_date
-        )
-        return result
-    except Exception as e:
-        logger.error(f"Error searching Google Patents: {str(e)}")
-        return ApiError.create(
-            message=f"Failed to search Google Patents: {str(e)}",
-            status_code=500
-        )
-
-
-@mcp.tool()
 async def google_get_patent(publication_number: str) -> Dict[str, Any]:
     """Get full patent details from Google Patents by publication number
 
@@ -750,6 +706,16 @@ async def google_get_patent(publication_number: str) -> Dict[str, Any]:
     try:
         result = await google_bq_client.get_patent_by_number(publication_number)
         return result
+    except BudgetExceededError as e:
+        logger.warning(f"BigQuery blocked by budget gate: {str(e)}")
+        return {
+            "success": False,
+            "error_code": "BQ_BUDGET_EXCEEDED",
+            "monthly_used_bytes": e.used_bytes,
+            "monthly_budget_bytes": e.budget_bytes,
+            "usage_source": e.source,
+            "suggestion": "BigQuery monthly budget exhausted. Use GPSS/EPO/PPUBS instead.",
+        }
     except Exception as e:
         logger.error(f"Error fetching patent {publication_number}: {str(e)}")
         return ApiError.create(
@@ -773,6 +739,16 @@ async def google_get_patent_claims(publication_number: str) -> Dict[str, Any]:
     try:
         result = await google_bq_client.get_patent_claims(publication_number)
         return result
+    except BudgetExceededError as e:
+        logger.warning(f"BigQuery blocked by budget gate: {str(e)}")
+        return {
+            "success": False,
+            "error_code": "BQ_BUDGET_EXCEEDED",
+            "monthly_used_bytes": e.used_bytes,
+            "monthly_budget_bytes": e.budget_bytes,
+            "usage_source": e.source,
+            "suggestion": "BigQuery monthly budget exhausted. Use GPSS/EPO/PPUBS instead.",
+        }
     except Exception as e:
         logger.error(f"Error fetching claims for {publication_number}: {str(e)}")
         return ApiError.create(
@@ -795,6 +771,16 @@ async def google_get_patent_description(publication_number: str) -> Dict[str, An
     try:
         result = await google_bq_client.get_patent_description(publication_number)
         return result
+    except BudgetExceededError as e:
+        logger.warning(f"BigQuery blocked by budget gate: {str(e)}")
+        return {
+            "success": False,
+            "error_code": "BQ_BUDGET_EXCEEDED",
+            "monthly_used_bytes": e.used_bytes,
+            "monthly_budget_bytes": e.budget_bytes,
+            "usage_source": e.source,
+            "suggestion": "BigQuery monthly budget exhausted. Use GPSS/EPO/PPUBS instead.",
+        }
     except Exception as e:
         logger.error(
             f"Error fetching description for {publication_number}: {str(e)}"
@@ -805,149 +791,31 @@ async def google_get_patent_description(publication_number: str) -> Dict[str, An
 
 
 @mcp.tool()
-async def google_search_by_inventor(
-    inventor_name: str,
-    country: str = GooglePatentsCountries.US,
-    limit: int = Defaults.SEARCH_LIMIT,
-    offset: int = 0,
-    start_date: Optional[int] = None,
-    end_date: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Search Google Patents by inventor name
+async def google_budget_status() -> Dict[str, Any]:
+    """Report the current month's BigQuery usage against the configured budget.
 
-    Finds patents where the specified inventor is listed. Useful for tracking
-    an inventor's patent portfolio.
-
-    Args:
-        inventor_name: Inventor name to search for
-        country: Country code (US, EP, WO, JP, CN, KR, GB, DE, FR, CA, AU)
-        limit: Maximum number of results to return (default: 100, max: 500)
-        offset: Number of results to skip for pagination (default: 0)
-        start_date: Optional start date for publication_date filter (YYYYMMDD format, e.g., 20220101)
-        end_date: Optional end date for publication_date filter (YYYYMMDD format, e.g., 20251231)
+    BigQuery is billed per bytes scanned. When month-to-date usage exceeds the
+    budget, ALL BigQuery tools (google_get_patent*) are hard-blocked. Use this
+    to check whether BigQuery retrieval is currently available before relying on
+    it as a fallback source for claims/description text.
 
     Returns:
-        Dictionary containing search results
+        Dict with used_bytes, budget_bytes, exceeded (bool), source
+        (authoritative | cached | cached-degraded | none), and
+        last_reconciled_at.
     """
-    if limit > Defaults.SEARCH_LIMIT_MAX:
-        return ApiError.validation_error(
-            f"Limit cannot exceed {Defaults.SEARCH_LIMIT_MAX}", "limit"
-        )
-
-    if country not in GooglePatentsCountries.ALL:
-        return ApiError.validation_error(
-            f"Invalid country code. Must be one of: "
-            f"{', '.join(GooglePatentsCountries.ALL)}",
-            "country",
-        )
-
     try:
-        result = await google_bq_client.search_by_inventor(
-            inventor_name, country, limit, offset, start_date, end_date
-        )
-        return result
+        if google_bq_client.client is None:
+            return {
+                "success": False,
+                "error": "BigQuery client not initialized. Check Google Cloud credentials.",
+            }
+        usage = await google_bq_client.get_monthly_usage(force_reconcile=True)
+        return {"success": True, **usage}
     except Exception as e:
-        logger.error(f"Error searching by inventor: {str(e)}")
+        logger.error(f"Error fetching BigQuery budget status: {str(e)}")
         return ApiError.create(
-            message=f"Failed to search by inventor: {str(e)}", status_code=500
-        )
-
-
-@mcp.tool()
-async def google_search_by_assignee(
-    assignee_name: str,
-    country: str = GooglePatentsCountries.US,
-    limit: int = Defaults.SEARCH_LIMIT,
-    offset: int = 0,
-    start_date: Optional[int] = None,
-    end_date: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Search Google Patents by assignee/company name
-
-    Finds patents assigned to a specific company or organization. Useful for
-    analyzing a company's patent portfolio.
-
-    Args:
-        assignee_name: Assignee/company name to search for
-        country: Country code (US, EP, WO, JP, CN, KR, GB, DE, FR, CA, AU)
-        limit: Maximum number of results to return (default: 100, max: 500)
-        offset: Number of results to skip for pagination (default: 0)
-        start_date: Optional start date for publication_date filter (YYYYMMDD format, e.g., 20220101)
-        end_date: Optional end date for publication_date filter (YYYYMMDD format, e.g., 20251231)
-
-    Returns:
-        Dictionary containing search results
-    """
-    if limit > Defaults.SEARCH_LIMIT_MAX:
-        return ApiError.validation_error(
-            f"Limit cannot exceed {Defaults.SEARCH_LIMIT_MAX}", "limit"
-        )
-
-    if country not in GooglePatentsCountries.ALL:
-        return ApiError.validation_error(
-            f"Invalid country code. Must be one of: "
-            f"{', '.join(GooglePatentsCountries.ALL)}",
-            "country",
-        )
-
-    try:
-        result = await google_bq_client.search_by_assignee(
-            assignee_name, country, limit, offset, start_date, end_date
-        )
-        return result
-    except Exception as e:
-        logger.error(f"Error searching by assignee: {str(e)}")
-        return ApiError.create(
-            message=f"Failed to search by assignee: {str(e)}", status_code=500
-        )
-
-
-@mcp.tool()
-async def google_search_by_cpc(
-    cpc_code: str,
-    country: str = GooglePatentsCountries.US,
-    limit: int = Defaults.SEARCH_LIMIT,
-    offset: int = 0,
-    start_date: Optional[int] = None,
-    end_date: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Search Google Patents by CPC classification code
-
-    Finds patents with the specified Cooperative Patent Classification (CPC) code.
-    Useful for finding patents in specific technology areas.
-
-    Args:
-        cpc_code: CPC code to search for (e.g., G06N3/08 for neural networks)
-        country: Country code (US, EP, WO, JP, CN, KR, GB, DE, FR, CA, AU)
-        limit: Maximum number of results to return (default: 100, max: 500)
-        offset: Number of results to skip for pagination (default: 0)
-        start_date: Optional start date for publication_date filter (YYYYMMDD format, e.g., 20220101)
-        end_date: Optional end date for publication_date filter (YYYYMMDD format, e.g., 20251231)
-
-    Returns:
-        Dictionary containing search results
-    """
-    if limit > Defaults.SEARCH_LIMIT_MAX:
-        return ApiError.validation_error(
-            f"Limit cannot exceed {Defaults.SEARCH_LIMIT_MAX}", "limit"
-        )
-
-    if country not in GooglePatentsCountries.ALL:
-        return ApiError.validation_error(
-            f"Invalid country code. Must be one of: "
-            f"{', '.join(GooglePatentsCountries.ALL)}",
-            "country",
-        )
-
-    try:
-        result = await google_bq_client.search_by_cpc(
-            cpc_code, country, limit, offset, start_date, end_date
-        )
-        return result
-    except Exception as e:
-        logger.error(f"Error searching by CPC code: {str(e)}")
-        return ApiError.create(
-            message=f"Failed to search by CPC code: {str(e)}", status_code=500
+            message=f"Failed to fetch budget status: {str(e)}", status_code=500
         )
 
 
@@ -1309,7 +1177,8 @@ def extract_claim1_text(claims_text: str, full: bool = True) -> str:
     return text
 
 @mcp.tool()
-async def patent_get_claim1(publication_number: str, full: bool = True) -> Dict[str, Any]:
+async def patent_get_claim1(publication_number: Optional[str] = None, full: bool = True,
+                            patent_number: Optional[str] = None) -> Dict[str, Any]:
     """Retrieve the cleaned and normalized Claim 1 text for any given patent publication number.
 
     Automatically handles US (application and grant paths), CN, TW, EP, WIPO, etc.
@@ -1318,12 +1187,17 @@ async def patent_get_claim1(publication_number: str, full: bool = True) -> Dict[
     Args:
         publication_number: Patent publication number (e.g. US20250252737A1, US11875659B2, TW202403664A).
         full: If True, retrieve the full Claim 1 text without 1000-character truncation (default True).
+        patent_number: backward-compatible alias for `publication_number`.
 
     Returns:
         Dictionary containing success, publication_number, and the claim1 text.
     """
     import re
-    pat = publication_number.strip()
+    pub = publication_number or patent_number
+    if not pub:
+        return {"success": False, "error": "MISSING_PUBLICATION_NUMBER",
+                "detail": "publication_number (or patent_number alias) is required"}
+    pat = pub.strip()
     pat_upper = pat.upper()
     
     # ── 1. TIPO GPSS (First Priority for TW, US, CN) ──
@@ -1446,6 +1320,10 @@ async def patent_get_claim1(publication_number: str, full: bool = True) -> Dict[
                     claim1 = claims_list[0].get("claim_text", "")
                     claim1 = extract_claim1_text(clean_html_text(claim1), full=full)
                     return {"success": True, "publication_number": pat, "claim1": claim1, "source": "bigquery"}
+        except BudgetExceededError as e:
+            # BQ is a fallback source here; when the monthly budget is exhausted
+            # we skip it (logged) and let the chain fall through to GPSS.
+            logger.warning(f"BigQuery skipped for {pat} (budget exhausted): {str(e)}")
         except Exception as e:
             logger.warning(f"BigQuery claims query failed for {pat}: {str(e)}")
 
@@ -1523,26 +1401,33 @@ async def patent_get_claim1(publication_number: str, full: bool = True) -> Dict[
 
 
 @mcp.tool()
-async def ppubs_batch_get_claims(patent_numbers: List[str]) -> Dict[str, Any]:
+async def ppubs_batch_get_claims(publication_numbers: Optional[List[str]] = None,
+                                 patent_numbers: Optional[List[str]] = None) -> Dict[str, Any]:
     """Batch retrieve the Claim 1 text for a list of patent publication numbers.
 
     Queries TIPO (GPSS) first, then official APIs / BigQuery, and Google Patents as a last resort.
     Stages the compiled JSON mapping in the token store and returns a docxmcp-style download handle.
 
     Args:
-        patent_numbers: List of patent publication numbers (e.g. ["US11875659B2", "TW202403664A"]).
+        publication_numbers: List of patent publication numbers (e.g. ["US11875659B2", "TW202403664A"]).
+        patent_numbers: backward-compatible alias for `publication_numbers`.
 
     Returns:
         Dictionary containing success, the claims mapping, and the token store handle.
     """
     import json
     import asyncio
-    
-    if len(patent_numbers) > 100:
+
+    pubs = publication_numbers or patent_numbers
+    if not pubs:
+        return {"success": False, "error": "MISSING_PUBLICATION_NUMBERS",
+                "detail": "publication_numbers (or patent_numbers alias) is required"}
+
+    if len(pubs) > 100:
         return {"success": False, "error": "Batch size limit exceeded. Maximum allowed is 100."}
         
     results = {}
-    for pub in patent_numbers:
+    for pub in pubs:
         pub = pub.strip()
         if not pub:
             continue
@@ -1727,6 +1612,34 @@ def _locate_figure_page(pdf_path: str) -> Dict[str, Any]:
     return {"page": None, "method": "none", "pages": pages}
 
 
+def _pdf_image_count(pdf_path: str) -> int:
+    """Count embedded image XObjects in a PDF via `pdfimages -list` (poppler).
+
+    Used to distinguish a truly empty PDF from a scanned/text-layer-less PDF
+    that still contains figure images. Returns 0 on any failure (fail-safe).
+    """
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["pdfimages", "-list", pdf_path],
+            capture_output=True, text=True, timeout=60,
+        )
+        lines = [ln for ln in out.stdout.splitlines() if ln.strip()]
+        # pdfimages -list emits 2 header rows ("page num type ..." + a dashes
+        # separator); each remaining row is one image. Guard against short output.
+        if len(lines) <= 2:
+            return 0
+        count = 0
+        for ln in lines[2:]:
+            first = ln.split(None, 1)[0] if ln.split() else ""
+            if first.isdigit():
+                count += 1
+        return count
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pdfimages -list failed for %s: %s", pdf_path, e)
+        return 0
+
+
 def _render_page_png(pdf_path: str, page: int, dpi: int = 200) -> Optional[bytes]:
     """Render one PDF page to PNG bytes via `pdftoppm -r DPI -f N -l N -png`."""
     import subprocess
@@ -1752,8 +1665,9 @@ def _render_page_png(pdf_path: str, page: int, dpi: int = 200) -> Optional[bytes
 
 @mcp.tool()
 async def extract_representative_figure(
-    publication_number: str,
+    publication_number: Optional[str] = None,
     dpi: int = 200,
+    patent_number: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Extract a patent's representative figure as a high-resolution PNG (BR_20260628 D).
 
@@ -1771,12 +1685,22 @@ async def extract_representative_figure(
 
     Use this for report-grade figures; NEVER use representative_figure_url
     thumbnails (60x80 index images) for deliverables.
+
+    `patent_number` is a backward-compatible alias for `publication_number`.
     """
     import tempfile
     import os as _os
 
+    pub = publication_number or patent_number
+    if not pub:
+        return {"success": False, "error": "MISSING_PUBLICATION_NUMBER",
+                "detail": "publication_number (or patent_number alias) is required"}
+    publication_number = pub
+
     # Step 1: ensure a PDF (reuse the unified fetch tool + its fallback chain).
-    pdf_res = await fetch_patent_pdf(publication_number)
+    # This is a figure-extraction purpose: GPSS headless scraping IS authorized
+    # here (TW figure pipeline), so opt into the explicit scraping gate.
+    pdf_res = await fetch_patent_pdf(publication_number, allow_scraping=True)
     if not pdf_res.get("success"):
         return {"success": False, "error": "NO_PDF",
                 "publication_number": publication_number,
@@ -1800,6 +1724,20 @@ async def extract_representative_figure(
         # Step 2: locate the figure page.
         loc = _locate_figure_page(pdf_path)
         if loc["page"] is None:
+            # Grade the failure: a PDF with embedded images but no FIG.1 text
+            # marker is likely a no-text-layer scan that still holds figures —
+            # surface that honestly instead of a flat NO_FIGURE_PAGE. Do NOT
+            # guess which embedded image is the representative figure.
+            image_count = _pdf_image_count(pdf_path)
+            if image_count > 0:
+                return {"success": False, "error": "NO_FIGURE_PAGE_BUT_IMAGES_PRESENT",
+                        "publication_number": publication_number,
+                        "image_count": image_count,
+                        "pages": loc.get("pages"),
+                        "detail": (f"PDF 無 FIG.1 文字標記(可能為無文字層掃描版),"
+                                   f"但含 {image_count} 個內嵌影像;請人工挑選或從已下載 PDF 抽圖"),
+                        "source_pdf": {"source": pdf_res.get("source"),
+                                       "provenance": pdf_res.get("provenance")}}
             return {"success": False, "error": "NO_FIGURE_PAGE",
                     "publication_number": publication_number,
                     "pages": loc.get("pages"),
@@ -2251,10 +2189,12 @@ async def _gpss_download_patent_xml_impl(
 
 @mcp.tool()
 async def fetch_patent_pdf(
-    publication_number: str,
+    publication_number: Optional[str] = None,
     sources: Optional[List[str]] = None,
     filename: Optional[str] = None,
     include_attempts: bool = False,
+    allow_scraping: bool = False,
+    patent_number: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Fetch a patent's original PDF for a KNOWN publication number.
 
@@ -2275,10 +2215,27 @@ async def fetch_patent_pdf(
 
     sources: attempt order; defaults to ["epo_images", "gpss_pdf", "google_citation"].
     include_attempts: attach a per-source attempts[] trace to the result.
+    allow_scraping: EXPLICIT gate for the scraping source. The `gpss_pdf` source
+        runs a TIPO GPSS headless session (provenance scraping=True). When
+        allow_scraping is False (the default), gpss_pdf is SKIPPED — recorded in
+        attempts as {"ok": False, "error": "SKIPPED_SCRAPING_NOT_AUTHORIZED"}
+        without any actual fetch. If every official source (epo_images /
+        google_citation / local_cache) misses and the only remaining candidate
+        was the skipped gpss_pdf, the call returns {"success": False,
+        "error": "SCRAPING_REQUIRED", ...} so the caller must opt in explicitly.
+        Set allow_scraping=True only with user authorization (e.g. TW figure
+        extraction). This is a fail-fast gate, NOT a silent fallback.
+    patent_number: backward-compatible alias for `publication_number`.
     """
+    pub = publication_number or patent_number
+    if not pub:
+        return {"success": False, "error": "MISSING_PUBLICATION_NUMBER",
+                "detail": "publication_number (or patent_number alias) is required"}
+    publication_number = pub
     order = sources or ["epo_images", "gpss_pdf", "google_citation"]
     attempts: List[Dict[str, Any]] = []
     name = filename or f"{publication_number}.pdf"
+    scraping_skipped = False
 
     # Global Local Cache Priority Check (Read-Through)
     country, norm_pat = _get_patent_country_and_normalized_no(publication_number)
@@ -2336,6 +2293,11 @@ async def fetch_patent_pdf(
                 continue
 
         elif src == "gpss_pdf":
+            if not allow_scraping:
+                scraping_skipped = True
+                attempts.append({"source": src, "ok": False,
+                                 "error": "SKIPPED_SCRAPING_NOT_AUTHORIZED"})
+                continue
             try:
                 res_gpss = await gpss_download_patent_pdf(publication_number)
                 if res_gpss.get("success"):
@@ -2387,6 +2349,10 @@ async def fetch_patent_pdf(
         else:
             attempts.append({"source": src, "ok": False, "error": "UNKNOWN_SOURCE"})
 
+    if scraping_skipped:
+        return {"success": False, "error": "SCRAPING_REQUIRED",
+                "publication_number": publication_number, "attempts": attempts,
+                "hint": "官方來源無此 PDF;GPSS headless 抓取需 allow_scraping=True 並取得使用者授權"}
     return {"success": False, "error": "ALL_SOURCES_FAILED",
             "publication_number": publication_number, "attempts": attempts}
 
@@ -2676,6 +2642,10 @@ async def patentmcp_analyze_pool(publication_numbers: List[str]) -> Dict[str, An
                     rec["title"] = pat_data.get("title_localized", [{}])[0].get("text", "")
                     rec["abstract"] = pat_data.get("abstract_localized", [{}])[0].get("text", "")
                     bq_success = True
+            except BudgetExceededError as e:
+                # BQ is a fallback source here; skip (logged) when budget exhausted
+                # and let the chain fall through to GPSS.
+                logger.warning(f"BQ metadata skipped for {pub} (budget exhausted): {str(e)}")
             except Exception as e:
                 logger.warning(f"BQ metadata fetch failed for {pub}: {str(e)}")
                 
