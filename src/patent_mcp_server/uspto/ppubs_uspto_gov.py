@@ -13,6 +13,7 @@ import httpx
 import logging
 from pathlib import Path
 from patent_mcp_server.util.logging import LoggingTransport
+from patent_mcp_server.util.soft_scrape import SoftScrapePolicy
 
 # Set up logging
 logging.basicConfig(
@@ -58,7 +59,19 @@ class PpubsClient:
         self.case_id = None
         self.access_token = None
         self.search_query = None
-        
+
+        # plan gpss-session-reuse-batch (extend): ppubs.uspto.gov has no active
+        # client-side throttle — it only reacted to 429 after the fact, so a
+        # batch could burst and trip rate limits. Route every request through a
+        # SoftScrapePolicy: serialize (Concurrency=1) + pace + park a cooldown on
+        # 429/403 so the NEXT request waits it out instead of re-bursting.
+        self.policy = SoftScrapePolicy(
+            name="USPTO-ppubs",
+            min_delay=float(os.getenv("PPUBS_MIN_DELAY", "0.5")),
+            max_delay=float(os.getenv("PPUBS_MAX_DELAY", "1.5")),
+            cooldown_default_s=float(os.getenv("PPUBS_COOLDOWN_S", "30.0")),
+        )
+
         # Load search query template
         script_dir = Path(__file__).parent.parent
         search_query_path = script_dir / "json" / "search_query.json"
@@ -100,28 +113,41 @@ class PpubsClient:
         return self.session
 
     async def make_request(self, method, url, **kwargs):
-        """Make a request with automatic retry for session expiration."""
+        """Make a request with automatic retry for session expiration.
+
+        plan gpss-session-reuse-batch (extend): every request goes through
+        self.policy.guard() — serialize (Concurrency=1) + wait out any active
+        cooldown + pace — so batched callers trickle instead of bursting. A
+        403/429 parks a cooldown the NEXT request waits out, instead of only
+        sleeping the retry-after once.
+        """
         try:
-            response = await self.client.request(method, url, **kwargs)
-            
+            async with self.policy.guard():
+                response = await self.client.request(method, url, **kwargs)
+
             # Handle 403 (Session expired)
             if response.status_code == 403:
                 logger.info("Session expired, refreshing")
+                self.policy.note_block("403 session expired")
                 await self.get_session()
-                response = await self.client.request(method, url, **kwargs)
-                
+                async with self.policy.guard():
+                    response = await self.client.request(method, url, **kwargs)
+
             # Handle rate limiting
             if response.status_code == 429:
                 wait_time = int(response.headers.get("x-rate-limit-retry-after-seconds", 5)) + 1
                 logger.info(f"Rate limited, waiting {wait_time} seconds")
-                await asyncio.sleep(wait_time)
-                response = await self.client.request(method, url, **kwargs)
-                
+                # Park the host-signalled cooldown so subsequent requests also
+                # wait it out, not just this retry.
+                self.policy.park_cooldown(wait_time)
+                async with self.policy.guard():
+                    response = await self.client.request(method, url, **kwargs)
+
             # Log response body for debugging
             logger.debug(f"Response body for {method} {url}: {response.text}")
-            
+
             return response
-            
+
         except Exception as e:
             logger.error(f"Request error: {str(e)}")
             return {

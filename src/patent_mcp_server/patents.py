@@ -9,6 +9,7 @@ This file provides a Model Context Protocol (MCP) server that exposes tools for 
 The server uses stdio transport for command-line tools, following the MCP standard.
 """
 import asyncio
+import contextlib
 import os
 import json
 import logging
@@ -76,22 +77,113 @@ token_store = default_store()  # docxmcp-compatible token store for file deliver
 # TIPO (tiponet.tipo.gov.tw) is fronted by Cloudflare. Parallel scraping
 # trips a Managed Challenge that silently hangs the connection. Every
 # self-built GPSS scraping tool (figure / pdf / xml) MUST serialize through
-# this single module-level lock (Concurrency=1) and pace requests with a
-# random delay. Single-process async server -> asyncio.Lock is sufficient.
-_GPSS_SCRAPE_LOCK = asyncio.Lock()
+# the per-host SoftScrapePolicy (Concurrency=1 + random pacing + cooldown
+# parking). Single-process async server -> asyncio.Lock is sufficient.
+#
+# plan gpss-session-reuse-batch (extend): the ad-hoc lock+pace pair is now a
+# unified SoftScrapePolicy shared with the other crawler surface (USPTO ppubs).
+# Backward-compat aliases (_GPSS_SCRAPE_LOCK / _gpss_scrape_pace / MIN/MAX) are
+# kept so existing call sites + tests keep working unchanged.
+from patent_mcp_server.util.soft_scrape import SoftScrapePolicy
+
 _GPSS_SCRAPE_MIN_DELAY = float(os.getenv("GPSS_SCRAPE_MIN_DELAY", "1.0"))
 _GPSS_SCRAPE_MAX_DELAY = float(os.getenv("GPSS_SCRAPE_MAX_DELAY", "3.0"))
+_GPSS_SCRAPE_COOLDOWN_S = float(os.getenv("GPSS_SCRAPE_COOLDOWN_S", "60.0"))
+
+_GPSS_POLICY = SoftScrapePolicy(
+    name="TIPO-GPSS",
+    min_delay=_GPSS_SCRAPE_MIN_DELAY,
+    max_delay=_GPSS_SCRAPE_MAX_DELAY,
+    cooldown_default_s=_GPSS_SCRAPE_COOLDOWN_S,
+)
+
+# Backward-compat aliases — the policy IS the single source of truth now.
+_GPSS_SCRAPE_LOCK = _GPSS_POLICY.lock
 
 
 async def _gpss_scrape_pace() -> None:
-    """Random inter-request delay, called INSIDE _GPSS_SCRAPE_LOCK before the
-    actual HTTP session so serialized requests are also throttled."""
-    lo, hi = _GPSS_SCRAPE_MIN_DELAY, _GPSS_SCRAPE_MAX_DELAY
-    if hi < lo:
-        lo, hi = hi, lo
-    delay = random.uniform(lo, hi)
-    logger.debug("GPSS scrape acquired lock, sleeping %.2fs before request", delay)
-    await asyncio.sleep(delay)
+    """Random inter-request delay (delegates to _GPSS_POLICY.delay).
+
+    Kept as a thin alias so existing call sites + tests keep working. Callers
+    must already hold _GPSS_POLICY.lock (via .guard() or the alias lock)."""
+    await _GPSS_POLICY.delay()
+
+
+# Browser-like headers shared by every GPSS scrape (figure / pdf / xml). Hoisted
+# to module level so the single-call path and the reusable session use the SAME
+# fingerprint — important for Cloudflare cf_clearance continuity.
+_GPSS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+}
+
+
+@contextlib.asynccontextmanager
+async def _gpss_client(injected):
+    """Yield an httpx client for a GPSS scrape burst.
+
+    - injected is not None -> REUSE it (a persistent session client); the caller
+      owns its lifecycle, so we do NOT close it here. This is what lets a batch
+      keep ONE cookie jar / cf_clearance across many sequential scrapes.
+    - injected is None -> create a throwaway client and close it on exit (the
+      original single-call behaviour, unchanged).
+    """
+    import httpx
+    if injected is not None:
+        yield injected
+    else:
+        async with httpx.AsyncClient(
+            headers=_GPSS_HEADERS, follow_redirects=True, timeout=20.0
+        ) as c:
+            yield c
+
+
+class _GpssScrapeSession:
+    """A reusable single-thread GPSS scrape session for one batch.
+
+    Holds ONE persistent httpx.AsyncClient whose cookie jar accumulates across
+    every fetch — so the portal/GPSS handshake's Cloudflare cf_clearance cookie
+    is reused instead of being discarded per patent (the deeper RCA of the
+    ReadTimeout: a fresh client per request looks like a brand-new suspicious
+    client to Cloudflare and is MORE likely to trip the Managed Challenge).
+
+    Concurrency=1 is preserved: each fetch acquires _GPSS_SCRAPE_LOCK and paces
+    BEFORE its HTTP burst, then releases. The lock is per-burst (not held across
+    the whole batch loop), so a non-TW item routing through
+    extract_representative_figure -> fetch_patent_pdf -> gpss_pdf cannot deadlock
+    on the non-reentrant asyncio.Lock.
+    """
+
+    def __init__(self):
+        import httpx
+        self._client = httpx.AsyncClient(
+            headers=_GPSS_HEADERS, follow_redirects=True, timeout=20.0
+        )
+
+    async def fetch_representative_figure(self, publication_number: str) -> Dict[str, Any]:
+        async with _GPSS_POLICY.guard():
+            return await _gpss_download_representative_figure_impl(
+                publication_number, session_client=self._client
+            )
+
+    async def fetch_pdf(self, publication_number: str) -> Dict[str, Any]:
+        async with _GPSS_POLICY.guard():
+            return await _gpss_download_patent_pdf_impl(
+                publication_number, session_client=self._client
+            )
+
+    async def fetch_xml(self, publication_number: str) -> Dict[str, Any]:
+        async with _GPSS_POLICY.guard():
+            return await _gpss_download_patent_xml_impl(
+                publication_number, session_client=self._client
+            )
+
+    async def close(self) -> None:
+        try:
+            await self._client.aclose()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("GPSS scrape session close failed: %s", e)
 
 # =====================================================================
 # Unified USPTO Patents Tool
@@ -1460,8 +1552,12 @@ async def ppubs_batch_get_claims(patent_numbers: List[str]) -> Dict[str, Any]:
             results[pub] = res
         except Exception as e:
             results[pub] = {"success": False, "publication_number": pub, "error": str(e)}
-            
-        await asyncio.sleep(0.5)
+
+        # plan gpss-session-reuse-batch (extend): the old blanket 0.5s sleep is
+        # gone — each crawler surface now self-paces through its own
+        # SoftScrapePolicy (GPSS _GPSS_POLICY, ppubs PpubsClient.policy), and
+        # official APIs (BigQuery) are deliberately not throttled. A fixed sleep
+        # here would just double-pace the scraper paths.
         
     data = json.dumps(results, indent=2, ensure_ascii=False).encode("utf-8")
     entry = token_store.put_bytes(data, "claims.json")
@@ -1737,31 +1833,31 @@ async def gpss_download_representative_figure(
     This replicates a browser session to fetch the static representative figure.
     Returns a handle {token, rel, download_url, bytes, sha256} of the saved image.
 
-    BR_20260628 A: serialized through _GPSS_SCRAPE_LOCK (Concurrency=1) + a random
-    inter-request delay, so parallel calls cannot trip Cloudflare's Managed
-    Challenge on tiponet.tipo.gov.tw.
+    BR_20260628 A: serialized through _GPSS_POLICY (Concurrency=1 + random
+    pacing + cooldown parking), so parallel calls cannot trip Cloudflare's
+    Managed Challenge on tiponet.tipo.gov.tw.
     """
-    async with _GPSS_SCRAPE_LOCK:
-        await _gpss_scrape_pace()
+    async with _GPSS_POLICY.guard():
         return await _gpss_download_representative_figure_impl(publication_number)
 
 
 async def _gpss_download_representative_figure_impl(
     publication_number: str,
+    session_client=None,
 ) -> Dict[str, Any]:
-    import re
-    import httpx
+    """Scrape one TW representative figure. NO lock here — the caller (the tool
+    wrapper or _GpssScrapeSession.fetch_*) owns _GPSS_SCRAPE_LOCK + pacing.
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-    }
-    
+    session_client: when provided, reuse this persistent client (cookie jar /
+    cf_clearance continuity across a batch); when None, a throwaway client is
+    created and closed for this single scrape.
+    """
+    import re
+
     pat = publication_number.strip()
     
     try:
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0) as client:
+        async with _gpss_client(session_client) as client:
             # Step 1: Visit portal
             await client.get("https://tiponet.tipo.gov.tw/030_OUT_V1/home.do")
             
@@ -1858,25 +1954,22 @@ async def gpss_download_patent_pdf(
     This replicates a browser session to fetch the patent's PDF document.
     Returns a handle {token, rel, download_url, bytes, sha256} of the saved PDF.
 
-    BR_20260628 A: serialized through _GPSS_SCRAPE_LOCK (Concurrency=1) + a random
-    inter-request delay. The local-cache fast path also runs under the lock; this
-    is cheap and keeps the single-thread guarantee simple and total.
+    BR_20260628 A: serialized through _GPSS_POLICY (Concurrency=1 + random
+    pacing + cooldown parking). The local-cache fast path also runs under the
+    guard; this is cheap and keeps the single-thread guarantee simple and total.
     """
-    async with _GPSS_SCRAPE_LOCK:
+    async with _GPSS_POLICY.guard():
         return await _gpss_download_patent_pdf_impl(publication_number)
 
 
 async def _gpss_download_patent_pdf_impl(
     publication_number: str,
+    session_client=None,
 ) -> Dict[str, Any]:
+    """Scrape one TW patent PDF. NO lock here — the caller owns _GPSS_SCRAPE_LOCK
+    + pacing. session_client: reuse a persistent client when provided (batch
+    cookie continuity), else a throwaway client is created/closed per call."""
     import re
-    import httpx
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-    }
 
     pat = publication_number.strip()
     # Remove all whitespace
@@ -1904,7 +1997,7 @@ async def _gpss_download_patent_pdf_impl(
         return _handle(entry)
 
     try:
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0) as client:
+        async with _gpss_client(session_client) as client:
             # Step 1: Visit portal
             await client.get("https://tiponet.tipo.gov.tw/030_OUT_V1/home.do")
             
@@ -2013,24 +2106,22 @@ async def gpss_download_patent_xml(
     This replicates a browser session to fetch the patent's full-text XML document (best for TW patents).
     Returns a handle {token, rel, download_url, bytes, sha256} of the saved XML.
 
-    BR_20260628 A: serialized through _GPSS_SCRAPE_LOCK (Concurrency=1) + a random
-    inter-request delay, sharing the single guardrail with the figure/pdf tools.
+    BR_20260628 A: serialized through _GPSS_POLICY (Concurrency=1 + random
+    pacing + cooldown parking), sharing the single guardrail with the figure/pdf
+    tools.
     """
-    async with _GPSS_SCRAPE_LOCK:
+    async with _GPSS_POLICY.guard():
         return await _gpss_download_patent_xml_impl(publication_number)
 
 
 async def _gpss_download_patent_xml_impl(
     publication_number: str,
+    session_client=None,
 ) -> Dict[str, Any]:
+    """Scrape one TW patent XML. NO lock here — the caller owns _GPSS_POLICY.guard.
+    session_client: reuse a persistent client when provided (batch cookie
+    continuity), else a throwaway client is created/closed per call."""
     import re
-    import httpx
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-    }
 
     pat = publication_number.strip()
     # Remove all whitespace
@@ -2056,7 +2147,7 @@ async def _gpss_download_patent_xml_impl(
         return _handle(entry)
 
     try:
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0) as client:
+        async with _gpss_client(session_client) as client:
             # Step 1: Visit portal
             await client.get("https://tiponet.tipo.gov.tw/030_OUT_V1/home.do")
             
@@ -2454,49 +2545,61 @@ async def patentmcp_batch_download_figures(publication_numbers: List[str]) -> Di
     
     downloaded = {}
     skipped = {}
-    
-    for pub in publication_numbers:
-        pub = pub.strip()
-        if not pub:
-            continue
-            
-        if pub in cooldown_data:
-            skipped[pub] = {
-                "reason": "503_cooldown",
-                "remaining_seconds": int(600 - (now - cooldown_data[pub]))
-            }
-            continue
-            
-        try:
-            filename = f"{pub}_figure.png"
-            if pub.upper().startswith("TW"):
-                res = await gpss_download_representative_figure(pub)
-            else:
-                gpat_res = await gpatents_client.get_patent(pub, include_description=False)
-                if gpat_res.get("success") and gpat_res.get("representative_figure_url"):
-                    fig_url = gpat_res["representative_figure_url"]
-                    res = await gpatents_download_figure(fig_url, filename=filename)
+
+    # ONE shared GPSS scrape session for the whole batch: the cookie jar /
+    # cf_clearance accumulates across every TW item instead of being discarded
+    # per patent (the deeper RCA of the ReadTimeout — a fresh client per request
+    # looks like a brand-new suspicious client to Cloudflare). Non-TW items route
+    # through the report-grade PDF pipeline (extract_representative_figure), NOT
+    # the 60x80 index thumbnail (BR_20260628 §2 #3 forbids thumbnails in
+    # deliverables; get_patent() never returns representative_figure_url anyway —
+    # that field only exists on search()._flatten() results — so the old branch
+    # failed for EVERY non-TW patent). Items run sequentially: single-thread is
+    # preserved because each GPSS burst takes _GPSS_SCRAPE_LOCK per-burst inside
+    # the session methods (the loop itself holds no lock, so a non-TW item's
+    # extract_representative_figure -> fetch_patent_pdf -> gpss_pdf re-entry
+    # cannot deadlock on the non-reentrant lock).
+    session = _GpssScrapeSession()
+    try:
+        for pub in publication_numbers:
+            pub = pub.strip()
+            if not pub:
+                continue
+
+            if pub in cooldown_data:
+                skipped[pub] = {
+                    "reason": "503_cooldown",
+                    "remaining_seconds": int(600 - (now - cooldown_data[pub]))
+                }
+                continue
+
+            try:
+                if pub.upper().startswith("TW"):
+                    res = await session.fetch_representative_figure(pub)
                 else:
-                    res = {"success": False, "error": "No representative figure URL found"}
-                    
-            if res.get("success") or "download_url" in res:
-                downloaded[pub] = res
-            else:
-                err_str = str(res.get("error", "")).lower()
-                if "503" in err_str or "quota" in err_str or "unavailable" in err_str or "limit" in err_str:
+                    # Report-grade: PDF -> FIG.1 page -> high-DPI PNG.
+                    res = await extract_representative_figure(pub)
+
+                if res.get("success") or "download_url" in res:
+                    downloaded[pub] = res
+                else:
+                    err_str = str(res.get("error", "")).lower()
+                    if "503" in err_str or "quota" in err_str or "unavailable" in err_str or "limit" in err_str:
+                        cooldown_data[pub] = now
+                        skipped[pub] = {"reason": "503_detected_added_to_cooldown", "error": res.get("error")}
+                    else:
+                        skipped[pub] = {"reason": "failed", "error": res.get("error")}
+
+            except Exception as e:
+                err_str = str(e).lower()
+                if "503" in err_str or "unavailable" in err_str:
                     cooldown_data[pub] = now
-                    skipped[pub] = {"reason": "503_detected_added_to_cooldown", "error": res.get("error")}
+                    skipped[pub] = {"reason": "503_exception_added_to_cooldown", "error": str(e)}
                 else:
-                    skipped[pub] = {"reason": "failed", "error": res.get("error")}
-                    
-        except Exception as e:
-            err_str = str(e).lower()
-            if "503" in err_str or "unavailable" in err_str:
-                cooldown_data[pub] = now
-                skipped[pub] = {"reason": "503_exception_added_to_cooldown", "error": str(e)}
-            else:
-                skipped[pub] = {"reason": "exception", "error": str(e)}
-                
+                    skipped[pub] = {"reason": "exception", "error": str(e)}
+    finally:
+        await session.close()
+
     try:
         with open(cooldown_file, "w") as f:
             json.dump(cooldown_data, f)

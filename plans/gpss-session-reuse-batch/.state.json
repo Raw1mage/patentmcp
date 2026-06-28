@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "state": "proposed",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-06-28T08:04:05.444Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    }
+  ]
+}
