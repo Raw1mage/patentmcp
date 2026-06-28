@@ -2918,7 +2918,13 @@ def main():
     parser.add_argument("--uds", default=os.environ.get("PATENTS_UDS"),
                         help="Unix domain socket path (http transport; preferred).")
     parser.add_argument("--host", default=os.environ.get("PATENTS_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get("PATENTS_PORT", "8078")))
+    # --port default None: transport set is decided by which flags are present
+    # (--uds and/or --port). UDS-only, TCP-only, and dual are all valid (R1.2).
+    parser.add_argument(
+        "--port", type=lambda v: int(v) if v not in (None, "") else None,
+        default=(int(os.environ["PATENTS_PORT"]) if os.environ.get("PATENTS_PORT") else None),
+        help="TCP port (additional/outward transport; omit for UDS-only).",
+    )
     parser.add_argument("--export-claims", help="Comma-separated patent numbers to batch retrieve Claim 1 (standalone CLI mode).")
     parser.add_argument("--output", help="Optional output JSON path for the exported claims.")
     args = parser.parse_args()

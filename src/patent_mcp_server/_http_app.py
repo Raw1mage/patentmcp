@@ -324,29 +324,78 @@ def build_app(mcp, store):
 
 
 def serve(mcp, store, *, uds: Optional[str] = None,
-          host: str = "127.0.0.1", port: int = 8078) -> None:
-    """Blocking: run the combined app over UDS (preferred) or TCP."""
-    import uvicorn
-    from patent_mcp_server import _file_server
+          host: str = "127.0.0.1", port: Optional[int] = None) -> None:
+    """Blocking: run the combined app over UDS and/or TCP from ONE process.
 
+    Transport matrix (MCP integration standard R1.1/R1.2): for a containerized
+    service UDS is the inward transport the same-host opencode daemon reaches
+    (via bind mount), and TCP MAY be exposed additionally for direct IDE /
+    cross-host access (R1.7) exposing the same MCP API. Pass `uds` and/or `port`:
+      - uds + port → dual (recommended for a container that also wants IDE direct)
+      - uds only   → gateway-fronted UDS service
+      - port only  → TCP-localhost service
+
+    IMPORTANT (why a single Server with multiple sockets, not two Servers):
+    FastMCP's ``mcp.streamable_http_app()`` wires the StreamableHTTP
+    session-manager lifespan INTO the app, so the app lifespan must run EXACTLY
+    ONCE. Running two ``uvicorn.Server(...).serve()`` coroutines over the same
+    app (the bodesign low-level-Server pattern) would enter the lifespan twice
+    and double-enter ``session_manager.run()`` → crash. Instead we pre-bind one
+    socket per transport and hand them to a SINGLE ``uvicorn.Server.run(sockets=
+    [...])`` — one app, one lifespan, multiple listeners.
+    """
+    import socket as _socket
+    import uvicorn
+
+    if not uds and port is None:
+        raise ValueError("serve() needs at least one inward transport: uds and/or port")
+
+    # NOTE on /files handles: we deliberately do NOT set _file_server.FILE_BASE_URL
+    # here, so handle download_urls stay RELATIVE (/files/...). Relative paths flow
+    # correctly through the UDS gateway prefix (the conformant inward path); a
+    # direct-TCP IDE resolves them against its own server base. Setting an absolute
+    # TCP base would break the gateway-fronted UDS path, so relative is the safe
+    # cross-transport default.
     app = build_app(mcp, store)
+    sockets = []
+    listening = []
+
+    if port is not None:
+        tcp_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        tcp_sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        tcp_sock.bind((host, port))
+        sockets.append(tcp_sock)
+        listening.append(f"http://{host}:{port}")
+
     if uds:
-        # Relative /files paths flow through the gateway prefix; no absolute base.
         parent = os.path.dirname(uds)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        # Ensure the socket is created with 0666 permissions by setting umask to 0.
-        # This guarantees any local user on the host can connect.
+        # Remove a stale socket file from a previous run (bind fails EADDRINUSE).
+        if os.path.exists(uds):
+            try:
+                os.unlink(uds)
+            except OSError as e:  # noqa: BLE001
+                _log.warning("could not remove stale socket %s: %s", uds, e)
+        # umask 0 so the socket file is created 0666 — any local user (incl. the
+        # gateway under a rootful docker daemon) can connect (standard R7.3).
+        old_umask = None
         try:
-            os.umask(0)
+            old_umask = os.umask(0)
             _log.info("Setting process umask to 0 for UDS socket")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _log.warning("Failed to set umask to 0: %s", e)
-        config = uvicorn.Config(app, uds=uds, log_level="info")
-        _log.info("patentmcp http listening on unix:%s (/mcp, /files, /skills, /)", uds)
-    else:
-        _file_server.FILE_BASE_URL = f"http://{host}:{port}"
-        config = uvicorn.Config(app, host=host, port=port, log_level="info")
-        _log.info("patentmcp http listening on http://%s:%d (/mcp, /files, /skills, /)", host, port)
-    # uvicorn.Server.run() is blocking and drives the session-manager lifespan.
-    uvicorn.Server(config).run()
+        try:
+            uds_sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            uds_sock.bind(uds)
+        finally:
+            if old_umask is not None:
+                os.umask(old_umask)
+        sockets.append(uds_sock)
+        listening.append(f"unix:{uds}")
+
+    _log.info("patentmcp http listening on %s (/mcp, /files, /skills, /)",
+              " + ".join(listening))
+    # One Server, one app lifespan, N pre-bound sockets (see docstring).
+    config = uvicorn.Config(app, log_level="info")
+    uvicorn.Server(config).run(sockets=sockets)
