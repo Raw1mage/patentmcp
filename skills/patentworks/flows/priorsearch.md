@@ -13,7 +13,7 @@ priorart_<topic>/                    ← 工作資料夾根(一案一夾)
 ├── 00_campaign.md                   ← 檢索計畫:主題/IPC錨點/三地/日期/件數目標/硬條件
 ├── 01_search/                       ← 檢索中間產物
 │   ├── probes.md                    ← 校準探針結果(各錨點小量試打的命中量級)
-│   ├── matrix-log.md                ← 完整檢索矩陣紀錄(每條查詢:來源/參數/命中數)← 可復現核心
+│   ├── matrix-log.jsonl             ← 完整檢索矩陣紀錄(每行一筆查詢,結構化 schema)← 可復現核心 + search_audit 機檢來源
 │   └── raw/                         ← 子代理落地的原始 JSON(大檔,不進主 context)
 ├── 02_pool/                         ← 專利池
 │   ├── candidates.csv               ← 去重+硬條件篩選後的候選池(書目+技術摘要+情境分類+1-5級相關性)
@@ -32,6 +32,62 @@ priorart_<topic>/                    ← 工作資料夾根(一案一夾)
 
 **為何 04_report 要對齊 docxmcp**:docxmcp `decompose` 產出的文字文件 package 就是 `manifest.json` + `body.md`(或 `chapters/*.md`)+ `media/` + `outline.md` + `content_list.json`。報告 package 採同結構 → tar 上傳即可直接 `assemble`,且日後若要反向 `decompose` 修訂也同構。詳見 `../reference/priorsearch/docx-assembly.md`。
 
+### `matrix-log.jsonl` schema(可復現核心 + 機檢來源)
+
+每跑一條查詢就 **append 一行 JSON** 到 `01_search/matrix-log.jsonl`。這是 `search_audit` 機檢檢索強度的唯一資料源,也是報告 §1 復現表的來源。零命中也要記(零命中是有效證據)。
+
+```json
+{
+  "query_id": "Q07",
+  "source": "gpss",
+  "database": "USA",
+  "axis": {
+    "class_codes": ["705/300"],
+    "class_scheme": "uspc",
+    "keywords": ["milestone payment"],
+    "concept_group": "C",
+    "boolean": "AND",
+    "date_from": "2015-01-01",
+    "date_to": "2026-06-28"
+  },
+  "hits": 42,
+  "raw_ref": "raw/Q07.json"
+}
+```
+
+| 欄位 | 意義 | 不允許 |
+|---|---|---|
+| `query_id` | 查詢序號(復現錨) | 跳號或重複 |
+| `source` | `gpss`/`epo`/`uspto`/`google` | 爬蟲 `gpatents_*` |
+| `database` | `TWA/TWB/CNA/CNB/USA/USB` 或 epo/google region | 留空 |
+| `axis.class_codes` | 該查詢實際用的分類碼(可多) | 填願望而非實際送出值 |
+| `axis.class_scheme` | `ipc`/`cpc`/`uspc` | 與 class_codes 不符 |
+| `axis.concept_group` | 對應 campaign 概念群 A-E | 未在 campaign 定義 |
+| `axis.boolean` | `AND`/`OR`/`SINGLE` | 全程 SINGLE 單詞海撈 |
+| `hits` | 命中數(0 也記) | 漏記 |
+
+### `02_pool/candidates.csv` 欄位格式(統一真相)
+
+去重 + 硬條件篩選後的候選池(≥20 篇),欄位順序固定:
+
+```
+#,類別,代表專利號,申請人,優先權,國別,標題,推測CPC,相關性(1-5級),技術要點(蒸餾),命中要件,家族成員,連結,人工複核
+```
+
+`相關性(1-5級)`:1=無關 / 2=低度 / 3=中度 / 4=高度 / 5=極相關(最接近前案)。Excel 交付物須附完整 Title/Abstract/Claim 內文作可稽核基礎。
+
+### `03_assets/figures/` 5 張統計圖命名(matplotlib,HSL 配色,報告穩定引用)
+
+| 檔名 | 用途 |
+|---|---|
+| `fig1_country.png` | 專利國別分佈直方圖 |
+| `fig2_relevance.png` | 專利**相關性**(1-5級)分佈直方圖(舊名 `fig2_scenario.png` 為 legacy alias) |
+| `fig3_ipc.png` | 主要 IPC/CPC 分類分佈橫向條形圖 |
+| `fig4_category.png` | 專利清單類別佔比圓餅圖 |
+| `fig5_year.png` | 專利優先權年份分佈折線/條形圖 |
+
+> 宏觀分析從 Excel 數據做數字統計與趨勢觀察即可,**不需逐件線上讀取**(避免超時);5 張圖一律 matplotlib 產、HSL 配色、寫入報告 §2。
+
 ## 1. 來源與紅線(硬規定)
 
 - **官方 REST API 優先**。檢索主力 **TIPO GPSS**(`gpss_search`,一站涵蓋 US/CN/TW);全文/圖說文字補 **`google_*` BigQuery 合法 API**(非 TW)、**EPO OPS**、**USPTO PPUBS**。各來源能力與優先序見 `../SKILL.md` §5。
@@ -40,17 +96,39 @@ priorart_<topic>/                    ← 工作資料夾根(一案一夾)
 - **原始專利 PDF 下載**:見 §5——**僅允許針對已知專利號、逐件小量下載公開 PDF**,不得批量。
 - **CPC/IPC 一次性錨定鐵則**：CPC/IPC 分類代碼**必須作為基本限制條件（即 AND 運算子）直接寫入原始檢索條件式中**。嚴禁在檢索結果返回後進行「第二輪二次 CPC 篩選」，以防因定義偏差誤殺原先有相關的專利。原始檢索後應直接產出包含所有相關專利的大池，僅進行同案去重與相關性評等。
 
-## 2. GPSS 三地檢索鐵則
+## 1.5 檢索強度契約(硬地板,機檢)
 
-| 國別 | 資料庫代碼 | 關鍵字語言 | 分類碼參數 |
+> **這是治本條款。** 過去「隨便檢幾條就交差」之所以能過關,是因為所有檢查只驗產物品質、不驗檢索廣度。本契約把「檢索夠不夠廣」變成 `search_audit` 工具可機檢的 PASS/FAIL 閘——**未 PASS 不得進入交付**。
+
+每次 priorsearch 的 `matrix-log.jsonl` 必須滿足以下**硬地板**(campaign 可往上調,不可往下破):
+
+| 維度 | 硬地板 | 意義 |
+|---|---|---|
+| 分類錨點數 | **≥ 3** | 跨 IPC/CPC/USPC 至少 3 個不同分類碼(不可只圍一個 G06Q 近似碼海撈) |
+| 關鍵字概念群 | **≥ 3** | campaign 定義的 A-E 概念群至少觸及 3 群(不可單概念反覆換詞) |
+| 三地覆蓋 | **= 3** | TW+CN+US 皆須有查詢(刻意排除須在 campaign 記 `exclude_jurisdiction=<地> reason=...`) |
+| AND/OR 組合型態 | **≥ 2** | 至少 2 種布林型態,不可全 `SINGLE` 單詞海撈(分類×關鍵字、關鍵字 OR 同義詞…) |
+| USPC 入軸(US 案) | **必須** | US 檢索至少 1 條以 `class_scheme=uspc` 限縮(見 §2 為何 USPC 是一級軸) |
+| 總查詢筆數 | **≥ 12** | 五維交叉的最低笛卡兒覆蓋 |
+
+**campaign 覆寫語法**(寫在 `00_campaign.md`,HTML 註解標記,raise-only):
+```
+<!-- audit: min_queries=20 min_concept_groups=4 exclude_jurisdiction=TW reason="TW 該領域低價值" -->
+```
+往下調門檻會被忽略(地板贏);排除某地必帶 reason,否則 audit 仍判缺地。
+
+## 2. GPSS 三地檢索鐵則 + 分類三軸
+
+| 國別 | 資料庫代碼 | 關鍵字語言 | 一級分類軸(擇強而用,可多軸並行) |
 |---|---|---|---|
 | 臺灣 | `TWA`(公開) `TWB`(公告) | **中文** | `ipc` |
 | 大陸 | `CNA`(公開) `CNB`(公告) | **中文** | `ipc` |
-| 美國 | `USA`(公開) `USB`(公告) | **英文** | `ipc` |
+| 美國 | `USA`(公開) `USB`(公告) | **英文** | `ipc` / `cpc` / **`uspc`** |
 
 - **關鍵字語言必須匹配資料庫**(US 庫搜中文回零筆)。
-- **三地共通分類用 `ipc` 參數**(GPSS 的 `cpc` 對 TW 常回零)。
-- **keyword 用單一複合詞**(多詞空格 AND 常回 `No record`);多概念交叉靠 `ipc` + 單關鍵字 + 日期三軸。
+- **TW/CN 共通分類用 `ipc` 參數**(GPSS 的 `cpc` 對 TW 常回零)。
+- **USPC 是 US 案的一級限縮軸,不是可有可無的補充。** US 專利的舊案與分類傳統大量以 USPC(如 `705/300` 系列)組織;只用 IPC/CPC 會漏掉以 USPC 為主索引的前案。US 檢索**至少 1 條**須以 `class_scheme=uspc` 下去打,並記入 matrix-log 的 `axis.class_scheme="uspc"`(`search_audit` 會檢查此軸是否入列)。
+- **keyword 用單一複合詞**(多詞空格 AND 常回 `No record`);多概念交叉靠 `分類軸(ipc/cpc/uspc) × 單關鍵字 × 日期`,並刻意變換布林型態(AND 限縮 / OR 擴同義詞),不可全程單詞海撈。
 - 逐字 Claim 1 三地通用:`gpss_search(pub_number="...")`。
 
 ## 3. 流程
@@ -60,11 +138,13 @@ priorart_<topic>/                    ← 工作資料夾根(一案一夾)
 2. 用 `gpss_search` 對每個 IPC 錨點 + 代表關鍵字跑**小量探針**(`num=2~5`),把命中量級記入 `01_search/probes.md`。過寬(數千筆)收緊 IPC/加日期;過窄換上層分類/補同義詞。
 
 ### B. 召回 + 落地(委派子代理)
-3. 委派**一個**子代理跑完整檢索矩陣(`各 IPC 錨點 × 各情境關鍵字 × 三地資料庫 × 日期`):
+3. 委派**一個**子代理跑完整檢索矩陣(`各分類錨點(ipc/cpc/uspc) × 各情境關鍵字概念群 × 三地資料庫 × 日期 × 布林型態`),須滿足 §1.5 檢索強度契約的硬地板:
    - **明令只用官方 API**(`gpss_search` 為主,必要時 `epo_*` / `uspto_patents` / `google_*` BigQuery),**嚴禁 `gpatents_*` 爬蟲**。
+   - **每跑一條查詢就 append 一行**到 `01_search/matrix-log.jsonl`(schema 見 §0),`axis` 如實記錄該條實際送出的分類軸/關鍵字/概念群/布林/日期與命中數——這是 `search_audit` 機檢的唯一證據,**不是事後補的願望清單**。
    - 子代理:吸收巨量 JSON(落地 `01_search/raw/`)→ 硬條件過濾 → 同案去重(公開 A/公告 B)→ 收斂至件數上限 → 寫 `02_pool/candidates.csv`。**此過程嚴禁施加任何第二輪 CPC 條件篩選，維持檢索式所定範疇**。
-   - 每條查詢的來源/參數/命中數寫入 `01_search/matrix-log.md`(復現用)。
-4. 主代理**複核** `candidates.csv`:正規 CSV parser(非 awk)確認件數、無欄位錯位、無重複公開號、相關性（1-5級）標記齊全、三地與情境分佈合理。
+4. 主代理**兩段複核**(先過程、再產物——順序不可顛倒):
+   1. **檢索強度閘(先)**:對 `01_search/matrix-log.jsonl` 跑 `search_audit(matrix_log_path=..., campaign_path="00_campaign.md")`。**verdict 必須 PASS** 才能前進;若 `FAIL`,讀 `gaps` 逐條補檢索(回 step 3 補錨點/概念群/三地/布林/USPC/筆數),**不得跳過、不得帶 FAIL 進交付**。`WARN`(分佈偏斜)應評估是否補強。
+   2. **池子品質複核(後)**:正規 CSV parser(非 awk)確認 `candidates.csv` 件數、無欄位錯位、無重複公開號、相關性（1-5級）標記齊全、三地與情境分佈合理。
 
 ### C. 重點前案深挖(針對所有評等為 5 級相關性的專利進行，不再受限於固定數量限制) → `02_pool/shortlist.json`
 5. 針對所有評等為 5 級的重點專利，逐件取**逐字 Claim 1 + 完整全文/圖說**,依法域選來源：
@@ -74,12 +154,13 @@ priorart_<topic>/                    ← 工作資料夾根(一案一夾)
 6. **代表圖(圖檔影像)**：優先呼叫 `gpss_download_representative_figure` (TW 案優先，見 §5 與 `../reference/priorsearch/pdf-figure-extraction.md`) 取得絕對圖檔網址並完成下載。
 
 ### D. 交付物產出 → `99_deliverables/`
+> **交付前最終強制閘**：再跑一次 `search_audit(matrix_log_path="01_search/matrix-log.jsonl", campaign_path="00_campaign.md")`,**verdict 必須 PASS**。這道閘與下方 docx probe `ok=True` 並列——任一不過,不得宣稱交付完成。檢索強度未達標的報告是不合格品,不是「先交再補」。
 7. **Excel 專利池**(`xlsx` skill / openpyxl):書目主表(格式化/autofilter/凍結首列/三地色票)+ 統計分頁(國別/情境/IPC/年份)。產出後 **LibreOffice recalc** 驗證零錯誤。
 8. **技術洞察報告 DOCX**(docxmcp **Mode A**,組 package 於 `04_report/`):流程見 `../reference/priorsearch/docx-assembly.md`,**probe 驗證 `ok=True` 才算交付**。報告章節見 §4。
 
 ## 4. 報告章節(§1 為使用者強制要求)
 
-- **§1 檢索方法與可復現步驟**(必含,讓後續 AI 能復現並改良):引擎與來源優先序、三地資料庫代碼、IPC/CPC 分類錨點、三地關鍵字矩陣。**必須以 Markdown 結構化表格詳細記錄每一則檢索的查詢條件式、使用的資料庫來源、以及回傳的結果數量**。內容直接取自 `00_campaign.md` + `01_search/matrix-log.md`。
+- **§1 檢索方法與可復現步驟**(必含,讓後續 AI 能復現並改良):引擎與來源優先序、三地資料庫代碼、IPC/CPC/**USPC** 分類錨點、三地關鍵字矩陣。**必須以 Markdown 結構化表格詳細記錄每一則檢索的查詢條件式、分類軸(ipc/cpc/uspc)、布林型態、使用的資料庫來源、以及回傳的結果數量**——此表由 `01_search/matrix-log.jsonl` 渲染而來(JSONL 是真相源,表是衍生視圖)。**須附 `search_audit` 的 PASS 結論與六維覆蓋率數字作為檢索強度佐證**。內容取自 `00_campaign.md` + `01_search/matrix-log.jsonl`。
 - §2 專利池全局分佈(嵌統計圖表)
 - §3 各情境技術洞察(白話套路 + 差異化主軸)
 - **§4 重點前案細部分析**(針對所有評等為 5 級的專利)：包含書目資料、逐字 Claim 1、代表圖與附圖文字說明，以及「**白話技術解析**」區塊。該解析必須在充分理解 Claim 請求項內容後，以白話文重新闡述並回答四個核心問題：

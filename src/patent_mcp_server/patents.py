@@ -55,6 +55,7 @@ from patent_mcp_server.epo.client import EPOClient
 from patent_mcp_server._token_store import default_store
 from patent_mcp_server import _file_server
 from patent_mcp_server import screening_table as _st
+from patent_mcp_server import search_audit as _sa
 from patent_mcp_server.constants import Defaults, GooglePatentsCountries
 from patent_mcp_server.util.errors import ApiError
 
@@ -2787,6 +2788,49 @@ async def patentmcp_analyze_pool(publication_numbers: List[str]) -> Dict[str, An
         "charts": charts,
         "gaps": gaps
     }
+
+
+@mcp.tool()
+async def search_audit(
+    matrix_log_path: str,
+    campaign_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Machine-checkable RIGOR GATE for the priorsearch flow — audits whether a
+    search was BROAD ENOUGH, so a thin "checked a few hits and called it done"
+    search cannot pass off as a complete landscape.
+
+    Reads a campaign's `matrix-log.jsonl` (one query per line; schema in
+    priorsearch.md §0) and scores breadth against floor thresholds (design DD-2):
+      - min_class_anchors=3   distinct class codes across IPC/CPC/USPC
+      - min_concept_groups=3  distinct campaign concept groups (A-E) touched
+      - min_jurisdictions=3   TW + CN + US all searched
+      - min_boolean_combos=2  at least 2 boolean shapes (not all SINGLE-word dragnet)
+      - uspc_required=True     US search must include >=1 USPC-anchored query
+      - min_queries=12         minimum cartesian coverage
+
+    `00_campaign.md` may RAISE any floor (never lower) and may declare an explicit
+    jurisdiction exclusion with a reason via an HTML-comment marker, e.g.:
+      <!-- audit: min_queries=20 exclude_jurisdiction=TW reason="TW low value" -->
+
+    This tool issues NO network requests and runs NO searches — it only audits the
+    evidence the search agent left behind. Returns a verdict envelope:
+      {verdict: PASS|WARN|FAIL, coverage{...}, thresholds{...}, gaps[...],
+       warnings[...], per_jurisdiction{...}, per_database{...},
+       applied_overrides{...}, evidence{...}}
+
+    FAIL ⇒ the search is too thin to deliver: fix the listed gaps and re-search
+    before producing the pool / report (priorsearch.md §3.B step 4 & §3.D step 8).
+    """
+    try:
+        result = _sa.audit(matrix_log_path, campaign_path)
+        result["success"] = True
+        return result
+    except _sa.MatrixLogError as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "hint": "matrix-log.jsonl 必須存在且為每行一筆 JSON 查詢紀錄（schema 見 priorsearch.md §0）。",
+        }
 
 
 def main():

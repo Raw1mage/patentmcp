@@ -55,58 +55,11 @@ disclosure(交底書)→ screening(查新)→ analysis(分析)→ drafting(起�
 
 ## 專利工作池資料樹規範 (Data Tree Specification)
 
-為了確保專利檢索、統計圖表繪製、報告編譯 (docxmcp) 之間的資料流一致性，各專案工作目錄的資料結構與中間產物必須遵守以下資料樹規範，並與 `docxmcp` 的 `manifest` 結構調和：
+> **單一真相在 `flows/priorsearch.md §0`。** 正式 landscape/前案地圖任務的固化工作資料夾結構(`priorart_<topic>/` 的 `00_campaign.md` / `01_search/`(含 `matrix-log.jsonl` schema) / `02_pool/`(含 candidates.csv 欄位格式) / `03_assets/`(含 5 張統計圖命名) / `04_report/`(docxmcp Mode A package) / `99_deliverables/`)一律以該檔為準,本檔不再平行定義第二套目錄,以免漂移。
 
-### 1. 目錄結構
-各專案工作目錄必須物理隔離交付物與中間產物。交付物僅存放在根目錄，中間產物則依其性質分流至三個專用子目錄中：
-
-```
-<project_dir>/
-├── <project_name>_技術洞察報告.docx # 最終交付物：經由 docxmcp 產出的 Word 報告
-├── <project_name>_專利彙整表.xlsx   # 最終交付物：由所有檢索資料彙整而成的單一試算表
-│
-├── input/                           # 中間產物：業主提供的原始資料 (例如：技術揭露書、原始想法材料)
-│
-├── search/                          # 中間產物：所有檢索得到的原始與結構化資料 (可依檔案類型細分)
-│   ├── csv/                         # 存放 candidates.csv (包含 20 篇以上專利之結構化候選池)
-│   ├── json/                        # 存放 raw_patents.json、us_claims.json 等 API 原始回傳資料
-│   ├── pdfs/                        # 存放檢索到的專利全文 PDF 檔案
-│   └── html/                        # 存放檢索網頁快照或 HTML 格式資料
-│
-└── output/                          # 中間產物：用來組成與生成報告的材料 (包含 docxmcp 組成 docx 的結構)
-    ├── <project_name>_技術洞察報告.md # 技術洞察報告原始 Markdown 檔案 (Markdown 屬於中間產出)
-    ├── manifest.json                # 資料池與產出物 manifest 設定檔 (與 docxmcp 調和)
-    ├── build_xlsx.py                # 生成與美化 Excel 專利表腳本 (使用 openpyxl)
-    ├── build_charts.py              # 繪製統計圖表腳本 (使用 matplotlib)
-    ├── build_docx_pkg.py            # 打包為 docxmcp Mode-A 包的腳本
-    ├── build_html.py                # 生成 HTML 預覽報告的腳本
-    ├── assets/                      # 存放繪圖與靜態資源
-    │   └── figures/                 # 存放 build_charts.py 繪製的 5 張統計圖表 (PNG)
-    └── chapters/                    # 存放 docxmcp 各章節內容的 XML 或結構化檔案
-```
-
-### 2. 中間產物 Manifest 規範 (`manifest.json`)
-資料池的 `manifest.json` 必須定義資料的格式與各檔案對應，以與 `docxmcp` 格式調和：
-```json
-{
-  "format": "patent_pool",
-  "project": "專案名稱",
-  "version": "rN",
-  "candidates": "candidates.csv",
-  "raw_data": "raw_patents.json",
-  "claims_store": "us_claims.json"
-}
-```
-
-### 3. 專利資料庫格式 (`candidates.csv`)
-統一欄位格式，欄位順序如下：
-`#,類別,代表專利號,申請人,優先權,國別,標題,推測CPC,相關性(1-5級),技術要點(蒸餾),命中要件,家族成員,連結,人工複核`
-
-### 4. 統計圖表與命名
-`build_charts.py` 生成的統計圖表必須固定命名與用途，以便 Markdown 與 Word 報告穩定引用：
-*   `assets/figures/fig1_country.png` - 專利國別分佈直方圖
-*   `assets/figures/fig2_scenario.png` - 專利相關性分佈直方圖 (取代原情境分佈)
-*   `assets/figures/fig3_ipc.png` - 主要 CPC 分類分佈橫向條形圖
-*   `assets/figures/fig4_smarthome.png` - 專利清單類別佔比圓餅圖
-*   `assets/figures/fig5_year.png` - 專利優先權年份分佈折線或條形圖
+要點摘錄(細節見 priorsearch.md §0):
+- **交付物 vs 中間產物物理隔離**:交付物(`<topic>_專利池.xlsx` + `<topic>_技術洞察報告.docx`)落 `99_deliverables/`;檢索中間產物分層落 `01_search/`(原始 JSON + `matrix-log.jsonl`)、`02_pool/`(candidates.csv + shortlist.json)、`03_assets/`(figures + patents)。
+- **檢索矩陣紀錄是 `01_search/matrix-log.jsonl`**(每行一筆結構化查詢),既是復現核心,也是 `search_audit` 機檢檢索強度的唯一資料源。
+- **candidates.csv 欄位 / 5 張 HSL 統計圖命名**:見 priorsearch.md §0。
+- **04_report 對齊 docxmcp**:`manifest.json` + `body.md` + `media/`,可直接 `assemble`。
 

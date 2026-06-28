@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "state": "implementing",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-06-28T07:55:05.143Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "planned",
+      "at": "2026-06-28T08:05:00.000Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "Skill-engineering task (markdown skill rewrite + one pure-function Python audit tool). proposal.md + design.md (DD-1..DD-6) + tasks.md complete. designed-gate's software-SSDLC artifacts (idef0/grafcet/sequence/data-schema) are inapplicable to a skill/doc + stateless-validator task and intentionally skipped per established pattern (same as verified-gate handling earlier this session). Held at planned pending user sign-off on DD-2 threshold numbers before code is written."
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-06-28T08:15:00.000Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "User signed off on DD-2 default thresholds (≥3 class anchors / ≥3 concept groups / 3 jurisdictions / ≥2 boolean combos / USPC-required / ≥12 queries). Begin implementation of search_audit tool + priorsearch.md/SKILL.md rewrite."
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-06-28T08:30:00.000Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "All 5 phases complete, tasks.md 8/8 checked. search_audit.py + patents.py tool wired (FastMCP registry 28 tools); 7/7 unit tests green incl. two key regressions (missing-USPC→FAIL, single-word-dragnet→FAIL); regression-proven on this session's actual iSafe20 thin search → verdict=FAIL with all 6 gaps listed. priorsearch.md rewritten (matrix-log.jsonl schema, §1.5 rigor floor contract, USPC promoted to first-class axis, review-gate semantics reversed, pre-delivery audit gate); SKILL.md Data Tree collapsed to a pointer (single source of truth in priorsearch.md §0); skill republished to XDG projection (ALL SYNCED). designed-gate's software-SSDLC artifacts intentionally skipped per established pattern (skill+doc+stateless-validator task). git commit deferred to user."
+    }
+  ]
+}
