@@ -49,7 +49,7 @@ TIPO GPSS 抓圖是自製爬蟲(非合法 API),前掛 Cloudflare WAF。現況工
 
 - **DD-6**: 非 TW 走 `extract_representative_figure` 不需 GPSS scrape session(它走 EPO/google_citation PDF chain;只有 EPO 失敗降級到 gpss_pdf 時才碰 GPSS,且走自己的 tool wrapper 取鎖)。batch 迴圈逐筆順序執行,維持整體單線。
 
-## Risks
+## Risks / Trade-offs
 
 - **R1**: GPSS INFO token per-search 仍需每筆重抓 → session 復用的增益主要在 TLS 連線 + Cloudflare cookie,非省略握手。緩解:這正是抗 challenge 的關鍵點,符合目標。
 - **R2**: batch 鎖內呼叫 `extract_representative_figure`,它內部又可能呼叫 `gpss_pdf` 源(fetch_patent_pdf 的 gpss_pdf 分支)→ `gpss_download_patent_pdf` 會嘗試取**同一把** `_GPSS_SCRAPE_LOCK` → **死鎖**。緩解見 DD-7。

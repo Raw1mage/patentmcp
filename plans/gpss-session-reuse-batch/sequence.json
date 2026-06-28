@@ -1,0 +1,49 @@
+[
+  {
+    "title": "Batch shares ONE session, cookie reuse across patents",
+    "participants": ["Caller", "Batch", "Session", "TIPO"],
+    "messages": [
+      { "from": "Caller", "to": "Batch", "text": "patentmcp_batch_download_figures([TW1, TW2, TW3])" },
+      { "from": "Batch", "to": "Session", "text": "new _GpssScrapeSession() (one httpx client)" },
+      { "from": "Batch", "to": "Session", "text": "fetch_representative_figure(TW1)" },
+      { "from": "Session", "to": "TIPO", "text": "guard(): lock+pace; portal handshake -> cf_clearance cookie set" },
+      { "from": "Session", "to": "Batch", "text": "handle TW1" },
+      { "from": "Batch", "to": "Session", "text": "fetch_representative_figure(TW2)" },
+      { "from": "Session", "to": "TIPO", "text": "guard(): REUSE cf_clearance cookie (no fresh-client challenge)" },
+      { "from": "Session", "to": "Batch", "text": "handle TW2" },
+      { "from": "Batch", "to": "Session", "text": "close() after loop" },
+      { "from": "Batch", "to": "Caller", "text": "{downloaded, skipped} handle" }
+    ]
+  },
+  {
+    "title": "Non-TW item routes to PDF pipeline (bug fix), not thumbnail",
+    "participants": ["Batch", "ExtractFig", "PDFchain"],
+    "messages": [
+      { "from": "Batch", "to": "ExtractFig", "text": "extract_representative_figure(US999)" },
+      { "from": "ExtractFig", "to": "PDFchain", "text": "fetch_patent_pdf -> FIG.1 page -> high-DPI PNG" },
+      { "from": "ExtractFig", "to": "Batch", "text": "report-grade PNG handle (NOT 60x80 thumbnail)" }
+    ]
+  },
+  {
+    "title": "Re-entrant non-TW path cannot deadlock (per-burst lock)",
+    "participants": ["Batch", "ExtractFig", "FetchPDF", "GpssPDF"],
+    "messages": [
+      { "from": "Batch", "to": "ExtractFig", "text": "extract_representative_figure(CN888) — batch loop holds NO lock" },
+      { "from": "ExtractFig", "to": "FetchPDF", "text": "fetch_patent_pdf (epo fails)" },
+      { "from": "FetchPDF", "to": "GpssPDF", "text": "gpss_pdf wrapper: _GPSS_POLICY.guard() acquires lock fresh" },
+      { "from": "GpssPDF", "to": "FetchPDF", "text": "PDF handle (lock released on exit, no re-entrant acquire)" }
+    ]
+  },
+  {
+    "title": "ppubs host block parks cooldown for the NEXT request",
+    "participants": ["Caller", "Ppubs", "Policy", "USPTO"],
+    "messages": [
+      { "from": "Caller", "to": "Ppubs", "text": "make_request(...)" },
+      { "from": "Ppubs", "to": "Policy", "text": "guard(): serialize+pace" },
+      { "from": "Ppubs", "to": "USPTO", "text": "HTTP request -> 429" },
+      { "from": "Ppubs", "to": "Policy", "text": "park_cooldown(retry_after)" },
+      { "from": "Ppubs", "to": "Policy", "text": "guard(): waits out cooldown before retry" },
+      { "from": "Ppubs", "to": "USPTO", "text": "retry request" }
+    ]
+  }
+]

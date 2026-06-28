@@ -1,0 +1,27 @@
+{
+  "diagram_title": "Soft-Batch Throttle Unification (gpss-session-reuse-batch)",
+  "node_reference": "A0",
+  "activities": [
+    { "id": "A1", "title": "Serialize+Pace Scrape Burst", "description": "SoftScrapePolicy.guard(): acquire single-flight lock, wait out active cooldown, pace random delay, yield with lock held", "decomposition": null },
+    { "id": "A2", "title": "Reuse Persistent Session Client", "description": "_GpssScrapeSession holds ONE httpx client; cookie jar (cf_clearance) accumulates across a batch instead of per-patent discard", "decomposition": null },
+    { "id": "A3", "title": "Batch Route Per Jurisdiction", "description": "patentmcp_batch_download_figures: TW -> session.fetch_representative_figure; non-TW -> extract_representative_figure PDF pipeline (not thumbnail)", "decomposition": null },
+    { "id": "A4", "title": "Park Cooldown On Host Block", "description": "On 429/403/challenge, park_cooldown so the NEXT guard() entry waits it out rather than re-bursting (ppubs + GPSS)", "decomposition": null }
+  ],
+  "arrows": [
+    { "id": "AR1", "source": "EXTERNAL", "target": "A1:input", "label": "scrape request (one HTTP burst)", "type": "input" },
+    { "id": "AR2", "source": "EXTERNAL", "target": "A1:control", "label": "Concurrency=1 + min/max delay + cooldown deadline", "type": "control" },
+    { "id": "AR3", "source": "EXTERNAL", "target": "A1:mechanism", "label": "asyncio.Lock + random + time.monotonic", "type": "mechanism" },
+    { "id": "AR4", "source": "A1:output", "target": "A2:input", "label": "lock held, paced", "type": "input" },
+    { "id": "AR5", "source": "EXTERNAL", "target": "A2:control", "label": "injected session_client vs throwaway", "type": "control" },
+    { "id": "AR6", "source": "EXTERNAL", "target": "A2:mechanism", "label": "_gpss_client asynccontextmanager + httpx cookie jar", "type": "mechanism" },
+    { "id": "AR7", "source": "A2:output", "target": "A3:input", "label": "scrape result handle", "type": "input" },
+    { "id": "AR8", "source": "EXTERNAL", "target": "A3:input", "label": "publication_numbers[]", "type": "input" },
+    { "id": "AR9", "source": "EXTERNAL", "target": "A3:control", "label": "TW prefix vs non-TW routing rule; thumbnail-ban", "type": "control" },
+    { "id": "AR10", "source": "EXTERNAL", "target": "A3:mechanism", "label": "_GpssScrapeSession + extract_representative_figure", "type": "mechanism" },
+    { "id": "AR11", "source": "A3:output", "target": "EXTERNAL", "label": "downloaded{} / skipped{} mapping handle", "type": "output" },
+    { "id": "AR12", "source": "EXTERNAL", "target": "A4:input", "label": "429/403/challenge response", "type": "input" },
+    { "id": "AR13", "source": "EXTERNAL", "target": "A4:control", "label": "cooldown_default_s / retry-after header", "type": "control" },
+    { "id": "AR14", "source": "EXTERNAL", "target": "A4:mechanism", "label": "SoftScrapePolicy.park_cooldown / note_block", "type": "mechanism" },
+    { "id": "AR15", "source": "A4:output", "target": "A1:control", "label": "active cooldown deadline (next guard waits)", "type": "control" }
+  ]
+}

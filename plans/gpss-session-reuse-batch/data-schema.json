@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "gpss-session-reuse-batch data contracts",
+  "definitions": {
+    "SoftScrapePolicyConfig": {
+      "type": "object",
+      "required": ["name", "min_delay", "max_delay", "cooldown_default_s"],
+      "properties": {
+        "name": { "type": "string", "description": "per-host label, e.g. TIPO-GPSS / USPTO-ppubs" },
+        "min_delay": { "type": "number", "description": "lower bound of random pace (seconds)" },
+        "max_delay": { "type": "number", "description": "upper bound of random pace (seconds); normalized if < min" },
+        "cooldown_default_s": { "type": "number", "description": "default cooldown parked on a host block" }
+      }
+    },
+    "TokenHandle": {
+      "type": "object",
+      "required": ["token", "rel", "download_url", "bytes", "sha256"],
+      "properties": {
+        "token": { "type": "string" },
+        "rel": { "type": "string" },
+        "download_url": { "type": "string" },
+        "bytes": { "type": "integer" },
+        "sha256": { "type": "string" }
+      }
+    },
+    "BatchDownloadResult": {
+      "type": "object",
+      "required": ["success", "downloaded", "skipped"],
+      "properties": {
+        "success": { "type": "boolean" },
+        "downloaded": {
+          "type": "object",
+          "description": "publication_number -> figure handle (TW: GPSS session; non-TW: extract_representative_figure PNG)",
+          "additionalProperties": { "$ref": "#/definitions/TokenHandle" }
+        },
+        "skipped": {
+          "type": "object",
+          "description": "publication_number -> skip record",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["reason"],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "enum": ["503_cooldown", "503_detected_added_to_cooldown", "503_exception_added_to_cooldown", "failed", "exception"]
+              },
+              "error": { "type": "string" },
+              "remaining_seconds": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    "ScrapeImplArgs": {
+      "type": "object",
+      "required": ["publication_number"],
+      "properties": {
+        "publication_number": { "type": "string" },
+        "session_client": {
+          "description": "injected persistent httpx.AsyncClient for batch cookie reuse; null/absent => throwaway client",
+          "type": ["object", "null"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,74 @@
+[
+  {
+    "id": "TV-1",
+    "requirement": "SoftScrapePolicy serialization",
+    "name": "guard serializes Concurrency=1 and drops nothing",
+    "given": "policy(min=0,max=0); fire 10 concurrent guard()-wrapped bodies",
+    "when": "await all 10",
+    "then": { "max_concurrent_bodies": 1, "bodies_ran": 10 }
+  },
+  {
+    "id": "TV-2",
+    "requirement": "SoftScrapePolicy pacing",
+    "name": "delay() sleeps within [min,max]",
+    "given": "policy(min=0.4,max=0.9); recorder over asyncio.sleep",
+    "when": "await policy.delay()",
+    "then": { "sleep_calls": 1, "each_sleep_in_range": [0.4, 0.9] }
+  },
+  {
+    "id": "TV-3",
+    "requirement": "SoftScrapePolicy cooldown",
+    "name": "park_cooldown then guard waits it out",
+    "given": "policy(min=0.1,max=0.1,cooldown=7); park_cooldown(7)",
+    "when": "enter guard()",
+    "then": { "sleeps_include_cooldown_wait": true, "sleeps_include_pace": 0.1, "body_ran": true }
+  },
+  {
+    "id": "TV-4",
+    "requirement": "GPSS convergence",
+    "name": "_GPSS_POLICY exists and alias lock wired",
+    "given": "import patents",
+    "when": "inspect module",
+    "then": { "has__GPSS_POLICY": true, "_GPSS_SCRAPE_LOCK_is_policy_lock": true }
+  },
+  {
+    "id": "TV-5",
+    "requirement": "Session reuse",
+    "name": "batch creates exactly one _GpssScrapeSession",
+    "given": "counting __init__; stub fig impl; no-op pace; 3 TW patents",
+    "when": "patentmcp_batch_download_figures([TW111,TW222,TW333])",
+    "then": { "session_init_count": 1, "downloaded_keys": ["TW111","TW222","TW333"] }
+  },
+  {
+    "id": "TV-6",
+    "requirement": "Batch non-TW bug fix",
+    "name": "non-TW routes to extract_representative_figure not thumbnail",
+    "given": "stub extract_representative_figure + get_patent spies",
+    "when": "patentmcp_batch_download_figures([US999,CN888])",
+    "then": { "extract_called": ["US999","CN888"], "get_patent_called": 0 }
+  },
+  {
+    "id": "TV-7",
+    "requirement": "Failure isolation",
+    "name": "one failing item does not abort batch",
+    "given": "extract returns failure for US_BAD only",
+    "when": "patentmcp_batch_download_figures([US_OK1,US_BAD,US_OK2])",
+    "then": { "downloaded_keys": ["US_OK1","US_OK2"], "skipped_has": "US_BAD", "skip_reason": "failed" }
+  },
+  {
+    "id": "TV-8",
+    "requirement": "Single-call unchanged",
+    "name": "single GPSS tool uses throwaway client",
+    "given": "stub fig impl capturing session_client; no-op pace",
+    "when": "gpss_download_representative_figure(TW123)",
+    "then": { "session_client_seen": null }
+  },
+  {
+    "id": "TV-9",
+    "requirement": "ppubs throttle",
+    "name": "PpubsClient owns a SoftScrapePolicy",
+    "given": "construct PpubsClient",
+    "when": "inspect .policy",
+    "then": { "is_SoftScrapePolicy": true, "name": "USPTO-ppubs" }
+  }
+]
