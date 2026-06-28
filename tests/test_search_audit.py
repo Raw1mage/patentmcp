@@ -1,9 +1,9 @@
 """Unit tests for search_audit: the priorsearch rigor gate (DD-1..DD-3).
 
 Covers:
-  - PASS:  a broad search meeting all six floors
-  - FAIL-A: missing USPC axis (the iSafe20 regression — US search with no USPC)
-  - FAIL-B: thin search (too few queries / anchors / concept groups / single-word dragnet)
+  - PASS:  a broad search meeting all five floors (class axis CPC/IPC only)
+  - NO-USPC: a US search with no USPC still PASSes (USPC dropped per user rule 2026-06-28)
+  - FAIL: thin search (too few queries / anchors / concept groups / single-word dragnet)
   - campaign override: raise-only floors + explicit jurisdiction exclusion escape hatch
   - malformed log fails loud
 
@@ -43,7 +43,8 @@ def _write_jsonl(records):
 
 def _broad_log():
     """A search that meets every floor: 3 jurisdictions, >=3 anchors,
-    >=3 concept groups, >=2 boolean shapes, USPC present, >=12 queries."""
+    >=3 concept groups, >=2 boolean shapes, >=12 queries.
+    Class axis is CPC/IPC only (USPC no longer used per user rule 2026-06-28)."""
     recs = []
     # TW (Chinese kw, ipc)
     recs.append(_q("Q01", "gpss", "TWA", ["G06Q50/08"], "ipc", ["履約"], "A", "AND"))
@@ -53,10 +54,10 @@ def _broad_log():
     recs.append(_q("Q04", "gpss", "CNA", ["G06Q50/08"], "ipc", ["验收"], "A", "AND"))
     recs.append(_q("Q05", "gpss", "CNA", ["G06Q20/02"], "ipc", ["托管"], "C", "OR"))
     recs.append(_q("Q06", "gpss", "CNB", ["G06F21/64"], "ipc", ["存证"], "D", "AND"))
-    # US (English kw) — include a USPC-anchored query
+    # US (English kw) — CPC/IPC only, no USPC
     recs.append(_q("Q07", "gpss", "USA", ["G06Q50/08"], "cpc", ["escrow"], "A", "AND"))
-    recs.append(_q("Q08", "gpss", "USA", ["705/300"], "uspc", ["milestone"], "C", "AND"))
-    recs.append(_q("Q09", "google", "US", ["G06Q10/06"], "cpc", ["risk score"], "E", "OR"))
+    recs.append(_q("Q08", "gpss", "USA", ["G06Q40/04"], "cpc", ["milestone"], "C", "AND"))
+    recs.append(_q("Q09", "gpss", "USA", ["G06Q10/06"], "cpc", ["risk score"], "E", "OR"))
     recs.append(_q("Q10", "gpss", "USB", ["G06F21/64"], "cpc", ["hash"], "D", "AND"))
     recs.append(_q("Q11", "gpss", "USA", ["G06N5/02"], "cpc", ["knowledge base"], "B", "OR"))
     recs.append(_q("Q12", "gpss", "USA", ["G06Q20/02"], "cpc", ["payment release"], "C", "AND"))
@@ -70,27 +71,22 @@ class TestSearchAuditPass(unittest.TestCase):
             res = sa.audit(path)
             self.assertEqual(res["verdict"], "PASS", res["gaps"])
             self.assertEqual(res["gaps"], [])
-            self.assertTrue(res["coverage"]["uspc_in_axis"])
             self.assertGreaterEqual(res["coverage"]["queries"], 12)
             self.assertEqual(res["coverage"]["jurisdictions"], 3)
         finally:
             os.unlink(path)
 
 
-class TestSearchAuditFailUspc(unittest.TestCase):
-    def test_missing_uspc_fails(self):
-        """The iSafe20 regression: a full US search but never USPC-anchored."""
-        recs = _broad_log()
-        # strip the only uspc query (Q08) → swap to cpc
-        for r in recs:
-            if r["query_id"] == "Q08":
-                r["axis"]["class_scheme"] = "cpc"
-                r["axis"]["class_codes"] = ["G06Q40/04"]
+class TestSearchAuditNoUspc(unittest.TestCase):
+    def test_cpc_ipc_only_still_passes(self):
+        """USPC dropped per user rule 2026-06-28: a CPC/IPC-only US search
+        (no USPC axis anywhere) must still PASS — USPC is no longer required."""
+        recs = _broad_log()  # already CPC/IPC only
         path = _write_jsonl(recs)
         try:
             res = sa.audit(path)
-            self.assertEqual(res["verdict"], "FAIL")
-            self.assertTrue(any("USPC" in g for g in res["gaps"]), res["gaps"])
+            self.assertEqual(res["verdict"], "PASS", res["gaps"])
+            self.assertFalse(any("USPC" in g for g in res["gaps"]), res["gaps"])
         finally:
             os.unlink(path)
 
@@ -101,7 +97,7 @@ class TestSearchAuditFailThin(unittest.TestCase):
         recs = [
             _q("Q01", "gpss", "USA", ["G06Q50/08"], "cpc", ["escrow"], "A", "SINGLE"),
             _q("Q02", "gpss", "USA", ["G06Q50/08"], "cpc", ["milestone"], "A", "SINGLE"),
-            _q("Q03", "google", "US", ["G06Q50/08"], "cpc", ["payment"], "A", "SINGLE"),
+            _q("Q03", "gpss", "USB", ["G06Q50/08"], "cpc", ["payment"], "A", "SINGLE"),
         ]
         path = _write_jsonl(recs)
         try:

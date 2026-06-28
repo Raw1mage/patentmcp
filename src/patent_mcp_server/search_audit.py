@@ -35,11 +35,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 # ── floor thresholds (design DD-2). campaign may raise, never lower. ──────
 FLOORS: Dict[str, Any] = {
-    "min_class_anchors": 3,    # distinct class codes across IPC/CPC/USPC
+    "min_class_anchors": 3,    # distinct class codes across IPC/CPC
     "min_concept_groups": 3,   # distinct campaign concept groups touched
     "min_jurisdictions": 3,    # TW + CN + US all present
     "min_boolean_combos": 2,   # at least 2 boolean shapes (not all SINGLE)
-    "uspc_required": True,     # US search must include >=1 USPC-anchored query
     "min_queries": 12,         # minimum cartesian coverage
 }
 
@@ -130,10 +129,6 @@ def load_campaign_overrides(path: Optional[str]) -> Dict[str, Any]:
         elif key == "exclude_jurisdiction":
             overrides.setdefault("exclude_jurisdiction", set())
             overrides["exclude_jurisdiction"].add(val.upper())
-        elif key == "uspc_required" and val.lower() in ("true", "false"):
-            # campaign may only TIGHTEN (true), never relax a true floor to false
-            if val.lower() == "true":
-                overrides["uspc_required"] = True
     return overrides
 
 
@@ -244,9 +239,6 @@ def audit(matrix_log_path: str, campaign_path: Optional[str] = None) -> Dict[str
         gaps.append(
             f"AND/OR 組合不足：{cov['boolean_combos']} < {thresholds['min_boolean_combos']}"
             f"（不可全 SINGLE 單詞海撈，需多種布林型態交叉）")
-    if thresholds.get("uspc_required") and ("US" in required_juris) and not cov["uspc_in_axis"]:
-        gaps.append(
-            "USPC 未入軸：US 檢索至少 1 條須以 USPC 為 class_scheme 限縮範圍")
     if cov["queries"] < thresholds["min_queries"]:
         gaps.append(
             f"總查詢筆數不足：{cov['queries']} < {thresholds['min_queries']}"
