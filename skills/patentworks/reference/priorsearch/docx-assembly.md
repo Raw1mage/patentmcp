@@ -10,8 +10,25 @@
 ## Mode A 流程(實測可行)
 
 ### 1. 準備報告 markdown
+
+> ## 🔒 交付硬契約(一句話總綱,違反即不合格)
+> **交付物一定要走 cht template 產出 docx;每一個內容元素的樣式必須是 template 預定樣式之一(標題X / 標X內 / 標X點 / 標X號 …);一定要有標題頁 + TOC 頁。**
+>
+> 拆解成可驗收的四條:
+> 1. **template 強制**:`assemble` 一律帶 cht template(預設 `cht_template.dotx`,`heading 1`–`5` 帶自動編號 `numPr`)。禁止裸 assemble、禁止 LibreOffice/pandoc 硬轉。
+> 2. **零 Normal orphan**:每個段落都必須落在 template 預定樣式 —— 標題走 `標題X`(由 `#/##/###` 階層決定)、內文走 `標X內`、條列走 `標X點`/`標X號`。**任何 rebuild 後仍是 `Normal` 的段落都是 orphan = 不合格**,須回頭把該行改成正確 markdown 形式(標題化、或 `- `/`1. ` 條列、或 `<!-- style: X -->`),不可放著。
+> 3. **標題頁 + TOC 頁必備**:順序固定 `標題頁 → TOC 頁 → 內文`。標題頁用 template 封面樣式(`置中大大`/`置中大`/`靠左大`),TOC 頁插真正的 Word TOC field(`TOC \o "1-3" \h \z \u`),非純文字佔位。
+> 4. **不可手動編號標題**:標題文字不要自己打 `第一章`/`1.1`/`一、`,assemble 會 strip,讓 template 自動編號當唯一真相。
+> 5. **標題只放短句,詳情下沉**:凡樣式為 `標題X`(`#/##/###`)者,**一律只能是短句/標籤**(名詞片語,不寫整句說明、不帶句號結尾、不塞細節)。該標題要講的內容**必須另起下一段用 `標X內` 說明**。禁止「把一整段說明文字當成標題」或「標題後直接接條列而無內文引言」。範式:`### 雙階段閘口狀態機`(短句標題)→ 換行 → `本系統將專案分為設計與施工兩大治理階段…`(標X內 詳情)。
+>
+> 這五條是文件編輯能力,**統一規範在 docxmcp companion skill `doc-workflow`**(B.5 markdown 契約 + front-matter 強制 + `標N{內,點,號}` depth-aware 樣式 + 標題短句紀律)。撰寫前務必 `skill(name="doc-workflow")`。本檔只負責把它釘成 patentworks 報告的交付閘。
+
 - 完整 `#`/`##`/`###` 標題階層(decompose-must-build-hierarchy:flat dump 會讓 assemble 無法套模板編號)。
 - 圖片引用用**契約格式**:`![alt](media/figN.png){width=6in}`。
+
+> **標題階層是文件編輯能力,歸 docxmcp 的 companion skill `doc-workflow`,不是 patentworks 的專屬職責。** 撰寫 `body.md` 時的「主動標題化紀律」(每個該標題化的段落必須打成 `##`/`###`,而非留成內文)由 doc-workflow A.2.2 統一規範。**本報告是 greenfield Mode A authoring(從零寫,無 signals.json)**,務必先 `skill(name="doc-workflow")` 載入,遵守其 greenfield 標題紀律與 `標N{內,點,號}` depth-aware 樣式契約。
+>
+> 機制提醒(為何「該標題化的文字變內文」):模板的 `標N{內,點,號}` 樣式是 **depth-aware**,深度只由前面的 `#/##/###` 標題建立。段落若不打成標題,depth 永遠停在 0 → 全部落 `Normal` → 模板多階標題設計失效。每個專利的「白話技術解析」、各章節編號子項都該是 `###`,不可是裸行。
 
 ### 2. 本地組 package
 package 目錄需含三件:
