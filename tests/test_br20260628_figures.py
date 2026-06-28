@@ -151,5 +151,66 @@ class GpssThrottleTest(unittest.TestCase):
         self.assertLessEqual(slept[0], P._GPSS_SCRAPE_MAX_DELAY)
 
 
+# ── G: GPSS figure URL classification (country + extension agnostic) ──
+# Locks the regex that splits a GPSS detail page's image URLs into the
+# representative thumbnail (<C>G1) vs the full 圖式(A1) series (<C>G2_<NNN>).
+# The old code hardcoded "TWG1" + ".png"; this matrix proves the new code is
+# country-agnostic AND extension-agnostic, including the EP edge case where the
+# SAME patent serves G1 as .jpg but G2 as .png.
+class GpssFigureUrlClassificationTest(unittest.TestCase):
+    import re as _re
+
+    @staticmethod
+    def _is_g2(u):
+        import re
+        return re.search(r'G2[^/]*_\d+\.(?:png|jpe?g|gif|tiff?)$', u, re.IGNORECASE) is not None
+
+    @staticmethod
+    def _is_g1(u):
+        import re
+        return re.search(r'G1[^/]*\.(?:png|jpe?g|gif|tiff?)$', u, re.IGNORECASE) is not None
+
+    # (url, expect_g1, expect_g2) — real samples observed across jurisdictions.
+    CASES = [
+        # US — png
+        ("/gpss2/gpssbkmusr/00004/USG120230081319A1.png", True, False),
+        ("/gpss2/gpssbkmusr/00004/USG220230081319A1_000.png", False, True),
+        ("/gpss2/gpssbkmusr/00004/USG220230081319A1_009.png", False, True),
+        # TW — png
+        ("/gpss2/gpssbkmusr/00003/TWG1202503567A.png", True, False),
+        ("/gpss2/gpssbkmusr/00003/TWG2202503567A_000.png", False, True),
+        # CN — jpg
+        ("/gpss2/gpssbkmusr/00015/CNG1120672280A.jpg", True, False),
+        ("/gpss2/gpssbkmusr/00015/CNG2120672280A_001.jpg", False, True),
+        # EP edge case — G1 jpg but G2 png on the SAME patent
+        ("/gpss2/gpssbkmusr/00099/CNG1107533716A.jpg", True, False),
+        ("/gpss2/gpssbkmusr/00099/CNG2107533716A_000.png", False, True),
+        # JP — png
+        ("/gpss2/gpssbkmusr/00050/JPG12023050048A.png", True, False),
+        ("/gpss2/gpssbkmusr/00050/JPG22023050048A_000.png", False, True),
+    ]
+
+    def test_classification_matrix(self):
+        for url, exp_g1, exp_g2 in self.CASES:
+            self.assertEqual(self._is_g1(url), exp_g1, f"G1 mismatch: {url}")
+            self.assertEqual(self._is_g2(url), exp_g2, f"G2 mismatch: {url}")
+
+    def test_g2_series_sorts_by_page(self):
+        urls = [
+            "/x/USG220230081319A1_002.png",
+            "/x/USG220230081319A1_000.png",
+            "/x/USG220230081319A1_001.png",
+        ]
+        g2 = sorted(u for u in urls if self._is_g2(u))
+        self.assertTrue(g2[0].endswith("_000.png"))
+        self.assertTrue(g2[-1].endswith("_002.png"))
+
+    def test_cache_buster_stripped(self):
+        raw = "/gpss2/gpssbkmusr/00004/USG220230081319A1_000.png?1559877649"
+        base = raw.split("?", 1)[0]
+        self.assertTrue(self._is_g2(base))
+        self.assertFalse(base.endswith("?1559877649"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

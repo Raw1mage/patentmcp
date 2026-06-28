@@ -1836,30 +1836,47 @@ async def extract_representative_figure(
 @mcp.tool()
 async def gpss_download_representative_figure(
     publication_number: str,
+    all_figures: bool = False,
 ) -> Dict[str, Any]:
-    """Download a patent's representative figure headlessly from TIPO GPSS into the token store.
+    """Download a patent's figure(s) from the TIPO GPSS detail page (COUNTRY-AGNOSTIC).
 
-    This replicates a browser session to fetch the static representative figure.
-    Returns a handle {token, rel, download_url, bytes, sha256} of the saved image.
+    Works for ANY jurisdiction (US/CN/TW/EP/WO/…). The GPSS detail page exposes
+    two figure families per patent — a low-res representative thumbnail (<C>G1)
+    and the full 圖式(A1) series (<C>G2_<NNN>, ~600px, _000 = FIG.1). This tool
+    prefers the full-resolution G2 page for the representative figure.
+
+    all_figures=False (default): returns ONE handle {token, rel, download_url,
+      bytes, sha256, figure_kind, full_figures_available} of the representative
+      figure (full-res G2 _000 when available).
+    all_figures=True: returns {representative, figures:[...], figure_count} where
+      figures is the whole full-res G2 全部圖式(A1) series — the same set a human
+      sees via the detail page's 影像 → 全部圖式(A1) menu.
 
     BR_20260628 A: serialized through _GPSS_POLICY (Concurrency=1 + random
     pacing + cooldown parking), so parallel calls cannot trip Cloudflare's
     Managed Challenge on tiponet.tipo.gov.tw.
     """
     async with _GPSS_POLICY.guard():
-        return await _gpss_download_representative_figure_impl(publication_number)
+        return await _gpss_download_representative_figure_impl(
+            publication_number, all_figures=all_figures
+        )
 
 
 async def _gpss_download_representative_figure_impl(
     publication_number: str,
     session_client=None,
+    all_figures: bool = False,
 ) -> Dict[str, Any]:
-    """Scrape one TW representative figure. NO lock here — the caller (the tool
-    wrapper or _GpssScrapeSession.fetch_*) owns _GPSS_SCRAPE_LOCK + pacing.
+    """Scrape one patent's figure(s) from the GPSS detail page (COUNTRY-AGNOSTIC).
+    NO lock here — the caller (the tool wrapper or _GpssScrapeSession.fetch_*)
+    owns _GPSS_SCRAPE_LOCK + pacing.
 
     session_client: when provided, reuse this persistent client (cookie jar /
     cf_clearance continuity across a batch); when None, a throwaway client is
     created and closed for this single scrape.
+    all_figures: when False (default) download only the representative figure
+    (prefers the full-res G2 _000 page); when True download the whole
+    G2 全部圖式(A1) series.
     """
     import re
 
@@ -1921,34 +1938,75 @@ async def _gpss_download_representative_figure_impl(
             detail_url = f"https://tiponet.tipo.gov.tw{m_detail.group(1)}"
             res_detail = await client.get(detail_url)
             
-            # Extract image URLs
-            img_urls = re.findall(r'/gpss[12]/gpssbkmusr/[^\'" >]+', res_detail.text)
-            img_urls = [url.split()[0] for url in img_urls]
-            img_urls = list(dict.fromkeys(img_urls))
-            
-            # Find representative figure (TWG1)
-            rep_img_url = None
-            for url in img_urls:
-                if "TWG1" in url:
-                    rep_img_url = url
-                    break
-            if not rep_img_url and img_urls:
-                rep_img_url = img_urls[0]
-                
-            if not rep_img_url:
-                return {"success": False, "error": "No representative figure found for this patent"}
-                
-            abs_img_url = f"https://tiponet.tipo.gov.tw{rep_img_url}"
-            
-            # Step 6: Fetch image bytes
-            img_res = await client.get(abs_img_url)
-            if img_res.status_code != 200:
-                return {"success": False, "error": f"Failed to download image (HTTP {img_res.status_code})"}
-                
-            # Put bytes to token store
-            filename = rep_img_url.rsplit("/", 1)[-1] or f"{pat}_figure.png"
-            entry = token_store.put_bytes(img_res.content, filename)
-            return _handle(entry)
+            # Extract image URLs (COUNTRY-AGNOSTIC). The GPSS detail page exposes
+            # two figure families for EVERY jurisdiction (US/CN/TW/EP/WO/…), the
+            # country prefix only changes the leading code:
+            #   <C>G1<NO>.png          -> representative THUMBNAIL (~300px, low-res)
+            #   <C>G2<NO>_<NNN>.png    -> FULL 圖式(A1) series (~600px), _000 = FIG.1
+            # The old code hardcoded "TWG1", so any non-TW patent never matched and
+            # fell through to img_urls[0] (whatever came first) AND never touched the
+            # high-res G2 series — that is why US/CN cases came back as a blurry
+            # thumbnail or "no figure". This handles all jurisdictions and prefers
+            # the full-resolution G2 pages (what the human sees via 影像→全部圖式(A1)).
+            # Image extension is jurisdiction-dependent (US/TW = .png, CN = .jpg, …),
+            # so match any common raster extension, not a hardcoded .png.
+            raw = re.findall(
+                r'/gpss\d?/gpssbkmusr/[^\'" >]+\.(?:png|jpe?g|gif|tiff?)',
+                res_detail.text, re.IGNORECASE,
+            )
+            seen = set()
+            img_urls = []
+            for u in raw:
+                base = u.split("?", 1)[0]  # strip cache-buster querystring
+                if base not in seen:
+                    seen.add(base)
+                    img_urls.append(base)
+
+            def _is_g2(u):
+                return re.search(r'G2[^/]*_\d+\.(?:png|jpe?g|gif|tiff?)$', u, re.IGNORECASE) is not None
+
+            def _is_g1(u):
+                return re.search(r'G1[^/]*\.(?:png|jpe?g|gif|tiff?)$', u, re.IGNORECASE) is not None
+
+            g2_series = sorted(u for u in img_urls if _is_g2(u))
+            g1_thumbs = [u for u in img_urls if _is_g1(u)]
+
+            async def _grab(rel_url):
+                r = await client.get(f"https://tiponet.tipo.gov.tw{rel_url}")
+                if r.status_code != 200:
+                    return None
+                return token_store.put_bytes(r.content, rel_url.rsplit("/", 1)[-1])
+
+            # Representative: prefer full-res G2 _000, else G1 thumb, else first image.
+            rep_url = (g2_series[0] if g2_series
+                       else (g1_thumbs[0] if g1_thumbs
+                             else (img_urls[0] if img_urls else None)))
+            if not rep_url:
+                return {"success": False, "error": "No figure found on the GPSS detail page for this patent"}
+
+            rep_entry = await _grab(rep_url)
+            if rep_entry is None:
+                return {"success": False, "error": "Failed to download representative figure"}
+            rep_handle = _handle(rep_entry)
+            rep_handle["figure_kind"] = "full_g2" if _is_g2(rep_url) else ("thumb_g1" if _is_g1(rep_url) else "unknown")
+            rep_handle["full_figures_available"] = len(g2_series)
+
+            if not all_figures:
+                return rep_handle
+
+            # all_figures=True: download the whole G2 全部圖式(A1) series (full-res).
+            figures = []
+            for u in g2_series:
+                ent = await _grab(u)
+                if ent is not None:
+                    figures.append(_handle(ent))
+            return {
+                "success": True,
+                "representative": rep_handle,
+                "figures": figures,
+                "figure_count": len(figures),
+                "source": "gpss_g2_full_figures",
+            }
             
     except Exception as e:
         return {"success": False, "error": f"GPSS figure download exception: {str(e)}"}
