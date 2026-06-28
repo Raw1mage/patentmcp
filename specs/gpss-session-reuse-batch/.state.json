@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "state": "verified",
+  "state": "living",
   "profile": [],
   "history": [
     {
@@ -18,6 +18,14 @@
       "by": "pkcs12",
       "mode": "migration",
       "reason": "全 9 phase 完成:GPSS figure/pdf/xml session 復用 + 統一 SoftScrapePolicy(GPSS+ppubs 全爬蟲面節流)+ 修 batch 非TW分支 bug。驗證:24 測試全綠;import smoke EXIT=0;容器已重建為 Up(healthy)。架構已同步,event log 已記,已 commit ca19bc8。verified gate artifacts 全補齊。"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-06-28T09:16:26.886Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "使用者明確指示畢業。全 9 phase 完成,24 測試全綠,容器已驗證 healthy,verified gate 通過。功能:全爬蟲面軟性批量節流(SoftScrapePolicy)+ GPSS session 復用 + batch 非TW分支 bug 修正。"
     }
   ]
 }
