@@ -61,12 +61,19 @@
 
 ### B. `gpss_search` 缺 `uspc` 參數 — USPC 軸無法在 GPSS 直接限縮
 
-- **現象**：本 session 才剛把 USPC 升為 search_audit 的一級限縮軸，但實際檢索時發現 `gpss_search` 的參數只有 `cpc` / `ipc`，**沒有 `uspc`**。在 BigQuery 已被禁用（預算超支）的前提下，USPC 軸只能改走 `uspto_patents`（PPUBS `CCL/705/300`），無法在主檢索引擎一站完成。
-- **後果**：USPC 軸與其他軸不對稱——CPC/IPC 能在 GPSS 一次 AND 進去，USPC 要跳到另一個工具、另一套查詢語法。最後在 search_audit 把 USPC 從強制降為非強制（已 commit），但這是被工具限制逼出來的妥協，不是設計初衷。
-- **RCA**：GPSS 後端（TIPO）本身的檢索式可能支援美國分類，但 `gpss_search` 的參數介面沒暴露 `uspc`。
-- **建議修復**：若 GPSS 後端支援，於 `gpss_search` 增 `uspc` 參數；否則在 companion skill 明確記載「USPC 軸必走 `uspto_patents`」並提供標準查詢樣板，讓 search_audit 的 USPC 要求有對應的可執行路徑。
+> **Status: VOID（作廢，非缺陷，2026-06-28）** — USPC 已全面退場(使用者規則 2026-06-28,commit `b7c5b0a` 移除 search_audit 的 `uspc_required` floor;後續 commit `da207d1` 清乾淨殘留 docstring / dead-field)。USPC 既不採用,`gpss_search` 沒有 `uspc` 參數即為**正確狀態**,本項不再是待修缺陷。分類軸僅用 CPC/IPC,兩者都能在 GPSS 一站 AND。
+
+- ~~**現象**：本 session 才剛把 USPC 升為 search_audit 的一級限縮軸...~~（前提已不成立:USPC 退場）
+- **處置**：作廢。CPC/IPC 為唯一分類軸,GPSS 原生支援,無缺口。
 
 ### C. `gpss_search` 不提供 INPADOC 家族 ID — 無法做家族 collapse
+
+> **Status: Resolved（誠實記載路線，2026-06-28，commit 待補）** — 採「誠實揭露限制」而非啟發式分群。**不做**「同申請人+同優先權」的啟發式家族（天條 #11 禁 fabrication:啟發式會製造假家族、誤導去重）。真家族級 collapse 一律走官方 `epo_family`。
+>
+> **修復內容**：
+> 1. `screening_table.py` `KNOWN_GAPS["family"]` 訊息修正——原寫「**Google 路**無 family_id」誤導(暗示 GPSS 有),改為「**GPSS 與 Google 路皆不提供** INPADOC family_id;去重僅到公開號級,家族級 collapse 須走 `epo_family`」。
+> 2. `patents.py` `build_screening_table` 的 gaps filter 原條件 `source=="google" or k in (legal_status,citations)`,GPSS 來源時 family 不 surface(沉默缺口);改為 family **不論來源都揭露**。
+> - **live 驗證 PASS**:`build_screening_table(cpc=G06Q50/08, databases=[USA])` 回 `source:gpss`、`gaps:{family:"GPSS 與 Google 路皆不提供 INPADOC family_id..."}`。skill §5 已記載此限制。
 
 - **現象**：455 筆候選只能以「公開號」去重，無法做全球專利家族（INPADOC family）collapse。報告 §六 誠實標註了此限制。
 - **RCA**：GPSS 搜尋介面不回傳 family ID。EPO OPS（`epo_family`）才有，但需另外逐件查、且有每週 4GB 流量限制，對 455 筆批量不切實際。

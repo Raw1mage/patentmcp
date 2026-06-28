@@ -278,5 +278,5 @@ def gpss_to_records(gpss_json: Dict[str, Any]) -> List[Dict[str, Any]]:
 KNOWN_GAPS = {
     "legal_status": "需 EPO/USPTO 法律狀態查詢(FTO 用)",
     "citations": "需 EPO/GPSS 引用資料",
-    "family": "Google 路無 family_id;去重需 GPSS/EPO 確認",
+    "family": "GPSS 與 Google 路皆不提供 INPADOC family_id;去重僅到公開號級,家族級 collapse 須走 epo_family",
 }

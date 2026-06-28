@@ -1078,9 +1078,12 @@ async def build_screening_table(
     columns = _st.resolve_columns(purpose, extra_fields, exclude_fields)
     data = _st.build_csv(deduped, columns)
     entry = token_store.put_bytes(data, filename)
+    # Honest gaps: family is unavailable from BOTH GPSS and Google search
+    # (neither exposes an INPADOC family_id), so surface it regardless of source
+    # (BR_20260628 C). legal_status/citations are never in-band either.
     gaps = {k: v for k, v in _st.KNOWN_GAPS.items()
             if (k in columns or k == "family")
-            and (source == "google" or k in ("legal_status", "citations"))}
+            and (source == "google" or k in ("legal_status", "citations", "family"))}
     return {
         "success": True,
         "handle": _handle(entry),
@@ -2418,7 +2421,7 @@ async def gpss_search(
     if date_from or date_to:
         conditions.append(GPSSCondition("ID", f"{date_from or ''}:{date_to or ''}"))
 
-    return await gpss_client.search(
+    res = await gpss_client.search(
         conditions=conditions,
         databases=databases,
         case_type=case_type,
@@ -2428,6 +2431,30 @@ async def gpss_search(
         skip=skip or 0,
         fmt="json",
     )
+
+    # BR_20260628 D: GPSS occasionally returns an empty/boilerplate-only Claim 1
+    # for US cases ("What is claimed is:" with no body). The raw JSON gives no
+    # signal, so a caller can silently hand off a blank claim. Surface a
+    # non-invasive advisory (reusing gpss_to_records as the single source of the
+    # claim1_empty rule) listing the pub numbers that need a PPUBS fallback —
+    # without mutating the original GPSS payload structure.
+    if isinstance(res, dict) and res.get("success"):
+        try:
+            recs = _st.gpss_to_records(res)
+            empties = [r.get("pubno", "") for r in recs if r.get("claim1_empty")]
+            res["claim1_audit"] = {
+                "checked": len(recs),
+                "empty_count": len(empties),
+                "empty_pubnos": empties,
+                "fallback": (
+                    "Claim 1 為空/僅樣板的公開號需走 ppubs_batch_get_claims 補抓"
+                    if empties else None
+                ),
+            }
+        except Exception as e:  # noqa: BLE001 — advisory must never break search
+            logger.warning("gpss_search claim1_audit failed: %s", e)
+
+    return res
 
 
 # =====================================================================

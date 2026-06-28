@@ -38,7 +38,7 @@ disclosure(交底書)→ screening(查新)→ analysis(分析)→ drafting(起�
 4. **AI 做預篩/起草草稿 + 解釋,人類複核裁決**(專利有法律份量)。
 5. **來源優先序——官方 REST API 優先,Google 爬蟲是最後手段**:
    - **⛳ 來源梯窮舉門檻(Exhaustion Gate)——硬規則**:**在報告中宣告任一資料欄位(逐字 Claim 1 / 代表圖 / 全文 / 書目)「從缺 / 無解」之前,必須沿下方來源梯逐級走完,並在報告「誠實缺口」章為每一級留下實測結果(成功 / 失敗 + 失敗原因)。** 只在第①級回空就停手 = **流程缺陷,不是合法降級**。對應 `search_audit`「先驗過程再驗產物」的精神——同一套窮舉思維延伸到「取文/取圖強度」。常見漏走的下一級:
-     - **Claim 1 回空** → 走 ③`uspto_patents`(US 案最可靠,實證 `ppubs_batch_get_claims` 一次可補完整逐字 Claim 1);GPSS records 帶 `claim1_empty: true` 旗標即為 fallback 觸發訊號。
+     - **Claim 1 回空** → 走 ③`uspto_patents`(US 案最可靠,實證 `ppubs_batch_get_claims` 一次可補完整逐字 Claim 1);觸發訊號有二:`gpss_search` 回應的 `claim1_audit{empty_count, empty_pubnos[]}`(工具層直接給,列出需補抓的公開號),以及 `gpss_to_records` / `build_screening_table` 的 records 帶 `claim1_empty: true`。
      - **代表圖缺** → 先 `fetch_patent_pdf`(官方路由優先),圖通常**就在已下載的 PDF 裡**;`extract_representative_figure` 對掃描版回 `NO_FIGURE_PAGE_BUT_IMAGES_PRESENT`(帶 `image_count`)時,代表「圖在 PDF 內、只是定位器對無文字層失效」,應從已下載 PDF 抽圖,**不是宣告無圖**。
      - **某工具回空 / 某定位器失敗 ≠ 整件事終局無解**;一律換工具 / 走下一級 / 從已在手的中間產物再加工。
    - **① GPSS**(`gpss_search`,**首選**)——TIPO 官方 REST,一次回 PN/AN/標題/摘要/Claim1/CPC/IPC/申請人/日期,IPC 錨定,一站涵蓋 US/CN/TW。逐字 Claim 1 用 `gpss_search(pub_number=...)` 單號查詢三地通用。**已知限制**:(a) **US 案 Claim 1 偶為空**(只回 "What is claimed is:" 無內文)——records 會帶 `claim1_empty: true`,須走 ③PPUBS 補抓;(b) **不提供 INPADOC 家族 ID**,去重僅到「公開號級」,要家族級 collapse 走 ②`epo_family`;(c) **無 USPC 軸**——`gpss_search` 只有 `cpc`/`ipc`,US 分類限縮須走 ③`uspto_patents`(PPUBS `CCL/<class>/<subclass>` 語法)。

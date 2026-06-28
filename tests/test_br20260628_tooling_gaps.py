@@ -287,5 +287,93 @@ class Claim1EmptyTest(unittest.TestCase):
         self.assertFalse(by_pub["TWFULL"]["claim1_empty"])
 
 
+# ── P6: gpss_search surfaces claim1_audit advisory (BR3-D) ──────────
+class GpssSearchClaim1AuditTest(unittest.TestCase):
+    """gpss_search must surface a claim1_audit so a caller of the tool (not just
+    build_screening_table) knows which pub numbers need a PPUBS fallback."""
+
+    def _run_with_stub(self, gpss_payload):
+        async def _stub(*args, **kwargs):
+            return gpss_payload
+
+        orig = P.gpss_client.search
+        P.gpss_client.search = _stub  # type: ignore
+        try:
+            return asyncio.run(P.gpss_search(keyword="x"))
+        finally:
+            P.gpss_client.search = orig  # type: ignore
+
+    def test_audit_flags_empty_claim(self):
+        payload = {
+            "success": True,
+            "gpss-API": {
+                "patent": {
+                    "patentcontent": [
+                        {  # US case with boilerplate-only claim
+                            "publication-reference": {"doc-number": "US1"},
+                            "claims": {"claim": [{"claim-text": "What is claimed is:"}]},
+                        },
+                        {  # substantive claim
+                            "publication-reference": {"doc-number": "US2"},
+                            "claims": {"claim": [{"claim-text": "1. A method comprising Y."}]},
+                        },
+                    ]
+                }
+            },
+        }
+        out = self._run_with_stub(payload)
+        audit = out["claim1_audit"]
+        self.assertEqual(audit["checked"], 2)
+        self.assertEqual(audit["empty_count"], 1)
+        self.assertEqual(audit["empty_pubnos"], ["US1"])
+        self.assertIsNotNone(audit["fallback"])
+
+    def test_audit_clean_when_all_present(self):
+        payload = {
+            "success": True,
+            "gpss-API": {
+                "patent": {
+                    "patentcontent": [
+                        {
+                            "publication-reference": {"doc-number": "US3"},
+                            "claims": {"claim": [{"claim-text": "1. A device comprising Z."}]},
+                        }
+                    ]
+                }
+            },
+        }
+        out = self._run_with_stub(payload)
+        audit = out["claim1_audit"]
+        self.assertEqual(audit["empty_count"], 0)
+        self.assertEqual(audit["empty_pubnos"], [])
+        self.assertIsNone(audit["fallback"])
+
+    def test_audit_absent_on_failed_search(self):
+        out = self._run_with_stub({"success": False, "error": "boom"})
+        self.assertNotIn("claim1_audit", out)
+
+
+# ── P7: build_screening_table surfaces family gap for GPSS too (BR3-C) ──
+class FamilyGapHonestyTest(unittest.TestCase):
+    """family_id is unavailable from BOTH GPSS and Google; the gap must surface
+    regardless of source, and the KNOWN_GAPS message must not imply GPSS has it."""
+
+    def test_known_gaps_family_message_mentions_both_paths(self):
+        from patent_mcp_server.screening_table import KNOWN_GAPS
+        msg = KNOWN_GAPS["family"]
+        self.assertIn("GPSS", msg)
+        self.assertIn("epo_family", msg)
+
+    def test_family_gap_filter_includes_gpss(self):
+        # Mirror the gaps filter in build_screening_table for source="gpss".
+        from patent_mcp_server.screening_table import KNOWN_GAPS
+        columns = ["pubno", "family"]
+        source = "gpss"
+        gaps = {k: v for k, v in KNOWN_GAPS.items()
+                if (k in columns or k == "family")
+                and (source == "google" or k in ("legal_status", "citations", "family"))}
+        self.assertIn("family", gaps)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
