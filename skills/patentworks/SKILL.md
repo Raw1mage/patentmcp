@@ -75,6 +75,7 @@ disclosure(交底書)→ screening(查新)→ analysis(分析)→ drafting(起�
 > **單一真相在 `flows/priorsearch.md §0`。** 正式 landscape/前案地圖任務的固化工作資料夾結構(`priorart_<topic>/` 的 `00_campaign.md` / `01_search/`(含 `matrix-log.jsonl` schema) / `02_pool/`(含 candidates.csv 欄位格式) / `03_assets/`(含 5 張統計圖命名) / `04_report/`(docxmcp Mode A package) / `99_deliverables/`)一律以該檔為準,本檔不再平行定義第二套目錄,以免漂移。
 
 要點摘錄(細節見 priorsearch.md §0):
+- **工作資料夾根落 `output/`(MUST)**:整包 `priorart_<topic>/` 一律建在專案的 `output/priorart_<topic>/`,**不得**散落專案根目錄(cwd 根)。它整包屬「中間產物 + 衍生交付物」,專案根只留 `input/`(使用者輸入)、最終呈交成品與 `plans/`(治理)。細節與理由見 priorsearch.md §0「落點」。
 - **交付物 vs 中間產物物理隔離**:交付物(`<topic>_專利池.xlsx` + `<topic>_技術洞察報告.docx`)落 `99_deliverables/`;檢索中間產物分層落 `01_search/`(原始 JSON + `matrix-log.jsonl`)、`02_pool/`(candidates.csv + shortlist.json)、`03_assets/`(figures + patents)。
 - **檢索矩陣紀錄是 `01_search/matrix-log.jsonl`**(每行一筆結構化查詢),既是復現核心,也是 `search_audit` 機檢檢索強度的唯一資料源。
 - **candidates.csv 欄位 / 5 張 HSL 統計圖命名**:見 priorsearch.md §0。

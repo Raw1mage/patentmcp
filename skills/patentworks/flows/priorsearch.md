@@ -8,8 +8,10 @@
 
 每個檢索任務建立一個工作資料夾,結構固定。`04_report/` 直接採 docxmcp 文字文件 package 慣例(`manifest.json` + `body.md` + `media/`),使其能無痛餵進 docxmcp Mode A assemble。
 
+> **落點(MUST)**:工作資料夾根 `priorart_<topic>/` **一律建在專案的 `output/` 底下**(即 `output/priorart_<topic>/`),**不得**散落在專案根目錄(cwd 根)。理由:`priorart_<topic>/` 整包是任務的「中間產物 + 衍生交付物」(原始檢索 JSON、候選池、素材圖、報告 package、最終 DOCX/XLSX),全部屬於產出物範疇;專案根目錄只保留使用者輸入面(`input/`)、最終呈交給使用者的成品,以及計畫治理檔(`plans/`)。把工作資料夾落在根層會污染交付目錄根、混淆「輸入 vs 產出」邊界。若專案無 `output/` 則先建立。
+
 ```
-priorart_<topic>/                    ← 工作資料夾根(一案一夾)
+output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 output/ 下)
 ├── 00_campaign.md                   ← 檢索計畫:主題/IPC錨點/三地/日期/件數目標/硬條件
 ├── 01_search/                       ← 檢索中間產物(完整 search history;API quota 換來的資料一律落地,見保存契約)
 │   ├── probes.md                    ← 校準探針結果(各錨點小量試打的命中量級)
