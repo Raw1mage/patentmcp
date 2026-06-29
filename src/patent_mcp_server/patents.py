@@ -1734,6 +1734,93 @@ def _render_page_png(pdf_path: str, page: int, dpi: int = 200) -> Optional[bytes
     return None
 
 
+# ---------------------------------------------------------------------
+# PDF identity verification (BR_20260629): a fetched/scraped PDF may be a
+# DIFFERENT patent than requested — GPSS fuzzy search landing on a neighbour,
+# or a fallback source returning the wrong document. Landing such a PDF as a
+# figure source SILENTLY injects a wrong patent's drawing into deliverables
+# (CN120543023A once landed CN121094816's spec inner page and reported
+# success). Verify the PDF's own publication number (read from its text layer)
+# against the requested number before trusting it. Fail LOUD on a confirmed
+# mismatch; never silently fall back to the wrong document.
+# ---------------------------------------------------------------------
+
+# Publication-number token inside a PDF text layer: 2-letter country + a digit
+# core (optionally split by spaces/slashes by pdftotext, with an optional
+# leading series letter) + optional kind code. Matches "CN 121094816 A",
+# "US 2023/0081319 A1", "TW I854998 B".
+_PDF_PUBNO_RE = _re_fig.compile(
+    r"\b([A-Z]{2})[\s/]{0,2}([A-Z]?\d[\d\s/,]{3,}\d)\s*([A-Z]\d?)?",
+)
+
+
+def _pubno_digit_core(s: str) -> str:
+    """Digit core of a publication number: strip country prefix + kind suffix.
+
+    "CN120543023A" -> "120543023", "US20230081319A1" -> "20230081319",
+    "TWI854998B" -> "854998". Mirrors the GPSS neighbour-guard _req_core so the
+    two identity guards stay consistent.
+    """
+    import re
+    t = re.sub(r"^[A-Za-z]+", "", (s or "").strip())
+    m = re.search(r"\d+", t)
+    return m.group(0) if m else ""
+
+
+def _detect_pdf_pubno_cores(pdf_path: str, max_pages: int = 5) -> List[str]:
+    """Collect candidate publication-number digit cores from a PDF text layer.
+
+    Scans the first `max_pages` pages (cover + opening spec pages carry the
+    document's own publication number in the header/footer). Returns the
+    DISTINCT digit cores (length >= 5) found, order-preserving. Empty list when
+    the PDF has no usable text layer (scanned image) — the caller treats that as
+    INCONCLUSIVE, never as a mismatch.
+    """
+    import re
+    pages = _pdf_page_count(pdf_path)
+    if pages <= 0:
+        return []
+    cores: List[str] = []
+    seen = set()
+    for p in range(1, min(max_pages, pages) + 1):
+        text = _pdf_page_text(pdf_path, p)
+        if not text.strip():
+            continue
+        for m in _PDF_PUBNO_RE.finditer(text):
+            digits = re.sub(r"\D", "", m.group(2))
+            if len(digits) >= 5 and digits not in seen:
+                seen.add(digits)
+                cores.append(digits)
+    return cores
+
+
+def _verify_pdf_identity(pdf_path: str, requested: str) -> Dict[str, Any]:
+    """Verify a PDF really is the requested patent (BR_20260629).
+
+    Returns {verified, requested_core, detected_cores, reason}:
+      verified=True  — requested core found among the PDF's own pubno tokens.
+      verified=False — pubno tokens detected but NONE match the requested core
+                       (WRONG patent: a fuzzy neighbour or a wrong fallback).
+      verified=None  — no pubno token detected (no text layer / unreadable);
+                       INCONCLUSIVE — the caller may proceed but must NOT claim
+                       the identity is verified.
+    """
+    requested_core = _pubno_digit_core(requested)
+    detected = _detect_pdf_pubno_cores(pdf_path)
+    if not requested_core:
+        return {"verified": None, "requested_core": requested_core,
+                "detected_cores": detected, "reason": "no requested core"}
+    if not detected:
+        return {"verified": None, "requested_core": requested_core,
+                "detected_cores": detected, "reason": "no pubno in text layer"}
+    if requested_core in detected:
+        return {"verified": True, "requested_core": requested_core,
+                "detected_cores": detected, "reason": "match"}
+    return {"verified": False, "requested_core": requested_core,
+            "detected_cores": detected,
+            "reason": "no detected core matches requested"}
+
+
 @mcp.tool()
 async def extract_representative_figure(
     publication_number: Optional[str] = None,
@@ -1792,6 +1879,24 @@ async def extract_representative_figure(
         import shutil as _shutil
         _shutil.copyfile(src_pdf_path, pdf_path)
 
+        # Step 1b: identity verification (BR_20260629). The fetch fallback chain
+        # can return a DIFFERENT patent's PDF (a fuzzy GPSS neighbour, or a
+        # wrong document from a fallback source). Landing its figure would
+        # SILENTLY inject the wrong patent's drawing into deliverables and still
+        # report success. Verify the PDF's own publication number before trusting
+        # it; fail LOUD on a confirmed mismatch (verified is False). A None
+        # verdict (no text layer) is INCONCLUSIVE — proceed but stamp it.
+        identity = _verify_pdf_identity(pdf_path, publication_number)
+        if identity["verified"] is False:
+            return {"success": False, "error": "WRONG_PATENT_FETCHED",
+                    "publication_number": publication_number,
+                    "requested_number_core": identity["requested_core"],
+                    "detected_number_cores": identity["detected_cores"],
+                    "detail": ("取回的 PDF 內文 publication number 與請求號不符 —— "
+                               "fallback 來源回了錯件專利,拒絕用其圖頁(避免錯件圖靜默落地)。"),
+                    "source_pdf": {"source": pdf_res.get("source"),
+                                   "provenance": pdf_res.get("provenance")}}
+
         # Step 2: locate the figure page.
         loc = _locate_figure_page(pdf_path)
         if loc["page"] is None:
@@ -1830,6 +1935,11 @@ async def extract_representative_figure(
     result["locate_method"] = loc["method"]
     result["source_pdf"] = {"source": pdf_res.get("source"),
                             "provenance": pdf_res.get("provenance")}
+    # Stamp the identity verdict so callers / human QA can see whether the PDF's
+    # pubno was confirmed (verified=True) or merely inconclusive (verified=None,
+    # e.g. scanned PDF with no text layer). verified=False never reaches here.
+    result["identity_verified"] = identity["verified"]
+    result["detected_number_cores"] = identity["detected_cores"]
     return result
 
 
@@ -2475,9 +2585,30 @@ async def fetch_patent_pdf(
             try:
                 res_gpss = await gpss_download_patent_pdf(publication_number)
                 if res_gpss.get("success"):
+                    # BR_20260629: GPSS headless search is fuzzy — it can land on
+                    # a NEIGHBOUR patent and return the WRONG document. Verify the
+                    # scraped PDF's own publication number before trusting it; a
+                    # confirmed mismatch (verified is False) is a source FAILURE,
+                    # NOT a silent fallback to the wrong patent.
+                    try:
+                        gpss_pdf_path = str(token_store.blob_path(
+                            res_gpss["token"], res_gpss["rel"]))
+                        ident = _verify_pdf_identity(gpss_pdf_path, publication_number)
+                    except Exception:  # noqa: BLE001
+                        ident = {"verified": None, "requested_core": "",
+                                 "detected_cores": [], "reason": "verify error"}
+                    if ident["verified"] is False:
+                        attempts.append({
+                            "source": src, "ok": False,
+                            "error": "WRONG_PATENT_FETCHED",
+                            "requested_number_core": ident["requested_core"],
+                            "detected_number_cores": ident["detected_cores"]})
+                        continue
                     res_gpss["source"] = src
                     res_gpss["provenance"] = {"api": "TIPO GPSS headless session",
-                                              "scraping": True}
+                                              "scraping": True,
+                                              "identity_verified": ident["verified"],
+                                              "detected_number_cores": ident["detected_cores"]}
                     attempts.append({"source": src, "ok": True, "bytes": res_gpss.get("bytes")})
                     if include_attempts:
                         res_gpss["attempts"] = attempts

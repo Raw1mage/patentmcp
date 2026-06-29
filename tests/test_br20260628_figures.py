@@ -258,5 +258,85 @@ class GpssNeighbourGuardTest(unittest.TestCase):
         )
 
 
+# ── H: BR_20260629 PDF identity verification (wrong-patent fallback guard) ──
+# The fetch fallback chain can return a DIFFERENT patent's PDF (a fuzzy GPSS
+# neighbour, or a wrong fallback source). Landing its figure SILENTLY injects
+# the wrong patent's drawing and still reports success. These tests lock the
+# identity guard: a confirmed pubno mismatch -> WRONG_PATENT_FETCHED, no land.
+class PdfIdentityVerificationTest(unittest.TestCase):
+    def test_pubno_digit_core(self):
+        self.assertEqual(P._pubno_digit_core("CN120543023A"), "120543023")
+        self.assertEqual(P._pubno_digit_core("US20230081319A1"), "20230081319")
+        self.assertEqual(P._pubno_digit_core("TWI854998B"), "854998")
+        self.assertEqual(P._pubno_digit_core(""), "")
+
+    def test_detect_pubno_cores_from_header(self):
+        import tempfile
+        td = tempfile.mkdtemp()
+        pdf = os.path.join(td, "cn.pdf")
+        # Simulate the CN543 incident: the PDF's own header is CN121094816.
+        _make_pdf(pdf, ["CN 121094816 A  説明書  4/11 頁",
+                        "FIG. 1\n10 12 14 16"])
+        cores = P._detect_pdf_pubno_cores(pdf)
+        self.assertIn("121094816", cores)
+
+    def test_verify_match(self):
+        import tempfile
+        td = tempfile.mkdtemp()
+        pdf = os.path.join(td, "ok.pdf")
+        _make_pdf(pdf, ["CN 120543023 A  説明書", "FIG. 1\n10 12 14"])
+        v = P._verify_pdf_identity(pdf, "CN120543023A")
+        self.assertTrue(v["verified"])
+        self.assertEqual(v["requested_core"], "120543023")
+
+    def test_verify_mismatch_is_false(self):
+        import tempfile
+        td = tempfile.mkdtemp()
+        pdf = os.path.join(td, "wrong.pdf")
+        # Requested CN120543023A but the PDF is actually CN121094816.
+        _make_pdf(pdf, ["CN 121094816 A  説明書  4/11 頁", "FIG. 1\n10 12 14"])
+        v = P._verify_pdf_identity(pdf, "CN120543023A")
+        self.assertFalse(v["verified"])
+        self.assertIn("121094816", v["detected_cores"])
+        self.assertNotIn("120543023", v["detected_cores"])
+
+    def test_verify_no_text_layer_is_inconclusive(self):
+        import tempfile
+        td = tempfile.mkdtemp()
+        pdf = os.path.join(td, "blank.pdf")
+        _make_pdf(pdf, ["   "])
+        v = P._verify_pdf_identity(pdf, "CN120543023A")
+        self.assertIsNone(v["verified"])
+
+    def test_extract_tool_rejects_wrong_patent(self):
+        # End-to-end: fetch returns a PDF whose header is a DIFFERENT patent;
+        # extract_representative_figure must return WRONG_PATENT_FETCHED, never
+        # land a figure.
+        import tempfile
+        td = tempfile.mkdtemp()
+        wrong_pdf = os.path.join(td, "wrong.pdf")
+        _make_pdf(wrong_pdf, ["CN 121094816 A  説明書  4/11 頁",
+                              "FIG. 1\n10 12 14 16 18 20"])
+
+        async def _fake_fetch(pn, *a, **k):
+            return {"success": True, "token": "tk", "rel": "wrong.pdf",
+                    "source": "gpss_pdf",
+                    "provenance": {"scraping": True}}
+
+        orig_fetch = P.fetch_patent_pdf
+        orig_blob = P.token_store.blob_path
+        P.fetch_patent_pdf = _fake_fetch  # type: ignore
+        P.token_store.blob_path = lambda tok, rel: wrong_pdf  # type: ignore
+        try:
+            out = asyncio.run(P.extract_representative_figure("CN120543023A"))
+        finally:
+            P.fetch_patent_pdf = orig_fetch  # type: ignore
+            P.token_store.blob_path = orig_blob  # type: ignore
+        self.assertFalse(out["success"])
+        self.assertEqual(out["error"], "WRONG_PATENT_FETCHED")
+        self.assertEqual(out["requested_number_core"], "120543023")
+        self.assertIn("121094816", out["detected_number_cores"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
