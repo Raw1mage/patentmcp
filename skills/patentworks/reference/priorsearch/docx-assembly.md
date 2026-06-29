@@ -62,13 +62,41 @@ cd .docxpkg && tar -cf - . | curl -s --unix-socket <docxmcp.sock> \
 # → {"token":"tok_...","doc_dir":"..."}
 ```
 
-### 4. assemble
+### 4. assemble(必帶 cover_spec + TOC，否則沒標題頁)
 ```
-docxmcp_document(action="assemble", doc_dir="tok_...", title="...報告標題...")
-# → ok=True; 產出 rebuilt.docx
+docxmcp_document(
+  action="assemble", doc_dir="tok_...", template="cht_template.dotx",
+  cover_spec='{"blocks":[
+    {"style":"置中大大","text":"報告標題"},
+    {"style":null},
+    {"style":"置中大","text":"副標題"},
+    {"style":"置中","text":"中華民國 115 年 6 月 29 日"}
+  ]}',
+  include_toc=true, toc_title="目　　錄", toc_levels="1-3"
+)
+# → ok=True; 產出 rebuilt.docx(標題頁 → TOC 頁 → 內文)
 ```
 - `doc_dir` 直接吃 token 字串。
-- 成功回傳 `rebuilt.docx` 的 blob 路徑。
+- `template` 帶**真名 `cht_template.dotx`**(不是 `cht`;裸名找不到會回 `DOCUMENT_DOCX_TEMPLATE_REQUIRED`)。
+
+#### ⚠️ cover_spec schema 是成敗關鍵(本 session 踩坑點，與 manifest format 同級)
+- **`blocks[]` 的鍵是 `style`(樣式真名)，不是 `type`**。帶 `{"type":"title",...}` → assemble 不認得該鍵
+  → **標題頁靜默不生成** → 文件題目退回吃 body.md 的 `# heading 1`，內文階層全部從 `heading 2` 起跳
+  (使用者實際回報的「沒有標題頁/TOC 頁、標題一被題目佔用」就是這個 bug)。
+- **`style` 值必須是模板封面樣式真名**。cht_template.dotx 實際只有(grep styles.xml 證實)：
+  - `置中大大`(styleId aff3) — 報告主標題
+  - `置中大`(aff2) — 副標題
+  - `置中`(aff0) — 日期/單位等小字
+  - `靠左大`(aff4) — 左對齊大字(備用)
+  - **沒有 `置中大大大`**。口語常說的「置中大大大」在模板裡不存在，帶了一樣不認得 → 退回 orphan。
+- `{"style":null}` 是**空行佔位**(標題與副標題間留白)，合法。
+- TOC 頁靠 `include_toc=true` 生成真正的 Word TOC field(`TOC \o "1-3" \h \z \u`)，非純文字佔位；
+  下載後在 Word 按 F9 更新功能變數即顯示頁碼。
+
+#### 文件題目 vs 第一章標題的分工(別讓題目吃掉 heading 1)
+- **報告題目走 cover_spec 的 `置中大大`**(封面頁)，**不要**在 body.md 用 `# 報告題目` 當第一行。
+- body.md 的 `#`(heading 1)留給**第一個真章節**(如 `# 一、檢索方法`)，`##`/`###` 順階展開。
+- 若題目誤放 body.md `#`：題目佔掉 heading 1 自動編號 → 真章節被迫從 heading 2 起 → 整份階層位移一級。
 
 ### 5. 下載回交付位置
 ```bash
