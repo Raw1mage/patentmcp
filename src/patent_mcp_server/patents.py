@@ -1767,6 +1767,99 @@ def _pubno_digit_core(s: str) -> str:
     return m.group(0) if m else ""
 
 
+# Alias used by the gpss3 headless scrapers so the row-selection guard and the
+# PDF identity guard share one digit-core definition.
+def _gpss_pubno_digit_core(s: str) -> str:
+    return _pubno_digit_core(s)
+
+
+def _gpss_extract_info(html: str) -> str:
+    """Extract the GPSS INFO session token. gpss3 emits it UNQUOTED
+    (`name=INFO value=005B83E9...`); gpss2 used quotes. Handles both orders."""
+    import re
+    m = re.search(r'name=["\']?INFO["\']?\s+value=["\']?([A-Za-z0-9]+)["\']?', html, re.IGNORECASE)
+    if not m:
+        m = re.search(r'value=["\']?([A-Za-z0-9]+)["\']?\s+name=["\']?INFO["\']?', html, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
+def _gpss_extract_action(html: str) -> str:
+    """Extract the search-form action path. gpss3's action carries a
+    `?@@<num>` query (`action="/gpss3/gpsskmc/gpssbkm?@@1032516905"`); the
+    regex keeps the full path+query. Falls back to a bare gpss3 path."""
+    import re
+    m = re.search(r'action=["\']?(/gpss[123]?/gpsskmc/gpssbkm[^\'"\s>]*)["\']?', html, re.IGNORECASE)
+    return m.group(1) if m else '/gpss3/gpsskmc/gpssbkm'
+
+
+def _gpss_iter_result_rows(html: str):
+    """Yield (harder_path, doc_type, embedded_pubno_core, link02_href) for each
+    result-list row's harder() document anchor.
+
+    gpss3 list row anchors look like:
+      onclick="harder(this,'/gpss3/gpsskmc/gpssbkm?<HEX>^CN_AN_CN120543023A_A_^<HEX2>^XX59_698645','pdf', ...)"
+    The harder path embeds that row's pubno (`_CN120543023A_`), which is the
+    reliable per-row identity (the visible row order is NOT). link02_href (the
+    row's PN anchor) is the entry to the figure detail page — captured nearby so
+    figure scraping can follow the SAME matched row, not the first one.
+    """
+    import re
+    for m in re.finditer(r"harder\(this,'([^']+)','([^']+)'", html):
+        path, doc_type = m.group(1), m.group(2)
+        mp = re.search(r'\^[A-Z]{2}_[A-Z]+_([A-Z]{2})(\d+)[A-Z]?_', path)
+        core = mp.group(2) if mp else ""
+        yield path, doc_type, core
+
+
+def _gpss_select_detail_link(html: str, requested: str) -> str:
+    """Return the matched row's PN link02 href (figure detail entry) for the
+    requested pubno, or "" when no row's PN anchor core matches.
+
+    This is the misresolve fix: select by digit-core, never by row position.
+    The robust per-row identity is the PN link02 anchor's OWN visible text
+    (e.g. `>CN<font>120543023</font>A</a>`), whose digit core is compared to the
+    request — harder()/distance heuristics are unreliable across gpss3 rows.
+    """
+    import re
+    req_core = _gpss_pubno_digit_core(requested)
+    if not req_core:
+        return ""
+    # PN anchors carry the pubno as anchor text; the row-number link02 anchors
+    # carry only a 1-2 digit row index, so a full digit-core compare ignores them.
+    for m in re.finditer(
+        r'href=["\']?(/gpss[123]?/gpsskmc/gpssbkm\?[^\s\'">]+)["\']?[^>]*class=["\']?link02[^>]*>(.*?)</a>',
+        html, re.IGNORECASE | re.DOTALL,
+    ):
+        href, txt = m.group(1), m.group(2)
+        digits = "".join(re.findall(r"\d", re.sub(r"<[^>]+>", "", txt)))
+        if digits == req_core:
+            return href
+    return ""
+
+
+def _gpss_select_harder_path(html: str, requested: str, prefer_types=None) -> str:
+    """Return the matched row's harder() document path for the requested pubno.
+
+    prefer_types: optional iterable of doc_type substrings to prefer (e.g.
+    {"pdf"} for PDF, {"GX","XML"} for full-text XML). When given, only a row
+    whose core matches AND whose doc_type matches a preferred token is returned.
+    Returns "" when no matching row exists (misresolve-safe).
+    """
+    req_core = _gpss_pubno_digit_core(requested)
+    if not req_core:
+        return ""
+    fallback = ""
+    for path, doc_type, core, _link02 in _gpss_iter_result_rows(html):
+        if core != req_core:
+            continue
+        if prefer_types is None:
+            return path
+        if any(t.lower() in doc_type.lower() for t in prefer_types):
+            return path
+        fallback = fallback or path
+    return fallback if prefer_types is not None else ""
+
+
 def _detect_pdf_pubno_cores(pdf_path: str, max_pages: int = 5) -> List[str]:
     """Collect candidate publication-number digit cores from a PDF text layer.
 
@@ -1997,28 +2090,19 @@ async def _gpss_download_representative_figure_impl(
             # Step 1: Visit portal
             await client.get("https://tiponet.tipo.gov.tw/030_OUT_V1/home.do")
             
-            # Step 2: Initialize GPSS session
-            await client.get("https://tiponet.tipo.gov.tw/gpss2/")
+            # Step 2: Initialize GPSS session (gpss3 = 113/11/29 域整併現役介面)
+            await client.get("https://tiponet.tipo.gov.tw/gpss3/")
             
             # Step 3: Load search page and bypass client-side JS random redirect
             rand_val = random.random()
-            gpss_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/gpssbkm?@@{rand_val}"
+            gpss_url = f"https://tiponet.tipo.gov.tw/gpss3/gpsskmc/gpssbkm?@@{rand_val}"
             res = await client.get(gpss_url)
             
-            # Extract INFO parameter
-            m_info = re.search(r'name=["\']?INFO["\']?\s+value=["\']?([A-Za-z0-9]+)["\']?', res.text, re.IGNORECASE)
-            if not m_info:
-                m_info = re.search(r'value=["\']?([A-Za-z0-9]+)["\']?\s+name=["\']?INFO["\']?', res.text, re.IGNORECASE)
-                
-            if not m_info:
+            info_val = _gpss_extract_info(res.text)
+            if not info_val:
                 return {"success": False, "error": "Failed to retrieve INFO token from GPSS session"}
             
-            info_val = m_info.group(1)
-            
-            # Extract action path
-            m_action = re.search(r'action=["\']?(/gpss[12]/gpsskmc/gpssbkm[^\'"]*)["\']?', res.text, re.IGNORECASE)
-            action_path = m_action.group(1) if m_action else '/gpss2/gpsskmc/gpssbkm'
-            action_url = f"https://tiponet.tipo.gov.tw{action_path}"
+            action_url = f"https://tiponet.tipo.gov.tw{_gpss_extract_action(res.text)}"
             
             # Step 4: Search POST
             data = {
@@ -2037,15 +2121,28 @@ async def _gpss_download_representative_figure_impl(
             if m_refresh:
                 redirect_url = m_refresh.group(1).strip("'\"")
                 if not redirect_url.startswith("http"):
-                    redirect_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/{redirect_url}"
+                    redirect_url = f"https://tiponet.tipo.gov.tw/gpss3/gpsskmc/{redirect_url}"
                 res = await client.get(redirect_url)
             
-            # Step 5: Follow detail page link
-            m_detail = re.search(r'href=["\']?(/gpss[12]/gpsskmc/gpssbkm\?[^\s\'">]+)[^>]*class=["\']?link02["\']?', res.text, re.IGNORECASE)
-            if not m_detail:
-                return {"success": False, "error": f"Patent detail link for '{pat}' not found in search results"}
+            # Step 5: Pick the detail link for the REQUESTED pubno (misresolve fix).
+            # gpss3 returns a MULTI-ROW list; the legacy "first class=link02" logic
+            # landed on the neighbour row (CN120543023A request -> row 1
+            # CN121094816A). Select the row whose harder() path embeds a pubno
+            # digit-core == the requested digit-core, and follow THAT row's PN
+            # link02 anchor (the figure detail page entry).
+            detail_path = _gpss_select_detail_link(res.text, pat)
+            if not detail_path:
+                return {
+                    "success": False,
+                    "error": (
+                        "GPSS result list has no row matching the requested patent "
+                        "— refusing to fall back to a neighbour row."
+                    ),
+                    "requested": pat,
+                    "requested_number_core": _gpss_pubno_digit_core(pat),
+                }
                 
-            detail_url = f"https://tiponet.tipo.gov.tw{m_detail.group(1)}"
+            detail_url = f"https://tiponet.tipo.gov.tw{detail_path}"
             res_detail = await client.get(detail_url)
             
             # Extract image URLs (COUNTRY-AGNOSTIC). The GPSS detail page exposes
@@ -2223,28 +2320,19 @@ async def _gpss_download_patent_pdf_impl(
             # Step 1: Visit portal
             await client.get("https://tiponet.tipo.gov.tw/030_OUT_V1/home.do")
             
-            # Step 2: Initialize GPSS session
-            await client.get("https://tiponet.tipo.gov.tw/gpss2/")
+            # Step 2: Initialize GPSS session (gpss3 = 113/11/29 域整併現役介面)
+            await client.get("https://tiponet.tipo.gov.tw/gpss3/")
             
             # Step 3: Load search page and bypass client-side JS random redirect
             rand_val = random.random()
-            gpss_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/gpssbkm?@@{rand_val}"
+            gpss_url = f"https://tiponet.tipo.gov.tw/gpss3/gpsskmc/gpssbkm?@@{rand_val}"
             res = await client.get(gpss_url)
             
-            # Extract INFO parameter
-            m_info = re.search(r'name=["\']?INFO["\']?\s+value=["\']?([A-Za-z0-9]+)["\']?', res.text, re.IGNORECASE)
-            if not m_info:
-                m_info = re.search(r'value=["\']?([A-Za-z0-9]+)["\']?\s+name=["\']?INFO["\']?', res.text, re.IGNORECASE)
-                
-            if not m_info:
+            info_val = _gpss_extract_info(res.text)
+            if not info_val:
                 return {"success": False, "error": "Failed to retrieve INFO token from GPSS session"}
             
-            info_val = m_info.group(1)
-            
-            # Extract action path
-            m_action = re.search(r'action=["\']?(/gpss[12]/gpsskmc/gpssbkm[^\'"]*)["\']?', res.text, re.IGNORECASE)
-            action_path = m_action.group(1) if m_action else '/gpss2/gpsskmc/gpssbkm'
-            action_url = f"https://tiponet.tipo.gov.tw{action_path}"
+            action_url = f"https://tiponet.tipo.gov.tw{_gpss_extract_action(res.text)}"
             
             # Step 4: Search POST
             data = {
@@ -2263,37 +2351,32 @@ async def _gpss_download_patent_pdf_impl(
             if m_refresh:
                 redirect_url = m_refresh.group(1).strip("'\"")
                 if not redirect_url.startswith("http"):
-                    redirect_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/{redirect_url}"
+                    redirect_url = f"https://tiponet.tipo.gov.tw/gpss3/gpsskmc/{redirect_url}"
                 res = await client.get(redirect_url)
             
-            # Step 5: Follow detail page link
-            m_detail = re.search(r'href=["\']?(/gpss[12]/gpsskmc/gpssbkm\?[^\s\'">]+)[^>]*class=["\']?link02["\']?', res.text, re.IGNORECASE)
-            if not m_detail:
-                return {"success": False, "error": f"Patent detail link for '{pat}' not found in search results"}
-                
-            detail_url = f"https://tiponet.tipo.gov.tw{m_detail.group(1)}"
-            res_detail = await client.get(detail_url)
-            
-            # Step 6: Find PDF links (harder calls) in detail page
-            harder_links = re.findall(r"harder\s*\(\s*this\s*,\s*['\"]([^'\"]+)['\"]", res_detail.text)
-            if not harder_links:
-                return {"success": False, "error": "No PDF document download links found in patent detail page"}
-                
-            # Filter and choose the best link
-            selected_path = None
-            for path in harder_links:
-                if "TWBA" in path or "TWBP" in path:
-                    selected_path = path
-                    break
+            # Step 5+6: Pick the PDF harder() document path for the REQUESTED pubno
+            # (misresolve fix). gpss3 returns a MULTI-ROW list and each row's
+            # harder() path embeds that row's pubno; select by digit-core match
+            # instead of taking the first row's link. The matched harder('pdf')
+            # GET returns a ~153B Refresh page -> URL=.../CNA-<pubno>A.pdf.
+            selected_path = _gpss_select_harder_path(res.text, pat, prefer_types={"pdf"})
             if not selected_path:
-                selected_path = harder_links[0]
+                return {
+                    "success": False,
+                    "error": (
+                        "No PDF document row matching the requested patent in the "
+                        "GPSS result list — refusing to fall back to a neighbour row."
+                    ),
+                    "requested": pat,
+                    "requested_number_core": _gpss_pubno_digit_core(pat),
+                }
                 
             # Step 7: Request the intermediate HTML page for the selected PDF
             pdf_page_url = f"https://tiponet.tipo.gov.tw{selected_path}"
             res_pdf_page = await client.get(pdf_page_url)
             
             # Extract the actual PDF file path from this HTML page
-            m_pdf = re.search(r'/gpss[12]/gpssbkmusr/[^\'" >]+\.pdf', res_pdf_page.text, re.IGNORECASE)
+            m_pdf = re.search(r'/gpss[123]?/gpssbkmusr/[^\'" >]+\.pdf', res_pdf_page.text, re.IGNORECASE)
             if not m_pdf:
                 return {"success": False, "error": "Failed to parse the actual PDF binary path from the GPSS document page"}
                 
@@ -2373,28 +2456,19 @@ async def _gpss_download_patent_xml_impl(
             # Step 1: Visit portal
             await client.get("https://tiponet.tipo.gov.tw/030_OUT_V1/home.do")
             
-            # Step 2: Initialize GPSS session
-            await client.get("https://tiponet.tipo.gov.tw/gpss2/")
+            # Step 2: Initialize GPSS session (gpss3 = 113/11/29 域整併現役介面)
+            await client.get("https://tiponet.tipo.gov.tw/gpss3/")
             
             # Step 3: Load search page and bypass client-side JS random redirect
             rand_val = random.random()
-            gpss_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/gpssbkm?@@{rand_val}"
+            gpss_url = f"https://tiponet.tipo.gov.tw/gpss3/gpsskmc/gpssbkm?@@{rand_val}"
             res = await client.get(gpss_url)
             
-            # Extract INFO parameter
-            m_info = re.search(r'name=["\']?INFO["\']?\s+value=["\']?([A-Za-z0-9]+)["\']?', res.text, re.IGNORECASE)
-            if not m_info:
-                m_info = re.search(r'value=["\']?([A-Za-z0-9]+)["\']?\s+name=["\']?INFO["\']?', res.text, re.IGNORECASE)
-                
-            if not m_info:
+            info_val = _gpss_extract_info(res.text)
+            if not info_val:
                 return {"success": False, "error": "Failed to retrieve INFO token from GPSS session"}
             
-            info_val = m_info.group(1)
-            
-            # Extract action path
-            m_action = re.search(r'action=["\']?(/gpss[12]/gpsskmc/gpssbkm[^\'"]*)["\']?', res.text, re.IGNORECASE)
-            action_path = m_action.group(1) if m_action else '/gpss2/gpsskmc/gpssbkm'
-            action_url = f"https://tiponet.tipo.gov.tw{action_path}"
+            action_url = f"https://tiponet.tipo.gov.tw{_gpss_extract_action(res.text)}"
             
             # Step 4: Search POST
             data = {
@@ -2413,30 +2487,28 @@ async def _gpss_download_patent_xml_impl(
             if m_refresh:
                 redirect_url = m_refresh.group(1).strip("'\"")
                 if not redirect_url.startswith("http"):
-                    redirect_url = f"https://tiponet.tipo.gov.tw/gpss2/gpsskmc/{redirect_url}"
+                    redirect_url = f"https://tiponet.tipo.gov.tw/gpss3/gpsskmc/{redirect_url}"
                 res = await client.get(redirect_url)
             
-            # Step 5: Follow detail page link
-            m_detail = re.search(r'href=["\']?(/gpss[12]/gpsskmc/gpssbkm\?[^\s\'">]+)[^>]*class=["\']?link02["\']?', res.text, re.IGNORECASE)
-            if not m_detail:
-                return {"success": False, "error": f"Patent detail link for '{pat}' not found in search results"}
-                
-            detail_url = f"https://tiponet.tipo.gov.tw{m_detail.group(1)}"
-            res_detail = await client.get(detail_url)
-            
-            # Step 6: Find harder links in detail page
-            harder_links = re.findall(r"harder\s*\(\s*this\s*,\s*['\"]([^'\"]+)['\"]", res_detail.text)
-            if not harder_links:
-                return {"success": False, "error": "No document download links found in patent detail page"}
-                
-            # Filter and choose the TW_GX link (Full-text XML)
-            selected_path = None
-            for path in harder_links:
-                if "TW_GX" in path:
-                    selected_path = path
-                    break
+            # Step 5+6: Pick the Full-text XML (TW_GX) harder() document path for
+            # the REQUESTED pubno (misresolve fix). gpss3 returns a MULTI-ROW list
+            # and each row's harder() path embeds that row's pubno; select by
+            # digit-core match + an XML/GX doc-type, never by row position. Only TW
+            # full-text rows expose a GX/XML harder type — foreign-language rows
+            # (CN/US/…) only carry 'pdf', so absence is reported explicitly.
+            selected_path = _gpss_select_harder_path(
+                res.text, pat, prefer_types={"TW_GX", "_GX", "xml"}
+            )
             if not selected_path:
-                return {"success": False, "error": f"TW_GX (Full-text XML) download link for '{pat}' not found in detail page"}
+                return {
+                    "success": False,
+                    "error": (
+                        f"TW_GX (Full-text XML) download row for '{pat}' not found in "
+                        "the GPSS result list (only TW full-text patents expose XML)."
+                    ),
+                    "requested": pat,
+                    "requested_number_core": _gpss_pubno_digit_core(pat),
+                }
                 
             # Step 7: Request the intermediate HTML page for the selected document
             xml_page_url = f"https://tiponet.tipo.gov.tw{selected_path}"
