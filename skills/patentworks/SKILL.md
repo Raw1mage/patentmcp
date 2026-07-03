@@ -5,7 +5,21 @@ description: 專利全流程工作站。四種任務:(A) 把發明材料/idea �
 
 # PatentWorks
 
-> **搭配 `patentmcp` MCP 使用**:本 skill 是這組工具的劇本;所有檢索/交付工具(`patent_search` 單一檢索入口、`epo_family`/`epo_biblio`、`gpatents_get`/`gpatents_download_*`、`build_screening_table`、`stage_file`)都來自 patentmcp。沒有該 MCP 時本 skill 無法執行實際檢索。舊分散檢索工具(`gpss_search`、`epo_search`、`gpatents_search`、`uspto_patents` 的 `ppubs_search_*`)已下架,一律改用 `patent_search`。
+> **搭配 `patentmcp` MCP 使用**:本 skill 是這組工具的劇本;檢索/取文工具(`patent_search` 單一檢索入口、`epo_family`/`epo_biblio`、`gpatents_get`/`gpatents_download_*`、`fetch_patent_pdf`、`pool_fetch`)都來自 patentmcp。沒有該 MCP 時本 skill 無法執行實際檢索。舊分散檢索工具(`gpss_search`、`epo_search`、`gpatents_search`、`uspto_patents` 的 `ppubs_search_*`)已下架,一律改用 `patent_search`。
+>
+> **兩平面(R13):container 只留網路/憑證工作,確定性後處理落地為 host-local skill 腳本。** 以下 8 個舊工具現回 typed `TOOL_LANDED` redirect(不再執行舊邏輯,`landing.usage` 直接給對應腳本呼叫式),請改呼叫 `skills/patentworks/scripts/` 下的本地腳本(每支 `python3 <腳本> --help` 印完整參數):
+>
+> | 舊工具(已下架 → TOOL_LANDED) | 改用本地腳本 |
+> |---|---|
+> | `build_screening_table` | `screening_build.py`(records JSON → 家族去重 → 欄位隨選 → CSV) |
+> | `search_audit` | `search_audit.py`(`--log 01_search/matrix-log.jsonl`) |
+> | `patentdb_put`/`patentdb_query`/`patentdb_import_csv` | `patentdb_local.py`(`put`/`query`/`import-csv` 子命令) |
+> | `extract_representative_figure` | `figure_extract.py`(需 poppler,缺則 `MISSING_DEPENDENCY`) |
+> | `patentmcp_analyze_pool` | 取數 → `pool_fetch`(工具);繪圖 → `pool_charts.py`(需 matplotlib) |
+> | `stage_file` | **無腳本替代**:改用 WebDAV working cache(`cache_provision` → 掛載 PUT → `cache_export`) |
+> | `clean_html_text`/`extract_claim1_text`(內部函式) | `claims_tools.py`(`clean-html`/`extract-claim1`/`claim1-empty`) |
+>
+> **WebDAV working cache(交付物暫存三層心智)**:`cache` = 可拋的工作樹(mount 掛載處);`truth store`(專案 repo / `output/`)= 交付物的家;**export 是顯式動作**,不 export 就不算落地。流程:`cache_provision(subject_id, owner_identity)` 拿到 `mount_path` + **一次性 Basic 憑證**(只存 hash)→ 用 rclone/davfs2 掛載後**投料/取件走 mount**(byte 不過 context)→ 成品就緒 `cache_export(subject_id, target, owner_identity)` COPY 落地(target parent 不存在 → `EXPORT_TARGET_UNREACHABLE`)→ `cache_close`(有未 export 的 dirty 檔 → `WORKSPACE_CLOSE_DIRTY` 擋下,列未落地清單,除非 `force=True`)。DAV 面強制認證,無 fallback。憑證絕不寫進報告/log。
 
 專利從 idea 到申請的全流程。依需求選一個 flow,**先讀對應 flow 檔再執行**。
 

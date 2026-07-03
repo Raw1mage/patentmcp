@@ -286,26 +286,20 @@ class PatentSearchToolWiring(unittest.TestCase):
         self.assertEqual(out["records"][0]["pubno"], "TW111")
 
 
-# ── build_screening_table goes through the dispatcher ladder ──
-class ScreeningTableViaDispatcher(unittest.TestCase):
-    def test_official_ladder_no_scraper_by_default(self):
-        orig = (P.gpss_client, P.epo_client, P.ppubs_client, P.gpatents_client)
-        gpat = FakeGPatents(results=[{"publication_number": "USX"}])
-        P.gpss_client = FakeGPSS(configured=False)  # type: ignore
-        P.epo_client = FakeEPO(configured=True, pubs=["EP42A1"])  # type: ignore
-        P.ppubs_client, P.gpatents_client = FakePPUBS(), gpat  # type: ignore
-        try:
-            out = asyncio.run(P.build_screening_table(cpc="G06Q50/18", num=5, max_rows=5))
-        finally:
-            (P.gpss_client, P.epo_client, P.ppubs_client, P.gpatents_client) = orig  # type: ignore
-        self.assertTrue(out["success"])
-        self.assertEqual(out["source"], "epo")
-        self.assertEqual(gpat.calls, 0)  # scraper never touched by default
-        # outward format unchanged
-        for key in ("handle", "count", "deduped", "source", "columns", "gaps"):
-            self.assertIn(key, out)
+# ── build_screening_table is LANDED (R13): now a TOOL_LANDED redirect stub ──
+# The screening-table build is a deterministic record→CSV transform that runs in
+# skills/patentworks/scripts/screening_build.py; the container tool only redirects.
+class ScreeningTableLandedStub(unittest.TestCase):
+    def test_returns_tool_landed_envelope(self):
+        out = asyncio.run(P.build_screening_table(cpc="G06Q50/18", num=5, max_rows=5))
+        self.assertFalse(out["success"])
+        self.assertEqual(out["error_code"], "TOOL_LANDED")
+        self.assertEqual(out["landing"]["script"],
+                         "skills/patentworks/scripts/screening_build.py")
+        self.assertIn("screening_build.py", out["landing"]["usage"])
 
-    def test_all_official_miss_fails_fast(self):
+    def test_stub_issues_no_search(self):
+        # A stub must NOT touch the dispatcher/scraper at all.
         orig = (P.gpss_client, P.epo_client, P.ppubs_client, P.gpatents_client)
         gpat = FakeGPatents(results=[{"publication_number": "USX"}])
         P.gpss_client = FakeGPSS(configured=True, pubs=[])  # type: ignore
@@ -315,8 +309,7 @@ class ScreeningTableViaDispatcher(unittest.TestCase):
             out = asyncio.run(P.build_screening_table(keyword="obscure", num=5, max_rows=5))
         finally:
             (P.gpss_client, P.epo_client, P.ppubs_client, P.gpatents_client) = orig  # type: ignore
-        self.assertFalse(out["success"])
-        self.assertEqual(out["error"], "SCRAPING_REQUIRED")
+        self.assertEqual(out["error_code"], "TOOL_LANDED")
         self.assertEqual(gpat.calls, 0)
 
 

@@ -231,10 +231,23 @@ def _landing_html(tools, prefix: str, skill_available: bool, locale: str = "en")
 
 def build_app(mcp, store):
     """Return a Starlette app = FastMCP streamable-http (/mcp, with its session
-    lifespan already wired) + file/landing/skill routes appended."""
+    lifespan already wired) + file/landing/skill + WebDAV cache routes appended.
+
+    The DAV routes share this ONE app (no second lifespan — see serve() docstring
+    on the single FastMCP session-manager lifespan constraint)."""
     from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
     from starlette.routing import Route
     from mcp.server.transport_security import TransportSecuritySettings
+
+    from patent_mcp_server._auth_provider import AuthProvider, AuthError, Identity
+    from patent_mcp_server import _dav
+
+    # WebDAV working-cache face (DD-4/DD-6). One auth provider + one process-local
+    # lock table shared across all DAV requests on this app.
+    _auth = AuthProvider(store)
+    _locks = _dav.LockTable()
+    _dav_handler = _dav.DavHandler(store, _locks)
+    _DAV_MOUNT_PREFIX = "/dav"
 
     # Behind a trusted UDS gateway the Host header is set by the proxy, so the
     # default DNS-rebinding guard would reject every request. Disable it (the
@@ -309,8 +322,67 @@ def build_app(mcp, store):
             headers={"Content-Language": locale, "Vary": "Accept-Language"},
         )
 
+    def _dav_error(status, code, detail, *, www_authenticate=False):
+        hdrs = {}
+        if www_authenticate:
+            hdrs["WWW-Authenticate"] = 'Basic realm="patentmcp-webdav"'
+        body = (f'<?xml version="1.0" encoding="utf-8"?>'
+                f'<error xmlns="patentmcp"><code>{html.escape(code)}</code>'
+                f'<detail>{html.escape(detail)}</detail></error>')
+        return Response(body, status_code=status, media_type='application/xml',
+                        headers=hdrs)
+
+    async def dav(request):
+        subject = request.path_params["subject"]
+        rel = request.path_params.get("rel", "") or ""
+        method = request.method
+
+        # 1. Resolve subject -> token WITHOUT trusting the caller's identity yet.
+        #    We look up by the Basic username (owner) so cross-owner probes never
+        #    resolve to someone else's cache. Parse username first for lookup.
+        auth_header = request.headers.get("authorization")
+        # Peek the username for subject resolution (verification happens next).
+        from patent_mcp_server._auth_provider import _parse_basic
+        creds = _parse_basic(auth_header)
+        token = None
+        if creds is not None:
+            entry = store.find_by_subject(creds[0], subject)
+            token = entry.token if entry is not None else None
+
+        # 2. Authenticate the Basic credential against that cache token.
+        ident = _auth.resolve_identity(auth_header, token)
+        if isinstance(ident, AuthError):
+            _log.info("[dav] %s %s/%s owner=? status=%d", method, subject, rel,
+                      ident.status)
+            return _dav_error(ident.status, ident.code, ident.detail,
+                              www_authenticate=ident.www_authenticate)
+
+        # 3. Ownership check (cross-owner -> 403, no fallback).
+        if not _auth.owns(ident, token):
+            _log.info("[dav] %s %s/%s owner=%s status=403", method, subject, rel,
+                      ident.owner)
+            return _dav_error(403, "forbidden",
+                              "identity does not own this subject cache")
+
+        # 4. Dispatch the DAV method against the resolved token namespace.
+        base_href = f"{prefix}{_DAV_MOUNT_PREFIX}/{subject}/"
+        body = await request.body()
+        status, hdrs, out = _dav_handler.handle(
+            method, token=token, rel=rel, subject=subject, owner=ident.owner,
+            mount_prefix=f"{prefix}{_DAV_MOUNT_PREFIX}", base_href=base_href,
+            body=body, headers=dict(request.headers),
+        )
+        _log.info("[dav] %s %s/%s owner=%s status=%d", method, subject, rel,
+                  ident.owner, status)
+        return Response(out, status_code=status, headers=hdrs)
+
     app.router.routes.extend([
         Route("/", landing, methods=["GET"]),
+        # WebDAV working-cache face (DD-4). Collection root + members. One route
+        # each so Starlette matches /dav/{subject} and /dav/{subject}/{rel...}.
+        Route(f"{_DAV_MOUNT_PREFIX}/{{subject}}", dav, methods=_dav.DAV_METHODS),
+        Route(f"{_DAV_MOUNT_PREFIX}/{{subject}}/{{rel:path}}", dav,
+              methods=_dav.DAV_METHODS),
         # Standard liveness path (R8.3) + back-compat alias — same coroutine,
         # no duplicated logic (DD-2).
         Route("/health", health, methods=["GET"]),

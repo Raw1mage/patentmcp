@@ -1,0 +1,46 @@
+{
+  "diagram_title": "patentmcp docker+webdav+skill-with-script (R13 split + WebDAV working cache)",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "Search / Fetch (compute plane)",
+      "description": "container 內網路/憑證工作：patent_search 來源梯、EPO/GPSS/PPUBS/BigQuery 取文、PDF/figure 抓取；產出 records JSON 與 blob handle",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "Provision & serve WebDAV cache",
+      "description": "subject-anchored cache provision（idempotent, per-owner credential）+ class-2 DAV method 服務 token namespace；auth 驗證與越界拒絕",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "Transform locally (landing plane)",
+      "description": "host 上以使用者 uid 執行 skill scripts：建表/去重/Claim1 切割/CSV 組裝/圖表/patentdb 寫入，零 container 往返",
+      "decomposition": null
+    },
+    {
+      "id": "A4",
+      "title": "Export & close lifecycle",
+      "description": "export(subject, target) 顯式落地到 truth store（N:M）；close dirty gate 檢查後回收 cache；class-aware reaper 兜底",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    { "id": "AR1", "source": "EXTERNAL", "target": "A1:input", "type": "input", "label": "query axes / publication numbers" },
+    { "id": "AR2", "source": "EXTERNAL", "target": "A1:control", "type": "control", "label": "credential availability + allow_scraping gate" },
+    { "id": "AR3", "source": "EXTERNAL", "target": "A1:mechanism", "type": "mechanism", "label": "container (GPSS/EPO/PPUBS/BQ clients)" },
+    { "id": "AR4", "source": "A1:output", "target": "A3:input", "type": "output", "label": "records JSON + blob handles" },
+    { "id": "AR5", "source": "A1:output", "target": "A2:input", "type": "output", "label": "token namespace artifacts (PDF/figure/CSV)" },
+    { "id": "AR6", "source": "EXTERNAL", "target": "A2:control", "type": "control", "label": "Basic auth (per-owner credential), no-silent-fallback" },
+    { "id": "AR7", "source": "EXTERNAL", "target": "A2:mechanism", "type": "mechanism", "label": "Starlette DAV routes + TokenStore + lock table" },
+    { "id": "AR8", "source": "EXTERNAL", "target": "A3:control", "type": "control", "label": "R13.6 scope guard + dependency precheck" },
+    { "id": "AR9", "source": "EXTERNAL", "target": "A3:mechanism", "type": "mechanism", "label": "python3 skill scripts (agent uid, host)" },
+    { "id": "AR10", "source": "A3:output", "target": "EXTERNAL", "type": "output", "label": "screening CSV / charts / patentdb rows (user repo)" },
+    { "id": "AR11", "source": "A2:output", "target": "A4:input", "type": "output", "label": "mounted working tree (dirty state)" },
+    { "id": "AR12", "source": "EXTERNAL", "target": "A4:control", "type": "control", "label": "dirty-close gate + safety-net TTL" },
+    { "id": "AR13", "source": "EXTERNAL", "target": "A4:mechanism", "type": "mechanism", "label": "cache_export / cache_close MCP tools" },
+    { "id": "AR14", "source": "A4:output", "target": "EXTERNAL", "type": "output", "label": "deliverables landed at truth store" }
+  ]
+}

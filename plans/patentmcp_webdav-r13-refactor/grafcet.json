@@ -1,0 +1,86 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A1",
+    "StepType": "initial",
+    "StepAction": "idle: 等待 agent 檢索/建表/取件請求",
+    "LinkInputType": [],
+    "LinkInputNumber": [],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["patent_search / fetch toolcall 到達"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "compute plane: 來源梯檢索/取文，產出 records JSON + token 產物",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [2, 3],
+    "LinkOutputType": "branch",
+    "Condition": ["需要 host 端後處理 → 2", "需要掛載工作區 → 3"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "landing plane: agent 以 python3 skill script 在 host 建表/切 Claim1/繪圖/寫 patentdb",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [6],
+    "LinkOutputType": "track",
+    "Condition": ["script exit 0（precheck + scope guard 通過）"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "provision: cache_provision(subject) idempotent 發 credential，DAV 端點就緒",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [4],
+    "LinkOutputType": "track",
+    "Condition": ["Basic auth 驗證通過（失敗 → typed 401/403 留在本步）"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "DAV serve: host 掛載讀寫 token namespace（PROPFIND/GET/PUT/MKCOL/MOVE/LOCK），dirty 累積",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [3],
+    "LinkOutputNumber": [5],
+    "LinkOutputType": "track",
+    "Condition": ["agent 呼叫 cache_export(subject, target)"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 5,
+    "ModuleRef": "A4",
+    "StepType": "normal",
+    "StepAction": "export: src + 交付物 COPY 落地 truth store（N:M），stamp last_export_at",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [4],
+    "LinkOutputNumber": [6],
+    "LinkOutputType": "track",
+    "Condition": ["export 成功（target 不可達 → EXPORT_TARGET_UNREACHABLE 回 4）"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 6,
+    "ModuleRef": "A4",
+    "StepType": "normal",
+    "StepAction": "close gate: 檢查自 last_export_at 起無 dirty；clean → reap cache；dirty → WORKSPACE_CLOSE_DIRTY 拒絕",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [2, 5],
+    "LinkOutputNumber": [0],
+    "LinkOutputType": "track",
+    "Condition": ["cache 回收完成或工作單元結束 → 回 idle"],
+    "SubGrafcet": []
+  }
+]

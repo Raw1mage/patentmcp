@@ -99,19 +99,15 @@ class ExtractFigureTest(unittest.TestCase):
         self.assertIsNone(loc["page"])
         self.assertEqual(loc["method"], "none")
 
-    def test_extract_tool_no_pdf(self):
-        async def _fail_fetch(pn, *a, **k):
-            return {"success": False, "error": "ALL_SOURCES_FAILED", "attempts": []}
-
-        orig = P.fetch_patent_pdf
-        # patch the module-level name the tool calls
-        P.fetch_patent_pdf = _fail_fetch  # type: ignore
-        try:
-            out = asyncio.run(P.extract_representative_figure("US123"))
-        finally:
-            P.fetch_patent_pdf = orig  # type: ignore
+    def test_extract_tool_landed_stub(self):
+        # R13: extract_representative_figure is now a TOOL_LANDED redirect to
+        # figure_extract.py; the poppler pipeline (tested above via the helpers)
+        # runs host-local. The tool must not touch the network.
+        out = asyncio.run(P.extract_representative_figure("US123"))
         self.assertFalse(out["success"])
-        self.assertEqual(out["error"], "NO_PDF")
+        self.assertEqual(out["error_code"], "TOOL_LANDED")
+        self.assertEqual(out["landing"]["script"],
+                         "skills/patentworks/scripts/figure_extract.py")
 
 
 # ── F: EPO single-page biblio downgrade ────────────────────────────
@@ -308,34 +304,20 @@ class PdfIdentityVerificationTest(unittest.TestCase):
         v = P._verify_pdf_identity(pdf, "CN120543023A")
         self.assertIsNone(v["verified"])
 
-    def test_extract_tool_rejects_wrong_patent(self):
-        # End-to-end: fetch returns a PDF whose header is a DIFFERENT patent;
-        # extract_representative_figure must return WRONG_PATENT_FETCHED, never
-        # land a figure.
+    def test_verify_rejects_wrong_patent(self):
+        # R13: extract_representative_figure landed to figure_extract.py; the
+        # wrong-patent guard is the _verify_pdf_identity helper (still in-module,
+        # also used live by the fetch flow). Test it directly: a PDF whose header
+        # is a DIFFERENT patent must verify=False with the detected core surfaced.
         import tempfile
         td = tempfile.mkdtemp()
         wrong_pdf = os.path.join(td, "wrong.pdf")
         _make_pdf(wrong_pdf, ["CN 121094816 A  説明書  4/11 頁",
                               "FIG. 1\n10 12 14 16 18 20"])
-
-        async def _fake_fetch(pn, *a, **k):
-            return {"success": True, "token": "tk", "rel": "wrong.pdf",
-                    "source": "gpss_pdf",
-                    "provenance": {"scraping": True}}
-
-        orig_fetch = P.fetch_patent_pdf
-        orig_blob = P.token_store.blob_path
-        P.fetch_patent_pdf = _fake_fetch  # type: ignore
-        P.token_store.blob_path = lambda tok, rel: wrong_pdf  # type: ignore
-        try:
-            out = asyncio.run(P.extract_representative_figure("CN120543023A"))
-        finally:
-            P.fetch_patent_pdf = orig_fetch  # type: ignore
-            P.token_store.blob_path = orig_blob  # type: ignore
-        self.assertFalse(out["success"])
-        self.assertEqual(out["error"], "WRONG_PATENT_FETCHED")
-        self.assertEqual(out["requested_number_core"], "120543023")
-        self.assertIn("121094816", out["detected_number_cores"])
+        v = P._verify_pdf_identity(wrong_pdf, "CN120543023A")
+        self.assertIs(v["verified"], False)
+        self.assertEqual(v["requested_core"], "120543023")
+        self.assertIn("121094816", v["detected_cores"])
 
 
 if __name__ == "__main__":

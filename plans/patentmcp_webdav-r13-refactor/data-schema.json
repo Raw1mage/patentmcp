@@ -1,0 +1,35 @@
+{
+  "schemas": [
+    {
+      "name": "TokenEntry (extended)",
+      "kind": "json",
+      "fields": [
+        { "name": "class", "type": "enum(ephemeral|deliverable-cache)", "notes": "新增；缺省 ephemeral（舊語意不變）" },
+        { "name": "subject_id", "type": "string?", "notes": "deliverable-cache 必帶；provision 主鍵之一" },
+        { "name": "owner_identity", "type": "string?", "notes": "provision 呼叫端宣告；DAV owns() 檢查鍵" },
+        { "name": "last_export_at", "type": "unix_ts?", "notes": "dirty 判定基準" },
+        { "name": "credential_hash", "type": "string?", "notes": "per-owner Basic credential，sha256，constant-time 比對" },
+        { "name": "export_snapshot", "type": "map<rel, sha256>?", "notes": "上次 export 時的檔案快照" }
+      ]
+    },
+    {
+      "name": "records JSON (compute→landing 交接)",
+      "kind": "json",
+      "fields": [
+        { "name": "records", "type": "ScreeningRecord[]", "notes": "統一 screening record schema（search_dispatcher 既有）" },
+        { "name": "provenance", "type": "ProvenanceEntry[]", "notes": "來源梯嘗試紀錄，隨檔攜帶" },
+        { "name": "gaps", "type": "string[]", "notes": "缺欄誠實宣告" }
+      ]
+    },
+    {
+      "name": "TOOL_LANDED redirect envelope",
+      "kind": "message",
+      "fields": [
+        { "name": "success", "type": "false", "notes": "固定" },
+        { "name": "error_code", "type": "TOOL_LANDED", "notes": "typed" },
+        { "name": "landing.script", "type": "string", "notes": "skills/patentworks/scripts/<verb>.py" },
+        { "name": "landing.usage", "type": "string", "notes": "完整呼叫範例" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+[
+  {
+    "title": "screening 工作流（R13 兩平面）",
+    "participants": ["Agent", "Container", "LandingScript", "TruthStore"],
+    "messages": [
+      { "from": "Agent", "to": "Container", "label": "patent_search(query axes)" },
+      { "from": "Container", "to": "Agent", "label": "records JSON + provenance" },
+      { "from": "Agent", "to": "LandingScript", "label": "python3 screening_build.py --in records.json" },
+      { "from": "LandingScript", "to": "TruthStore", "label": "screening CSV（使用者 uid 直寫）" }
+    ]
+  },
+  {
+    "title": "WebDAV cache 生命週期",
+    "participants": ["Agent", "Container", "DAVClient", "TruthStore"],
+    "messages": [
+      { "from": "Agent", "to": "Container", "label": "cache_provision(subject) → token + credential" },
+      { "from": "DAVClient", "to": "Container", "label": "Basic auth PROPFIND/GET/PUT/MOVE（掛載工作）" },
+      { "from": "Agent", "to": "Container", "label": "cache_export(subject, target)" },
+      { "from": "Container", "to": "TruthStore", "label": "COPY src + 交付物，stamp last_export_at" },
+      { "from": "Agent", "to": "Container", "label": "cache_close(subject)；dirty → 409 WORKSPACE_CLOSE_DIRTY" }
+    ]
+  }
+]

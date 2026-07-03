@@ -17,6 +17,7 @@ import base64
 import contextlib
 import dataclasses
 import hashlib
+import hmac
 import io
 import json
 import logging
@@ -41,6 +42,19 @@ DEFAULT_TTL_SECONDS = int(os.environ.get("PATENTS_TOKEN_TTL_SECONDS", "3600"))
 DEFAULT_SIZE_CAP_BYTES = int(
     os.environ.get("PATENTS_TOKEN_SIZE_CAP_BYTES", str(1024 * 1024 * 1024))
 )
+
+# deliverable-cache safety-net TTL (DD-5): dirty caches are exempt from idle
+# reap, but a very long safety TTL still applies so an abandoned dirty cache
+# eventually gets collected. A warn-first window logs loudly before the reap.
+CACHE_SAFETY_TTL_SECONDS = int(
+    os.environ.get("PATENTS_CACHE_SAFETY_TTL_SECONDS", str(7 * 24 * 3600))
+)
+CACHE_SAFETY_WARN_SECONDS = int(
+    os.environ.get("PATENTS_CACHE_SAFETY_WARN_SECONDS", str(24 * 3600))
+)
+
+CLASS_EPHEMERAL = "ephemeral"
+CLASS_DELIVERABLE_CACHE = "deliverable-cache"
 
 TOKEN_PREFIX = "tok_"
 TOKEN_RANDOM_BYTES = 20
@@ -78,6 +92,13 @@ class TokenEntry:
     created_at: float
     last_used_at: float
     root: Path = SESSIONS_ROOT
+    # ── deliverable-cache extension (DD-5) — all backward-compatible defaults ─
+    token_class: str = CLASS_EPHEMERAL
+    subject_id: Optional[str] = None
+    owner_identity: Optional[str] = None
+    last_export_at: Optional[float] = None
+    credential_hash: Optional[str] = None
+    export_snapshot: dict[str, str] = dataclasses.field(default_factory=dict)
 
     @property
     def dir_path(self) -> Path:
@@ -116,6 +137,12 @@ class TokenStore:
                     "token": entry.token, "filename": entry.filename,
                     "sha256": entry.sha256, "size_bytes": entry.size_bytes,
                     "created_at": entry.created_at,
+                    "token_class": entry.token_class,
+                    "subject_id": entry.subject_id,
+                    "owner_identity": entry.owner_identity,
+                    "last_export_at": entry.last_export_at,
+                    "credential_hash": entry.credential_hash,
+                    "export_snapshot": entry.export_snapshot,
                 }),
                 encoding="utf-8",
             )
@@ -139,6 +166,14 @@ class TokenStore:
                     sha256 = meta.get("sha256", "")
                     size_bytes = int(meta.get("size_bytes", 0))
                     created_at = float(meta.get("created_at", 0.0))
+                    # deliverable-cache fields tolerate old sidecars lacking them
+                    token_class = meta.get("token_class") or CLASS_EPHEMERAL
+                    subject_id = meta.get("subject_id")
+                    owner_identity = meta.get("owner_identity")
+                    _lea = meta.get("last_export_at")
+                    last_export_at = float(_lea) if _lea is not None else None
+                    credential_hash = meta.get("credential_hash")
+                    export_snapshot = dict(meta.get("export_snapshot") or {})
                 else:
                     files = [p for p in entry_dir.rglob("*")
                              if p.is_file() and p.name != _META_NAME]
@@ -149,6 +184,12 @@ class TokenStore:
                     sha256 = ""
                     size_bytes = sum(p.stat().st_size for p in files)
                     created_at = primary.stat().st_mtime
+                    token_class = CLASS_EPHEMERAL
+                    subject_id = None
+                    owner_identity = None
+                    last_export_at = None
+                    credential_hash = None
+                    export_snapshot = {}
                 data_mtime = max(
                     (p.stat().st_mtime for p in entry_dir.rglob("*") if p.is_file()),
                     default=created_at,
@@ -159,6 +200,9 @@ class TokenStore:
                 token=token, filename=filename, sha256=sha256,
                 size_bytes=size_bytes, created_at=created_at,
                 last_used_at=data_mtime, root=self._root,
+                token_class=token_class, subject_id=subject_id,
+                owner_identity=owner_identity, last_export_at=last_export_at,
+                credential_hash=credential_hash, export_snapshot=export_snapshot,
             )
             with self._lock:
                 self._entries[token] = entry
@@ -276,6 +320,129 @@ class TokenStore:
             })
         return out
 
+    def mkdir(self, token: str, rel: str) -> Path:
+        """Create a directory at rel inside a token dir (MKCOL). Traversal-safe."""
+        entry = self.resolve(token)
+        target = self._safe_target(entry.dir_path, rel)
+        if target == entry.dir_path.resolve():
+            raise StagingError("STAGE_BAD_PATH", "rel must not be the token root")
+        if target.is_file():
+            raise StagingError("STAGE_PATH_CONFLICT", f"file exists at {rel!r}")
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def move(self, token: str, src_rel: str, dst_rel: str) -> Path:
+        """Atomically move src_rel -> dst_rel within a single token dir (MOVE).
+
+        Cross-token moves are forbidden by construction: both rels are resolved
+        against the same token's dir_path and traversal-checked, so neither can
+        escape into another token's namespace.
+        """
+        entry = self.resolve(token)
+        src = self._safe_target(entry.dir_path, src_rel)
+        dst = self._safe_target(entry.dir_path, dst_rel)
+        if not src.exists():
+            raise TokenNotFoundError(f"blob_not_found: {token}/{src_rel}")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(src, dst)
+        return dst
+
+    # ── dirty / export snapshot (DD-7) ───────────────────────────
+    def _current_snapshot(self, entry: TokenEntry) -> dict[str, str]:
+        root = entry.dir_path.resolve()
+        snap: dict[str, str] = {}
+        for path in root.rglob("*"):
+            if not path.is_file() or path.name == _META_NAME:
+                continue
+            rel = str(path.relative_to(root))
+            try:
+                snap[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                snap[rel] = "<unreadable>"
+        return snap
+
+    def snapshot_exports(self, token: str) -> dict[str, str]:
+        """Record {rel: sha256} as the export baseline and stamp last_export_at."""
+        entry = self.resolve(token)
+        snap = self._current_snapshot(entry)
+        with self._lock:
+            entry.export_snapshot = snap
+            entry.last_export_at = time.time()
+        self._write_meta(entry)
+        return dict(snap)
+
+    def dirty_files(self, token: str) -> list[str]:
+        """Return rels whose current sha256 differs from the export snapshot.
+
+        Added, modified and deleted files all count as dirty; an unreadable
+        file is treated as dirty (never silently clean).
+        """
+        entry = self.resolve(token)
+        current = self._current_snapshot(entry)
+        baseline = dict(entry.export_snapshot)
+        dirty: set[str] = set()
+        for rel, sha in current.items():
+            if sha == "<unreadable>" or baseline.get(rel) != sha:
+                dirty.add(rel)
+        for rel in baseline:
+            if rel not in current:
+                dirty.add(rel)
+        return sorted(dirty)
+
+    # ── provision / subject lookup (DD-5/DD-6) ────────────────────
+    def find_by_subject(self, owner: str, subject: str) -> Optional[TokenEntry]:
+        with self._lock:
+            for entry in self._entries.values():
+                if (entry.token_class == CLASS_DELIVERABLE_CACHE
+                        and entry.owner_identity == owner
+                        and entry.subject_id == subject):
+                    return entry
+        return None
+
+    def provision(self, subject_id: str, owner_identity: str) -> TokenEntry:
+        """Idempotent per (owner, subject): return the existing live cache token
+        or mint a fresh deliverable-cache token."""
+        if not subject_id or not owner_identity:
+            raise StagingError("STAGE_BAD_PATH", "subject_id and owner_identity required")
+        existing = self.find_by_subject(owner_identity, subject_id)
+        if existing is not None:
+            existing.last_used_at = time.time()
+            return existing
+        token = _generate_token()
+        entry_dir = self._root / token
+        entry_dir.mkdir(parents=True, exist_ok=False)
+        now = time.time()
+        entry = TokenEntry(
+            token=token, filename="", sha256="", size_bytes=0,
+            created_at=now, last_used_at=now, root=self._root,
+            token_class=CLASS_DELIVERABLE_CACHE,
+            subject_id=subject_id, owner_identity=owner_identity,
+        )
+        with self._lock:
+            self._entries[token] = entry
+        self._write_meta(entry)
+        return entry
+
+    # ── credential (DD-6) ────────────────────────────────
+    @staticmethod
+    def _hash_credential(secret: str) -> str:
+        return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+    def set_credential(self, token: str, secret: str) -> None:
+        entry = self.resolve(token)
+        with self._lock:
+            entry.credential_hash = self._hash_credential(secret)
+        self._write_meta(entry)
+
+    def verify_credential(self, token: str, secret: str) -> bool:
+        with self._lock:
+            entry = self._entries.get(token)
+            if entry is None or not entry.credential_hash:
+                return False
+            return hmac.compare_digest(
+                entry.credential_hash, self._hash_credential(secret)
+            )
+
     def delete(self, token: str) -> None:
         with self._lock:
             entry = self._entries.pop(token, None)
@@ -286,17 +453,59 @@ class TokenStore:
 
     # ── reaper ──────────────────────────────────────────────────────
     def reap_expired(self) -> int:
-        cutoff = time.time() - self._ttl
+        """Class-aware idle reaper.
+
+        - ephemeral: unchanged 3600s idle semantics (reap when idle > ttl).
+        - deliverable-cache: EXEMPT from idle reap while dirty. A safety-net
+          long TTL still applies with a warn-first window: inside the window
+          log a WARNING without reaping; past the full TTL reap loudly,
+          logging the dirty state. Any touch (last_used_at bump) resets clock.
+        """
+        now = time.time()
+        idle_cutoff = now - self._ttl
         evicted: list[TokenEntry] = []
         with self._lock:
             for token, entry in list(self._entries.items()):
-                if entry.last_used_at < cutoff:
+                if entry.token_class == CLASS_DELIVERABLE_CACHE:
+                    idle = now - entry.last_used_at
+                    if idle < CACHE_SAFETY_TTL_SECONDS:
+                        warn_start = CACHE_SAFETY_TTL_SECONDS - CACHE_SAFETY_WARN_SECONDS
+                        if idle >= warn_start:
+                            _log.warning(
+                                "deliverable_cache_safety_warn token=%s subject=%s "
+                                "idle=%.0fs safety_ttl=%ds",
+                                token, entry.subject_id, idle,
+                                CACHE_SAFETY_TTL_SECONDS,
+                            )
+                        continue
+                    is_dirty = bool(self._is_dirty_locked(entry))
+                    _log.warning(
+                        "deliverable_cache_safety_reap token=%s subject=%s "
+                        "idle=%.0fs dirty=%s",
+                        token, entry.subject_id, now - entry.last_used_at, is_dirty,
+                    )
+                    self._entries.pop(token, None)
+                    self._total_bytes -= entry.size_bytes
+                    evicted.append(entry)
+                    continue
+                if entry.last_used_at < idle_cutoff:
                     self._entries.pop(token, None)
                     self._total_bytes -= entry.size_bytes
                     evicted.append(entry)
         for entry in evicted:
             shutil.rmtree(entry.dir_path, ignore_errors=True)
         return len(evicted)
+
+    def _is_dirty_locked(self, entry: TokenEntry) -> bool:
+        """Cheap dirty check usable while holding the lock (no re-resolve)."""
+        current = self._current_snapshot(entry)
+        baseline = dict(entry.export_snapshot)
+        if current.keys() != baseline.keys():
+            return True
+        for rel, sha in current.items():
+            if sha == "<unreadable>" or baseline.get(rel) != sha:
+                return True
+        return False
 
     def _evict_if_over_cap(self) -> None:
         if self._total_bytes <= self._size_cap:

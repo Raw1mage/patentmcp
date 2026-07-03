@@ -60,15 +60,24 @@
 - **撰寫層 (`drafting`)**
   - 負責依目標法域載入 `reference/drafting/common.md` 與 TW/CN/US/EP 法域知識。
   - 吃 analysis 產出的必要技術特徵、最接近前案、區別技術特徵、實施例與術語表。
-- **文件/交付層 (`stage_file`, docxmcp-style handle)**
+- **文件/交付層 (token/blob handle + WebDAV working cache)**
   - 負責把大型或二進位交付物落地並回 token/blob handle。
+  - **WebDAV working cache(2026-07, plan `patentmcp_webdav-r13-refactor`)**:token namespace 對 host 暴露成 online 掛載工作區。`/dav/{subject}/{rel}` class-2 method 表(`_dav.py`)+ per-owner Basic auth(`_auth_provider.py`)+ 4 個 lifecycle MCP tools(`cache_provision`/`cache_list`/`cache_export`/`cache_close`)。cache = deliverable-cache class(TokenStore 擴充),ephemeral working tree;truth store 為家,`export` 顯式落地(N:M COPY),`close` dirty gate。`stage_file` 已由 provision+DAV PUT 取代(下架)。
+- **本地計算層 (R13 landing plane, skill scripts)**
+  - **R13 compute/landing split(2026-07, plan `patentmcp_webdav-r13-refactor`)**:確定性 repo-local 後處理落地為 `skills/patentworks/scripts/*.py`(python3,以使用者 uid 在 host 執行,`--repo`/`--in` 參數,typed JSON 錯誤)。container 收斂為 repoless 網路/憑證閘道。純轉換 SSOT 抽為 `src/patent_mcp_server/_pure/`,skill 帶 vendored `_lib/`(hash drift test 固化)。
 
 ## Critical File Index
 - `/home/pkcs12/projects/patentmcp/README.md`
 - `/home/pkcs12/projects/patentmcp/mcp.json`
 - `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/patents.py`
 - `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/search_dispatcher.py`
-- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/screening_table.py`
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/screening_table.py`(現為 `_pure` re-export shim)
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_pure/`(確定性純轉換 SSOT:screening.py/claims.py)
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_token_store.py`(token store + deliverable-cache class)
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_dav.py`(WebDAV class-2 handler + LockTable)
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_auth_provider.py`(per-owner Basic auth,無 fallback)
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_http_app.py`(HTTP app + /dav 掛載)
+- `/home/pkcs12/projects/patentmcp/skills/patentworks/scripts/`(6 支 R13 landing scripts + vendored `_lib/`)
 - `/home/pkcs12/projects/patentmcp/skills/patentworks/SKILL.md`
 - `/home/pkcs12/projects/patentmcp/skills/patentworks/flows/screening.md`
 - `/home/pkcs12/projects/patentmcp/skills/patentworks/flows/priorsearch.md`
@@ -108,6 +117,12 @@
   - **GPSS uspc/family 缺口（BR①-B/C, DD-7）**：無 TIPO GPSS API 官方欄位規格證據,依反幻覺原則**不臆造 uspc 欄位碼**;USPC 軸走 `uspto_patents` PPUBS `CCL/<class>/<subclass>`,family 走 `epo_family`,均落 `patentworks/SKILL.md §5` 文件記載。
   - **skill §5 來源梯窮舉門檻（BR②）**：`patentworks/SKILL.md §5` 新增 Exhaustion Gate（宣告任一欄位缺失前須逐級走完來源梯並留證）、更新工具清單（補載 fetch_patent_pdf/extract_representative_figure/patentmcp_batch_download_figures/ppubs_batch_get_claims,刪除過時「PDF 端點系統性故障」論斷）、重寫爬蟲天條天平（同意後批量軟性機制是正規合規路徑,`scraping:true` 非違規證據）。
   - **工具未 surface（BR①-A, OUT-OF-SCOPE）**：patentmcp 工具未注入 opencode session 工具目錄,屬 opencode `enablement.json`/MCP App 註冊側,非本 repo 可修;待轉 opencode 處理。
+- R13 compute/landing split + WebDAV 邊界(plan `patentmcp_webdav-r13-refactor`, 2026-07):
+  - **兩平面(R13.5)**:compute plane = container network/credential tools(`patent_search`/`epo_*`/`gpss_download_*`/`fetch_patent_pdf`/`uspto_patents`/`google_*`/`patent_get_claim1`/`ppubs_batch_get_claims`/`pool_fetch`/`cache_*`);landing plane = `skills/patentworks/scripts/`(screening_build/claims_tools/search_audit/figure_extract/pool_charts/patentdb_local)。mcp.json `instructions` 依 R13.5 宣告兩平面分工。
+  - **8 個 tool 下架為 typed `TOOL_LANDED` redirect stub**:`build_screening_table`/`stage_file`(script=null,DAV 取代)/`search_audit`/`patentdb_put`/`patentdb_query`/`patentdb_import_csv`/`extract_representative_figure`/`patentmcp_analyze_pool`。保留註冊+schema,回 `{success:false,error_code:TOOL_LANDED,landing:{script,usage}}`,不執行舊邏輯;0.5.0 移除 stub。新增 `pool_fetch`(analyze_pool 取數半段 → records JSON handle)。
+  - **純轉換 SSOT**:`_pure/`(stdlib-only,零網路);`screening_table.py` 成 re-export shim;skill vendored `_lib/` 以 `tests/test_vendor_sync.py` sha256 比對防漂移(`PURE_LIB_DRIFT`),`scripts/sync_pure_lib.py` 再生。
+  - **WebDAV/cache**:`_token_store.py` deliverable-cache class(class-aware reaper:ephemeral 3600s idle、deliverable-cache dirty 免 reap + safety-net warn-first)+ provision/snapshot_exports/dirty_files/mkdir/move + credential(hmac.compare_digest);`_dav.py` class-2 + LockTable(TTL,衝突 423);`_auth_provider.py` Basic auth 缺/錯 401+WWW-Authenticate、跨 owner 403,**無 identity fallback**(天條 §11);`cache_export` 不可達 target → `EXPORT_TARGET_UNREACHABLE`、`cache_close` dirty → `WORKSPACE_CLOSE_DIRTY`+清單。
+  - **測試**:`tests/test_dav.py`/`test_cache_tools.py`/`test_token_store_cache.py`/`test_screening_build.py`/`test_vendor_sync.py`;全套 134 passed。spec package:`plans/patentmcp_webdav-r13-refactor/`。
 - Skill routing：`skills/patentworks/SKILL.md` 的 flow 選擇表。
 - 檢索/分析領域規格：`skills/patent-practitioner-workflow.md`。
 - Flow 契約：`skills/patentworks/flows/*.md`。
@@ -123,4 +138,5 @@
 - 2026-06-15: 已將架構 SSOT 從舊八階段 prompt pipeline 重構為 PatentWorks MCP + skill 現況；新增 analysis 作為資料來源無關的 planned boundary。
 - 2026-06-26: 獨立分析技能流程 `skills/patentworks/flows/analysis.md` 實作完成，並已同步更新 `SKILL.md` 路由表，以及 `screening.md` 與 `drafting.md` 的銜接說明。
 - 2026-07-03: 單一檢索入口上線(plan `patentmcp_search-dispatcher`)。新增 `search_dispatcher.py` + `patent_search` tool;`gpss_search`/`epo_search`/`gpatents_search`/`uspto_patents` search methods 下架;`build_screening_table` 改接 dispatcher;mcp.json 0.3.0;README/skill 文件同步。Critical File Index 舊 `PatentDrafter`/`vendor/patents-mcp` 失效路徑同步修正為現行 repo 佈局。詳見 Debug/Observability Map dispatcher 段。
+- 2026-07-03: R13 compute/landing split + WebDAV working cache 上線(plan `patentmcp_webdav-r13-refactor`,依 `opencode/specs/mcp-integration-standard` §R13)。新增 `_pure/`(純轉換 SSOT)+ `skills/patentworks/scripts/` 6 支 landing scripts + vendored `_lib/`;8 個確定性 tool 下架為 `TOOL_LANDED` redirect,新增 `pool_fetch`;`_token_store.py` 加 deliverable-cache class;新 `_dav.py`(class-2 WebDAV)+ `_auth_provider.py`(per-owner Basic auth,無 fallback)+ 4 個 `cache_*` lifecycle tools;mcp.json 0.4.0 + R13.5 兩平面 instructions;SKILL.md/screening.md/README 同步。134 tests 全過。Module Boundaries 新增「本地計算層」與 WebDAV 交付層;Critical File Index 補新模組。詳見 Debug/Observability Map R13 段。
 - 2026-06-28: 處理三份 BR(plan `br20260628_tooling_skill_gpss_gaps`)。`patents.py` + `screening_table.py` 工具層強化(顯式爬蟲 gate / 參數命名統一 + alias / 代表圖失敗分級 / PPUBS 便利包裝 / GPSS claim1_empty 旗標,20 tests 全過);`patentworks/SKILL.md §5` 加來源梯窮舉門檻 + 工具清單更新 + 爬蟲天條天平重寫。BR①-A(工具未 surface)判定為 opencode side、非本 repo 範圍。詳見 Debug/Observability Map 對應段落。

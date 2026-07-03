@@ -195,23 +195,14 @@ class ParameterAliasTest(unittest.TestCase):
         self.assertFalse(out_none["success"])
         self.assertEqual(out_none["error"], "MISSING_PUBLICATION_NUMBERS")
 
-    def test_extract_representative_figure_alias_param(self):
-        # Patch fetch to a controlled NO_PDF so we only test the alias parse path.
-        async def _no_pdf(pn, *a, **k):
-            return {"success": False, "error": "x", "attempts": []}
-
-        orig = P.fetch_patent_pdf
-        P.fetch_patent_pdf = _no_pdf  # type: ignore
-        try:
-            out_new = asyncio.run(P.extract_representative_figure(publication_number="US1"))
-            out_old = asyncio.run(P.extract_representative_figure(patent_number="US1"))
-            out_none = asyncio.run(P.extract_representative_figure())
-        finally:
-            P.fetch_patent_pdf = orig  # type: ignore
-        # alias paths reach the NO_PDF stage (not a missing-param error)
-        self.assertEqual(out_new["error"], "NO_PDF")
-        self.assertEqual(out_old["error"], "NO_PDF")
-        self.assertEqual(out_none["error"], "MISSING_PUBLICATION_NUMBER")
+    def test_extract_representative_figure_landed_stub(self):
+        # R13: the tool is a TOOL_LANDED redirect regardless of params (the
+        # alias/param parsing moved into figure_extract.py's CLI).
+        out = asyncio.run(P.extract_representative_figure(publication_number="US1"))
+        self.assertFalse(out["success"])
+        self.assertEqual(out["error_code"], "TOOL_LANDED")
+        self.assertEqual(out["landing"]["script"],
+                         "skills/patentworks/scripts/figure_extract.py")
 
 
 # ── P3: image-count grading ────────────────────────────────────────
@@ -227,30 +218,17 @@ class PdfImageCountTest(unittest.TestCase):
         _make_pdf(text_only, ["just some text", "more text"])
         self.assertEqual(P._pdf_image_count(text_only), 0)
 
-    def test_extract_grades_no_figure_page_with_images(self):
+    def test_locate_grades_no_figure_page_with_images(self):
+        # R13: the failure-grading (no FIG.1 marker but images present) is now a
+        # property of the poppler helpers that landed to figure_extract.py. Test
+        # them directly: image-bearing scan has no FIG.1 text page but >0 images.
         import tempfile
         td = tempfile.mkdtemp()
         pdf = os.path.join(td, "scan.pdf")
         _make_pdf_with_image(pdf)
-        pdf_bytes = open(pdf, "rb").read()
-
-        async def _fetch(pn, *a, **k):
-            entry = P.token_store.put_bytes(pdf_bytes, "scan.pdf")
-            h = P._handle(entry)
-            h["success"] = True
-            h["source"] = "test"
-            h["provenance"] = {"scraping": False}
-            return h
-
-        orig = P.fetch_patent_pdf
-        P.fetch_patent_pdf = _fetch  # type: ignore
-        try:
-            out = asyncio.run(P.extract_representative_figure("US1"))
-        finally:
-            P.fetch_patent_pdf = orig  # type: ignore
-        self.assertFalse(out["success"])
-        self.assertEqual(out["error"], "NO_FIGURE_PAGE_BUT_IMAGES_PRESENT")
-        self.assertGreater(out["image_count"], 0)
+        loc = P._locate_figure_page(pdf)
+        self.assertIsNone(loc["page"])
+        self.assertGreater(P._pdf_image_count(pdf), 0)
 
 
 # ── P5: claim1 empty flag ──────────────────────────────────────────

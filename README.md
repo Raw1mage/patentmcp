@@ -11,8 +11,10 @@
 - **檢索**:`patent_search`(**單一檢索入口**,來源梯內建:TIPO GPSS 官方 API 首選 → EPO OPS → USPTO PPUBS → gated Google Patents 爬蟲;依憑證與查詢軸自動路由,每級嘗試記入 `provenance`;爬蟲尾級須 `allow_scraping=true` 明確授權,否則官方全 miss 即 `SCRAPING_REQUIRED` fail-fast)。
   - 舊分散檢索工具已下架:`gpss_search`、`epo_search`、`gpatents_search`、`uspto_patents` 的 `ppubs_search_*` methods → 一律改用 `patent_search`。單號取文工具(`epo_family`/`epo_biblio`/`gpatents_get`/`ppubs_batch_get_claims`/PPUBS 全文)保留。
 - **取文/產物**:`gpatents_get`(完整摘要+claims)、`gpatents_download_pdf/figure`(代表圖/PDF)。
-- **建表**:`build_screening_table`(search→家族去重→切 Claim1→**欄位隨選 CSV**→handle;>300 擋下)。
-- **檔案交付**:docxmcp 式 token+blob store(`/files/{token}/blob/{rel}`),`stage_file` 落地任意檔回 handle,bytes 不過 context。
+- **R13 compute/landing 兩平面(2026-07, plan `patentmcp_webdav-r13-refactor`)**:依 `mcp-integration-standard` §R13,container tool 只管**網路/憑證取得**(compute plane);確定性後處理落地為 **repo-local skill scripts**(landing plane)。
+  - **建表**:`patent_search` 取 records JSON → 本地 `skills/patentworks/scripts/screening_build.py`(家族去重→切 Claim1→欄位隨選 CSV;>300 擋下)。舊 `build_screening_table` 已下架為 `TOOL_LANDED` redirect。
+  - **其他 landing scripts**:`claims_tools.py`/`search_audit.py`/`figure_extract.py`/`pool_charts.py`/`patentdb_local.py`(皆 `python3 <script> --help`)。`search_audit`/`patentdb_*`/`extract_representative_figure`/`patentmcp_analyze_pool` 同步下架為 redirect;新增 `pool_fetch`(pool 取數半段)。
+- **檔案交付 / WebDAV working cache**:docxmcp 式 token+blob store(`/files/{token}/blob/{rel}`)+ **online 掛載工作區** `/dav/{subject}/{rel}`(class-2 WebDAV,per-owner Basic auth,無 identity fallback)。lifecycle 工具 `cache_provision`→mount PUT 投料→`cache_export`(顯式 N:M 落地)→`cache_close`(dirty gate)。`stage_file` 已由 provision+DAV PUT 取代(下架)。bytes 不過 context。
 - **端點**:`/mcp`(Streamable HTTP)、`/`(landing)、`/tools`(機器可讀工具 schema,取自 live registry,錯誤直接 500 不靜默)、`/health`(liveness;`/healthz` 為相容別名)、`/files/{token}/blob/{rel}`、`/skills/patentworks.zip`。
 - **生命週期**:`webctl.sh {start|stop|restart|refresh|health|clean|purge}`;`scripts/patentmcp-self-heal.sh {--check|--heal}` 探測 UDS socket,不健康時只重建 `patentmcp-${USER}` compose project(不另起 daemon)。
 

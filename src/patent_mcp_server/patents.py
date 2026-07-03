@@ -1016,102 +1016,52 @@ async def build_screening_table(
     allow_scraping: bool = False,
     filename: str = "screening.csv",
 ) -> Dict[str, Any]:
-    """Run a CPC-anchored search and LAND the candidate set as a human-readable
-    CSV in the token store — the raw rows never flow through the model context.
-    The agent then reads the CSV in batches, judges each row, and writes back
-    the AI columns (relevance/score/tech_gist/feat/reason).
+    """[LANDED → skills/patentworks/scripts/screening_build.py]
 
-    Columns are selectable (欄位隨選制): a mandatory core (專利號/申請號/名稱/摘要/
-    獨立項/家族) is always kept; `purpose` adds a preset group
-    (landscape→分類; priorart→日期+CPC; fto→日期+申請人+法律狀態; minimal→無);
-    `extra_fields`/`exclude_fields` fine-tune. AI columns are always appended.
-
-    Source: the patent_search dispatcher ladder (GPSS → EPO → PPUBS → gated
-    Google Patents). The scraping tail only runs with allow_scraping=True;
-    non-GPSS sources fill fewer columns (blanks are honest gaps).
-
-    Returns {success, handle{token,rel,download_url,...}, count, deduped, source,
-    columns, gaps} — or {success, too_broad, count, suggestion} when the hit
-    count exceeds max_rows (narrow the query; do not analyze a divergent set).
+    R13 compute/landing split: screening-table construction is a deterministic,
+    stdlib-only record→CSV transform (dedup_by_family → resolve_columns →
+    build_csv) that no longer runs in-container. Run `patent_search` to get the
+    records JSON, then build the CSV locally with the landing script (agent uid,
+    host filesystem, zero model-context passthrough). Returns a TOOL_LANDED
+    redirect envelope; the old in-container logic is retired (removed 0.5.0).
     """
-    # 1) search → normalized records via the dispatcher ladder
-    #    (GPSS → EPO → PPUBS → gated gpatents; same scraping-gate semantics)
-    spec = _sd.normalize_query(
-        cpc=cpc, keyword=keyword, databases=databases,
-        date_from=date_from, date_to=date_to,
-        num=max(num, max_rows), allow_scraping=allow_scraping,
-    )
-    env = await _sd.dispatch_search(
-        spec,
-        gpss_client=gpss_client, epo_client=epo_client,
-        ppubs_client=ppubs_client, gpatents_client=gpatents_client,
-    )
-    if not env.get("success"):
-        return {"success": False,
-                "error": env.get("error_code") or env.get("message") or "search failed",
-                "provenance": env.get("provenance", [])}
-    records = env["records"]
-    source = env["source"]
-
-    count = len(records)
-    # 2) >max_rows → don't produce a table; ask to narrow
-    if count > max_rows:
-        return {
-            "success": True, "too_broad": True, "count": count, "source": source,
-            "suggestion": f"命中 {count} 件 > {max_rows};請收斂(加嚴 CPC 子群 / 加關鍵詞 / 縮日期)後再建表。",
-        }
-
-    # 3) dedup by family → select columns → CSV → handle
-    deduped = _st.dedup_by_family(records)
-    columns = _st.resolve_columns(purpose, extra_fields, exclude_fields)
-    data = _st.build_csv(deduped, columns)
-    entry = token_store.put_bytes(data, filename)
-
-    # DD-11: inline-absorb bibliographic fields into the global patentdb the moment
-    # the CSV lands — records are already in memory, so this costs zero extra toolcall
-    # and zero network. Side-effect only (DD-7): never block the search result.
-    absorbed = None
-    try:
-        absorbed = _pdb.import_records(deduped, acquisition_cost="low")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"patentdb inline absorb failed: {e}")
-    # Honest gaps: family is unavailable from BOTH GPSS and Google search
-    # (neither exposes an INPADOC family_id), so surface it regardless of source
-    # (BR_20260628 C). legal_status/citations are never in-band either.
-    gaps = {k: v for k, v in _st.KNOWN_GAPS.items()
-            if (k in columns or k == "family")
-            and (source in ("google", "gpatents", "epo", "ppubs")
-                 or k in ("legal_status", "citations", "family"))}
     return {
-        "success": True,
-        "handle": _handle(entry),
-        "count": count,
-        "deduped": len(deduped),
-        "source": source,
-        "purpose": purpose,
-        "columns": [_st.COLUMNS[k] for k in columns],
-        "gaps": gaps,
+        "success": False,
+        "error_code": "TOOL_LANDED",
+        "landing": {
+            "script": "skills/patentworks/scripts/screening_build.py",
+            "usage": (
+                "# 1) get records via patent_search, save to records.json\n"
+                "python3 skills/patentworks/scripts/screening_build.py "
+                "--in records.json --out screening.csv "
+                "--purpose landscape --source records"
+            ),
+        },
     }
 
 
 @mcp.tool()
 async def stage_file(path: str, filename: Optional[str] = None) -> Dict[str, Any]:
-    """Stage an existing local file (e.g. a scored CSV the screening flow built)
-    into the token store, returning a docxmcp-style handle
-    {token, rel, download_url, bytes, sha256} for the client to download or for
-    docxmcp `from_token` to pull into a report. The bytes never pass through the
-    model context.
+    """[LANDED → WebDAV working cache; direct staging retired]
+
+    R13/WebDAV: "stage a local file into the token store" is obsoleted by the
+    WebDAV working cache. Provision a subject-anchored cache with
+    `cache_provision`, then PUT the file over WebDAV (the mounted cache tree);
+    the deliverable lands via `cache_export`. Returns a TOOL_LANDED envelope
+    with a null script (no landing script — the DAV path replaces it).
     """
-    if not os.path.isfile(path):
-        return {"success": False, "error": f"not a file: {path}"}
-    try:
-        with open(path, "rb") as fh:
-            data = fh.read()
-    except OSError as e:
-        return {"success": False, "error": str(e)}
-    name = filename or os.path.basename(path)
-    entry = token_store.put_bytes(data, name)
-    return _handle(entry)
+    return {
+        "success": False,
+        "error_code": "TOOL_LANDED",
+        "landing": {
+            "script": None,
+            "usage": (
+                "provision a cache (cache_provision(subject_id=...)) then PUT the "
+                "file over WebDAV to the mounted cache tree; direct staging into "
+                "the token store is retired — use cache_export to land deliverables."
+            ),
+        },
+    }
 
 
 @mcp.tool()
@@ -1143,39 +1093,7 @@ async def gpatents_get(
     return result
 
 
-def clean_html_text(html_text: str) -> str:
-    if not html_text:
-        return ""
-    import re
-    # Remove HTML tags
-    text = re.sub(r'<[^>]+>', ' ', html_text)
-    # Normalize whitespaces
-    return re.sub(r'\s+', ' ', text).strip()
-
-def extract_claim1_text(claims_text: str, full: bool = True) -> str:
-    if not claims_text:
-        return "Claim 1 not found."
-    claims_text = claims_text.strip()
-    import re
-    
-    text = None
-    for pattern in [
-        r'1\.\s+(.*?)(?=\s+2\.\s+|\n2\.)',
-        r'1\.\s+(.*)',
-        r'1[\.、](.*?)(?=\s*2[\.、]|\n2[\.、])',
-        r'1[\.、](.*)'
-    ]:
-        m = re.search(pattern, claims_text, re.DOTALL | (re.IGNORECASE if '2' in pattern else 0))
-        if m:
-            text = re.sub(r'\s+', ' ', m.group(1).strip())
-            break
-            
-    if text is None:
-        text = claims_text.strip()
-        
-    if not full and len(text) > 1000:
-        return text[:1000].strip() + "..."
-    return text
+from ._pure.claims import clean_html_text, extract_claim1_text  # noqa: E402,F401
 
 @mcp.tool()
 async def patent_get_claim1(publication_number: Optional[str] = None, full: bool = True,
@@ -1868,102 +1786,27 @@ async def extract_representative_figure(
     thumbnails (60x80 index images) for deliverables.
 
     `patent_number` is a backward-compatible alias for `publication_number`.
+
+    [LANDED → skills/patentworks/scripts/figure_extract.py]
+
+    R13 compute/landing split: the PDF→FIG.1→PNG pipeline is a deterministic
+    poppler-CLI post-process. Fetch the PDF in-container via `fetch_patent_pdf`
+    (network stays here), download it, then run the landing script locally
+    (poppler on host; it precheck-fails with MISSING_DEPENDENCY if absent).
+    Returns a TOOL_LANDED redirect envelope.
     """
-    import tempfile
-    import os as _os
-
-    pub = publication_number or patent_number
-    if not pub:
-        return {"success": False, "error": "MISSING_PUBLICATION_NUMBER",
-                "detail": "publication_number (or patent_number alias) is required"}
-    publication_number = pub
-
-    # Step 1: ensure a PDF (reuse the unified fetch tool + its fallback chain).
-    # This is a figure-extraction purpose: GPSS headless scraping IS authorized
-    # here (TW figure pipeline), so opt into the explicit scraping gate.
-    pdf_res = await fetch_patent_pdf(publication_number, allow_scraping=True)
-    if not pdf_res.get("success"):
-        return {"success": False, "error": "NO_PDF",
-                "publication_number": publication_number,
-                "detail": pdf_res.get("error"), "attempts": pdf_res.get("attempts")}
-
-    # Resolve the landed PDF to an on-disk path (poppler needs a filesystem
-    # path). blob_path returns the real file inside the token namespace.
-    try:
-        src_pdf_path = str(token_store.blob_path(pdf_res["token"], pdf_res["rel"]))
-    except Exception as e:  # noqa: BLE001
-        return {"success": False, "error": "NO_PDF",
-                "publication_number": publication_number,
-                "detail": f"fetched PDF token could not be resolved: {e}"}
-
-    with tempfile.TemporaryDirectory() as td:
-        # Copy into a private temp path so a TTL reap mid-render can't pull it.
-        pdf_path = _os.path.join(td, "patent.pdf")
-        import shutil as _shutil
-        _shutil.copyfile(src_pdf_path, pdf_path)
-
-        # Step 1b: identity verification (BR_20260629). The fetch fallback chain
-        # can return a DIFFERENT patent's PDF (a fuzzy GPSS neighbour, or a
-        # wrong document from a fallback source). Landing its figure would
-        # SILENTLY inject the wrong patent's drawing into deliverables and still
-        # report success. Verify the PDF's own publication number before trusting
-        # it; fail LOUD on a confirmed mismatch (verified is False). A None
-        # verdict (no text layer) is INCONCLUSIVE — proceed but stamp it.
-        identity = _verify_pdf_identity(pdf_path, publication_number)
-        if identity["verified"] is False:
-            return {"success": False, "error": "WRONG_PATENT_FETCHED",
-                    "publication_number": publication_number,
-                    "requested_number_core": identity["requested_core"],
-                    "detected_number_cores": identity["detected_cores"],
-                    "detail": ("取回的 PDF 內文 publication number 與請求號不符 —— "
-                               "fallback 來源回了錯件專利,拒絕用其圖頁(避免錯件圖靜默落地)。"),
-                    "source_pdf": {"source": pdf_res.get("source"),
-                                   "provenance": pdf_res.get("provenance")}}
-
-        # Step 2: locate the figure page.
-        loc = _locate_figure_page(pdf_path)
-        if loc["page"] is None:
-            # Grade the failure: a PDF with embedded images but no FIG.1 text
-            # marker is likely a no-text-layer scan that still holds figures —
-            # surface that honestly instead of a flat NO_FIGURE_PAGE. Do NOT
-            # guess which embedded image is the representative figure.
-            image_count = _pdf_image_count(pdf_path)
-            if image_count > 0:
-                return {"success": False, "error": "NO_FIGURE_PAGE_BUT_IMAGES_PRESENT",
-                        "publication_number": publication_number,
-                        "image_count": image_count,
-                        "pages": loc.get("pages"),
-                        "detail": (f"PDF 無 FIG.1 文字標記(可能為無文字層掃描版),"
-                                   f"但含 {image_count} 個內嵌影像;請人工挑選或從已下載 PDF 抽圖"),
-                        "source_pdf": {"source": pdf_res.get("source"),
-                                       "provenance": pdf_res.get("provenance")}}
-            return {"success": False, "error": "NO_FIGURE_PAGE",
-                    "publication_number": publication_number,
-                    "pages": loc.get("pages"),
-                    "detail": "No FIG.1 marker and no usable text layer "
-                              "(likely a scanned PDF without OCR)."}
-
-        # Step 3: render the page.
-        png = _render_page_png(pdf_path, loc["page"], dpi=dpi)
-        if not png:
-            return {"success": False, "error": "RENDER_FAILED",
-                    "publication_number": publication_number,
-                    "page_number": loc["page"]}
-
-    name = f"{publication_number}_FIG_p{loc['page']}.png"
-    entry = token_store.put_bytes(png, name)
-    result = _handle(entry)
-    result["page_number"] = loc["page"]
-    result["dpi"] = dpi
-    result["locate_method"] = loc["method"]
-    result["source_pdf"] = {"source": pdf_res.get("source"),
-                            "provenance": pdf_res.get("provenance")}
-    # Stamp the identity verdict so callers / human QA can see whether the PDF's
-    # pubno was confirmed (verified=True) or merely inconclusive (verified=None,
-    # e.g. scanned PDF with no text layer). verified=False never reaches here.
-    result["identity_verified"] = identity["verified"]
-    result["detected_number_cores"] = identity["detected_cores"]
-    return result
+    return {
+        "success": False,
+        "error_code": "TOOL_LANDED",
+        "landing": {
+            "script": "skills/patentworks/scripts/figure_extract.py",
+            "usage": (
+                "# 1) fetch_patent_pdf(publication_number) → download the PDF locally\n"
+                "python3 skills/patentworks/scripts/figure_extract.py "
+                "--pdf patent.pdf --out figure.png --dpi 200"
+            ),
+        },
+    }
 
 
 @mcp.tool()
@@ -2982,20 +2825,22 @@ async def patentmcp_batch_download_figures(publication_numbers: List[str]) -> Di
 
 
 @mcp.tool()
-async def patentmcp_analyze_pool(publication_numbers: List[str]) -> Dict[str, Any]:
-    """Analyze a patent pool and generate 6 high-quality HSL-themed visualization charts
-    (Country, Trend, CPC, Assignee, Category, and pure-matplotlib Word Cloud)
-    staged in the token store.
+async def pool_fetch(publication_numbers: List[str]) -> Dict[str, Any]:
+    """Fetch per-publication metadata for a patent pool and LAND it as a records
+    JSON in the token store (the network/credential half of the old
+    patentmcp_analyze_pool). Source ladder per pub: BigQuery → TW GPSS → Google
+    Patents scrape → patent_get_claim1. The raw records never flow through the
+    model context; the agent then renders charts LOCALLY with
+    skills/patentworks/scripts/pool_charts.py over the returned handle.
+
+    Returns {success, handle{token,rel,download_url,...}, count, gaps}. The JSON
+    payload is {"records": [...], "gaps": [...]} — records is the same schema the
+    old chart pipeline consumed (pub/country/year/assignee/cpc/cpc_group/title/
+    abstract/claim1).
     """
-    import pandas as pd
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import io
+    import json as _json
     import re
-    from collections import Counter
-    import math
-    
+
     # 1. Fetch metadata in batch
     records = []
     gaps = []
@@ -3106,7 +2951,233 @@ async def patentmcp_analyze_pool(publication_numbers: List[str]) -> Dict[str, An
             pass
             
         records.append(rec)
-        
+
+    payload = _json.dumps({"records": records, "gaps": gaps},
+                          ensure_ascii=False, indent=2).encode("utf-8")
+    entry = token_store.put_bytes(payload, "pool_records.json")
+    return {
+        "success": True,
+        "handle": _handle(entry),
+        "count": len(records),
+        "gaps": gaps,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# WebDAV working-cache lifecycle tools (DD-5/DD-6/DD-7).
+#
+# A deliverable-cache is a subject-anchored, owner-owned token dir that the
+# agent mounts over WebDAV (Basic auth) to work on bulk intermediate artifacts
+# outside the container. `cache_provision` mints it + a per-owner credential;
+# `cache_export` COPY-lands src + deliverables to a truth-store target (N:M);
+# `cache_close` gates on working-tree cleanliness (no un-exported dirty) before
+# reaping. owner_identity is threaded explicitly — NEVER silently invented
+# (天條 §11 / DD-6).
+# ─────────────────────────────────────────────────────────────────────
+import secrets as _secrets
+import shutil as _shutil
+from pathlib import Path as _Path
+
+_DAV_MOUNT_PREFIX = "/dav"
+
+
+def _require_owner(owner_identity: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Return a typed error envelope if owner_identity is absent (no fallback)."""
+    if not owner_identity or not owner_identity.strip():
+        return {
+            "success": False,
+            "error_code": "OWNER_REQUIRED",
+            "detail": (
+                "owner_identity is required and must be passed explicitly; "
+                "patentmcp never infers a default/global identity (天條 §11)."
+            ),
+        }
+    return None
+
+
+@mcp.tool()
+async def cache_provision(subject_id: str,
+                          owner_identity: str) -> Dict[str, Any]:
+    """Provision (idempotent) a WebDAV working cache bound to a deliverable
+    subject, returning its mount path + a one-time Basic credential.
+
+    Idempotent per (owner_identity, subject_id): calling twice returns the SAME
+    cache token and mount path (a fresh credential is only minted on first
+    provision; re-provision returns success without leaking the stored secret).
+    The credential is returned in cleartext EXACTLY once — only its hash is
+    persisted. Mount it with any WebDAV client (rclone/davfs2) using Basic auth
+    username=<owner_identity> password=<credential> against the mount path.
+
+    Returns {success, token, subject_id, owner_identity, mount_path,
+    credential?} — `credential` present only on first provision.
+    """
+    err = _require_owner(owner_identity)
+    if err:
+        return err
+    if not subject_id or not subject_id.strip():
+        return {"success": False, "error_code": "SUBJECT_REQUIRED",
+                "detail": "subject_id is required"}
+    existing = token_store.find_by_subject(owner_identity, subject_id)
+    entry = token_store.provision(subject_id, owner_identity)
+    out = {
+        "success": True,
+        "token": entry.token,
+        "subject_id": subject_id,
+        "owner_identity": owner_identity,
+        "mount_path": f"{_DAV_MOUNT_PREFIX}/{subject_id}",
+    }
+    if existing is None or not entry.credential_hash:
+        secret = _secrets.token_urlsafe(24)
+        token_store.set_credential(entry.token, secret)
+        out["credential"] = secret
+    return out
+
+
+@mcp.tool()
+async def cache_list(owner_identity: str) -> Dict[str, Any]:
+    """List the caller's deliverable caches with their dirty state.
+
+    Returns only caches owned by `owner_identity` (no cross-owner disclosure).
+    Each item: {subject_id, token, mount_path, dirty (bool), dirty_files,
+    last_export_at}.
+    """
+    err = _require_owner(owner_identity)
+    if err:
+        return err
+    items = []
+    for entry in token_store:
+        if getattr(entry, "owner_identity", None) != owner_identity:
+            continue
+        if getattr(entry, "token_class", None) != "deliverable-cache":
+            continue
+        dirty = token_store.dirty_files(entry.token)
+        items.append({
+            "subject_id": entry.subject_id,
+            "token": entry.token,
+            "mount_path": f"{_DAV_MOUNT_PREFIX}/{entry.subject_id}",
+            "dirty": bool(dirty),
+            "dirty_files": dirty,
+            "last_export_at": entry.last_export_at,
+        })
+    return {"success": True, "caches": items, "count": len(items)}
+
+
+@mcp.tool()
+async def cache_export(subject_id: str, target: str,
+                       owner_identity: str) -> Dict[str, Any]:
+    """COPY-land a cache's full working tree (src + deliverables) to a truth-store
+    target reference point, then stamp the export baseline.
+
+    N:M: the same cache may be exported to multiple targets across calls; the
+    target is passed each call. `target` is a host directory reference point; it
+    is created if its PARENT exists, else typed EXPORT_TARGET_UNREACHABLE (no
+    directory tree is fabricated). After a successful copy, the export snapshot
+    (last_export_at + per-file hashes) is recorded so `cache_close` can detect
+    subsequent dirty edits.
+
+    Returns {success, subject_id, target, files_copied} or a typed error.
+    """
+    err = _require_owner(owner_identity)
+    if err:
+        return err
+    entry = token_store.find_by_subject(owner_identity, subject_id)
+    if entry is None:
+        return {"success": False, "error_code": "CACHE_NOT_FOUND",
+                "detail": f"no cache for subject {subject_id!r} owned by caller"}
+    tgt = _Path(target)
+    if not tgt.parent.exists() or not tgt.parent.is_dir():
+        return {
+            "success": False,
+            "error_code": "EXPORT_TARGET_UNREACHABLE",
+            "detail": f"target parent does not exist / not writable: {tgt.parent}",
+        }
+    src_dir = entry.dir_path
+    files_copied = 0
+    try:
+        tgt.mkdir(parents=True, exist_ok=True)
+        for f in token_store.list_files(entry.token):
+            rel = f["rel"]
+            src_path = src_dir / rel
+            dst_path = tgt / rel
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            _shutil.copy2(src_path, dst_path)
+            files_copied += 1
+    except OSError as e:
+        return {"success": False, "error_code": "EXPORT_TARGET_UNREACHABLE",
+                "detail": f"copy failed: {e}"}
+    token_store.snapshot_exports(entry.token)
+    return {"success": True, "subject_id": subject_id, "target": str(tgt),
+            "files_copied": files_copied}
+
+
+@mcp.tool()
+async def cache_close(subject_id: str, owner_identity: str,
+                      force: bool = False) -> Dict[str, Any]:
+    """Close (reap) a deliverable cache, gated on working-tree cleanliness.
+
+    If there are dirty files (changed since the last cache_export) and force is
+    False, refuse with typed WORKSPACE_CLOSE_DIRTY + the un-landed file list —
+    the cache is NOT reaped (天條 §11: no silent data loss). Export first, or
+    pass force=True to discard. On clean (or forced) close the cache token dir is
+    removed.
+
+    Returns {success, subject_id, reaped} or a typed WORKSPACE_CLOSE_DIRTY error.
+    """
+    err = _require_owner(owner_identity)
+    if err:
+        return err
+    entry = token_store.find_by_subject(owner_identity, subject_id)
+    if entry is None:
+        return {"success": False, "error_code": "CACHE_NOT_FOUND",
+                "detail": f"no cache for subject {subject_id!r} owned by caller"}
+    dirty = token_store.dirty_files(entry.token)
+    if dirty and not force:
+        return {
+            "success": False,
+            "error_code": "WORKSPACE_CLOSE_DIRTY",
+            "detail": "un-exported changes exist; export first or pass force=True",
+            "unlanded": dirty,
+        }
+    token_store.delete(entry.token)
+    return {"success": True, "subject_id": subject_id, "reaped": True,
+            "forced": bool(force and dirty)}
+
+
+@mcp.tool()
+async def patentmcp_analyze_pool(publication_numbers: List[str]) -> Dict[str, Any]:
+    """[LANDED → pool_fetch (data) + skills/patentworks/scripts/pool_charts.py (charts)]
+
+    R13 compute/landing split: the tool split into its two halves. The
+    network/credential metadata fetch is now the `pool_fetch` MCP tool (returns
+    a records JSON handle); the deterministic matplotlib chart rendering is the
+    host-local `pool_charts.py` landing script (matplotlib precheck-fails with
+    MISSING_DEPENDENCY if absent). Returns a TOOL_LANDED redirect envelope.
+    """
+    return {
+        "success": False,
+        "error_code": "TOOL_LANDED",
+        "landing": {
+            "script": "skills/patentworks/scripts/pool_charts.py",
+            "usage": (
+                "# 1) pool_fetch(publication_numbers) → download pool_records.json\n"
+                "python3 skills/patentworks/scripts/pool_charts.py "
+                "--in pool_records.json --out-dir charts/"
+            ),
+        },
+    }
+
+
+def __retired_analyze_pool_charts_placeholder():
+    import pandas as pd
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import io
+    import re
+    from collections import Counter
+    import math
+    records = []
+    gaps = []
     df = pd.DataFrame(records)
     
     # 2. Setup plotting parameters (HSL palette)
@@ -3294,17 +3365,24 @@ async def search_audit(
 
     FAIL ⇒ the search is too thin to deliver: fix the listed gaps and re-search
     before producing the pool / report (priorsearch.md §3.B step 4 & §3.D step 8).
+
+    [LANDED → skills/patentworks/scripts/search_audit.py]
+
+    R13 compute/landing split: this rigor gate issues NO network requests — it
+    only audits the local matrix-log.jsonl the search agent left behind, so it
+    runs as a host-local landing script. Returns a TOOL_LANDED redirect envelope.
     """
-    try:
-        result = _sa.audit(matrix_log_path, campaign_path)
-        result["success"] = True
-        return result
-    except _sa.MatrixLogError as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "hint": "matrix-log.jsonl 必須存在且為每行一筆 JSON 查詢紀錄（schema 見 priorsearch.md §0）。",
-        }
+    return {
+        "success": False,
+        "error_code": "TOOL_LANDED",
+        "landing": {
+            "script": "skills/patentworks/scripts/search_audit.py",
+            "usage": (
+                "python3 skills/patentworks/scripts/search_audit.py "
+                "--log matrix-log.jsonl [--campaign 00_campaign.md]"
+            ),
+        },
+    }
 
 
 @mcp.tool()
@@ -3339,18 +3417,20 @@ async def patentdb_put(
 
     Returns:
         {pubno, action: created|updated|unchanged, merged_fields?, completeness}.
+
+    [LANDED → skills/patentworks/scripts/patentdb_local.py put]
     """
-    try:
-        return _pdb.put(
-            publication_number,
-            fields=fields,
-            blobs=blobs,
-            acquisition_cost=acquisition_cost,
-            overwrite=overwrite,
-        )
-    except Exception as e:
-        logger.warning(f"patentdb_put failed for {publication_number}: {e}")
-        return {"error": "patentdb_put_failed", "detail": str(e), "pubno": publication_number}
+    return {
+        "success": False,
+        "error_code": "TOOL_LANDED",
+        "landing": {
+            "script": "skills/patentworks/scripts/patentdb_local.py",
+            "usage": (
+                "python3 skills/patentworks/scripts/patentdb_local.py put "
+                "--pubno US20230081319A1 --fields fields.json"
+            ),
+        },
+    }
 
 
 @mcp.tool()
@@ -3376,17 +3456,20 @@ async def patentdb_query(
 
     Returns include `completeness` flags so the caller can judge whether to go fetch
     missing pieces (passive accumulation: fetch only what's missing).
+
+    [LANDED → skills/patentworks/scripts/patentdb_local.py query]
     """
-    try:
-        return _pdb.query(
-            publication_number=publication_number,
-            fts=fts,
-            country=country,
-            limit=limit,
-        )
-    except Exception as e:
-        logger.warning(f"patentdb_query failed: {e}")
-        return {"error": "patentdb_query_failed", "detail": str(e)}
+    return {
+        "success": False,
+        "error_code": "TOOL_LANDED",
+        "landing": {
+            "script": "skills/patentworks/scripts/patentdb_local.py",
+            "usage": (
+                "python3 skills/patentworks/scripts/patentdb_local.py query "
+                "--fts 'solid state battery' --country TW --limit 20"
+            ),
+        },
+    }
 
 
 @mcp.tool()
@@ -3400,12 +3483,20 @@ async def patentdb_import_csv(csv_path: str) -> Dict[str, Any]:
 
     Default trigger is INLINE from the search tool when a CSV lands (DD-11); this manual
     tool is the back-fill entry for historical CSVs.
+
+    [LANDED → skills/patentworks/scripts/patentdb_local.py import-csv]
     """
-    try:
-        return _pdb.import_csv(csv_path)
-    except Exception as e:
-        logger.warning(f"patentdb_import_csv failed for {csv_path}: {e}")
-        return {"error": "patentdb_import_csv_failed", "detail": str(e), "csv": csv_path}
+    return {
+        "success": False,
+        "error_code": "TOOL_LANDED",
+        "landing": {
+            "script": "skills/patentworks/scripts/patentdb_local.py",
+            "usage": (
+                "python3 skills/patentworks/scripts/patentdb_local.py import-csv "
+                "--csv candidates.csv"
+            ),
+        },
+    }
 
 
 def main():

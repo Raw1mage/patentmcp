@@ -1,0 +1,367 @@
+"""Screening-table assembly: normalize search hits → dedup by family → select
+columns by purpose → write a human-readable CSV.
+
+Columns are selectable (欄位隨選制): a mandatory CORE is always kept, a PURPOSE
+preset adds groups (classification for landscape, dates for prior-art/FTO, etc.),
+and AI writeback columns are always appended for the agent to fill during the
+digestion pass. Unavailable fields are emitted empty (honestly blank), never faked.
+
+Pure, stdlib-only, zero-network. Moved verbatim from screening_table.py so both
+the container and landing scripts can import the same deterministic logic.
+"""
+from __future__ import annotations
+
+import csv
+import html as _html
+import io
+from typing import Any, Dict, List, Optional
+
+# ── column dictionary ───────────────────────────────────────────────
+# key -> (header, kind). kind: "core" | "select" | "ai" | "derived"
+COLUMNS: Dict[str, str] = {
+    # core (mandatory)
+    "pubno": "專利號",
+    "appno": "申請號",
+    "title": "名稱",
+    "abstract": "摘要",
+    "claim1": "獨立項",
+    "family": "家族",          # derived: family_id (+N members)
+    # selectable
+    "cpc": "CPC",
+    "ipc": "IPC",
+    "uspc": "USPC",
+    "prio_date": "優先權日",
+    "app_date": "申請日",
+    "pub_date": "公開/公告日",
+    "grant_date": "核准日",
+    "assignee": "申請人",
+    "inventor": "發明人",
+    "legal_status": "法律狀態",
+    "citations": "引用",
+    # AI writeback (always appended)
+    "relevance": "相關性",
+    "score": "分數",
+    "tech_gist": "技術要點",
+    "feat": "命中/落差要件",
+    "reason": "理由",
+}
+
+CORE_KEYS = ["pubno", "appno", "title", "abstract", "claim1", "family"]
+AI_KEYS = ["relevance", "score", "tech_gist", "feat", "reason"]
+
+PRESETS: Dict[str, List[str]] = {
+    "minimal": [],
+    "landscape": ["cpc", "ipc", "assignee"],
+    "priorart": ["prio_date", "app_date", "pub_date", "cpc"],
+    "fto": ["app_date", "grant_date", "assignee", "legal_status"],
+}
+
+
+def resolve_columns(
+    purpose: str = "landscape",
+    extra: Optional[List[str]] = None,
+    exclude: Optional[List[str]] = None,
+) -> List[str]:
+    """core ∪ preset(purpose) ∪ extra − exclude, then AI columns appended.
+    Core and AI columns cannot be excluded."""
+    exclude = set(exclude or [])
+    ordered = list(CORE_KEYS) + PRESETS.get(purpose, PRESETS["landscape"]) + list(extra or [])
+    seen, cols = set(), []
+    for k in ordered:
+        if k in COLUMNS and k not in seen and k not in CORE_KEYS:
+            # selectable: honor exclude
+            if k in exclude:
+                continue
+        if k in COLUMNS and k not in seen:
+            seen.add(k)
+            cols.append(k)
+    # AI columns always last, never excluded
+    for k in AI_KEYS:
+        if k not in seen:
+            cols.append(k)
+            seen.add(k)
+    return cols
+
+
+def dedup_by_family(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Collapse INPADOC family members to one representative row; the rep's
+    `members` lists the collapsed publication numbers. Records without a
+    family_id pass through unchanged. No-op when no family_id is present
+    (e.g. source lacks family data)."""
+    by_family: Dict[str, Dict[str, Any]] = {}
+    out: List[Dict[str, Any]] = []
+    for r in records:
+        fam = (r.get("family_id") or "").strip()
+        r.setdefault("members", [])
+        if fam:
+            if fam in by_family:
+                by_family[fam]["members"].append(r.get("pubno", ""))
+                continue
+            by_family[fam] = r
+        out.append(r)
+    return out
+
+
+def _render(rec: Dict[str, Any], key: str) -> str:
+    if key == "family":
+        fam = rec.get("family_id") or ""
+        n = len(rec.get("members") or [])
+        if fam and n:
+            return f"{fam} (+{n})"
+        return fam
+    if key in AI_KEYS:
+        return ""  # filled by the agent later
+    val = rec.get(key, "")
+    if isinstance(val, list):
+        return "; ".join(str(x) for x in val)
+    return "" if val is None else str(val)
+
+
+def build_csv(records: List[Dict[str, Any]], columns: List[str]) -> bytes:
+    """Render records into a UTF-8 CSV (bytes) with the given column keys."""
+    buf = io.StringIO(newline="")
+    writer = csv.writer(buf)
+    writer.writerow([COLUMNS[k] for k in columns])
+    for rec in records:
+        writer.writerow([_render(rec, k) for k in columns])
+    return buf.getvalue().encode("utf-8")
+
+
+# ── source adapters: normalize a source's hits into common record dicts ──
+
+def google_to_records(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """gpatents_search results → records. Google search gives no appno/claim1/
+    cpc/ipc/family_id; those land empty (fill via GPSS or gpatents_get)."""
+    recs = []
+    for x in results:
+        recs.append({
+            "pubno": x.get("publication_number", ""),
+            "appno": "",
+            "title": x.get("title", ""),
+            "abstract": _html.unescape(x.get("snippet", "") or ""),  # snippet only
+            "claim1": "",
+            "family_id": "",   # Google search exposes country_status, not a family id
+            "prio_date": x.get("priority_date", ""),
+            "app_date": x.get("filing_date", ""),
+            "pub_date": x.get("publication_date", ""),
+            "grant_date": x.get("grant_date", ""),
+            "assignee": x.get("assignee", ""),
+            "inventor": x.get("inventor", ""),
+        })
+    return recs
+
+
+def _g(node: Any, *keys: str, default: str = "") -> Any:
+    """Safe nested get over GPSS dicts."""
+    cur = node
+    for k in keys:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(k)
+    return cur if cur is not None else default
+
+
+def _as_list(x: Any) -> List[Any]:
+    if x is None:
+        return []
+    return x if isinstance(x, list) else [x]
+
+
+# Common claim-block boilerplate headers that carry no substantive claim text.
+_CLAIM1_BOILERPLATE = {
+    "what is claimed is", "we claim", "i claim", "claims", "the claims",
+    "what i claim", "what we claim", "what is claimed", "what we claim is",
+    "what i claim is",
+}
+
+
+def _claim1_is_empty(claim1: str) -> bool:
+    """True when claim1 has no substantive content.
+
+    A claim1 is considered empty when, after stripping whitespace and trailing
+    punctuation, it is the empty string OR matches a known boilerplate header
+    (case-insensitive) such as "What is claimed is:" with no actual claim body.
+    Such records need a fallback to patent_get_claim1 / PPUBS.
+    """
+    if not claim1:
+        return True
+    import re
+    norm = re.sub(r"\s+", " ", str(claim1)).strip()
+    if not norm:
+        return True
+    # strip surrounding/trailing punctuation for boilerplate comparison
+    stripped = norm.strip(" :：.。,，;；-—").lower()
+    if not stripped:
+        return True
+    return stripped in _CLAIM1_BOILERPLATE
+
+
+def gpss_to_records(gpss_json: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """GPSS search JSON → records. Robust type handling for nested data structures."""
+    api = gpss_json.get("data", {}).get("gpss-API") or gpss_json.get("gpss-API", {})
+    rows = _as_list(_g(api, "patent", "patentcontent"))
+    recs = []
+    for r in rows:
+        # claims[0] -> Claim1
+        claims = _as_list(_g(r, "claims", "claim"))
+        claim1 = ""
+        if claims:
+            first_claim = claims[0]
+            if isinstance(first_claim, dict):
+                ct = first_claim.get("claim-text", "")
+                claim1 = " ".join(ct) if isinstance(ct, list) else str(ct or "")
+            else:
+                claim1 = str(first_claim)
+        abstract = _g(r, "abstract", "p")
+        if isinstance(abstract, list):
+            abstract = " ".join(str(x) for x in abstract)
+
+        # Safe applicant parse
+        applicants_list = _as_list(_g(r, "parties", "applicants", "applicant"))
+        applicant_names = []
+        for a in applicants_list:
+            if isinstance(a, dict):
+                name = a.get("english-name") or a.get("name") or ""
+                if name: applicant_names.append(name)
+            else:
+                applicant_names.append(str(a))
+        applicants = "; ".join(applicant_names)
+
+        # Safe inventor parse
+        inventors_list = _as_list(_g(r, "parties", "inventors", "inventor"))
+        inventor_names = []
+        for i in inventors_list:
+            if isinstance(i, dict):
+                name = i.get("english-name") or i.get("name") or ""
+                if name: inventor_names.append(name)
+            else:
+                inventor_names.append(str(i))
+        inventors = "; ".join(inventor_names)
+
+        # Safe CPC/IPC parse
+        cpc = "; ".join(
+            (c.get("keyValue", "") if isinstance(c, dict) else str(c))
+            for c in _as_list(_g(r, "classifications-cpc", "cpc"))[:6]
+        )
+        ipc = "; ".join(
+            (c.get("keyValue", "") if isinstance(c, dict) else str(c))
+            for c in _as_list(_g(r, "classifications-ipc", "ipc"))[:6]
+        )
+
+        # Safe Priority claim parse
+        prio = _as_list(_g(r, "priority-claims", "priority-claim"))
+        prio_date = ""
+        if prio:
+            first_prio = prio[0]
+            if isinstance(first_prio, dict):
+                prio_date = first_prio.get("date", "")
+            else:
+                prio_date = str(first_prio)
+
+        recs.append({
+            "pubno": _g(r, "publication-reference", "doc-number"),
+            "appno": _g(r, "application-reference", "doc-number"),
+            "title": _g(r, "patent-title", "english-title") or _g(r, "patent-title", "chinese-title"),
+            "abstract": str(abstract or ""),
+            "claim1": claim1,
+            "claim1_empty": _claim1_is_empty(claim1),
+            "family_id": "",  # GPSS doesn't expose INPADOC family; use epo_family
+            "cpc": cpc,
+            "ipc": ipc,
+            "prio_date": prio_date,
+            "app_date": _g(r, "application-reference", "date"),
+            "pub_date": _g(r, "publication-reference", "date"),
+            "assignee": applicants,
+            "inventor": inventors,
+        })
+    return recs
+
+
+def ppubs_to_records(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """USPTO PPUBS run_query native JSON → records. PPUBS search hits carry no
+    claim1/family_id; those land empty (honestly blank), fill via
+    ppubs_batch_get_claims / epo_family."""
+    docs = result.get("patents") or result.get("docs") or []
+    if not isinstance(docs, list):
+        docs = [docs]
+    recs = []
+    for d in docs:
+        if not isinstance(d, dict):
+            continue
+        pubno = (d.get("publicationReferenceDocumentNumber")
+                 or d.get("patentNumber") or d.get("guid") or "")
+        applicant = d.get("applicantName") or d.get("assigneeEntityName") or ""
+        if isinstance(applicant, list):
+            applicant = "; ".join(str(x) for x in applicant)
+        inventor = d.get("inventorsShort") or d.get("inventorName") or ""
+        if isinstance(inventor, list):
+            inventor = "; ".join(str(x) for x in inventor)
+        cpc = d.get("cpcCombinationClassificationText") or d.get("cpcAdditionalFlattened") or ""
+        if isinstance(cpc, list):
+            cpc = "; ".join(str(x) for x in cpc[:6])
+        ipc = d.get("ipcCodeFlattened") or ""
+        if isinstance(ipc, list):
+            ipc = "; ".join(str(x) for x in ipc[:6])
+        uspc = d.get("uspcFullClassificationFlattened") or ""
+        if isinstance(uspc, list):
+            uspc = "; ".join(str(x) for x in uspc[:6])
+        abstract = d.get("abstractHtml") or d.get("abstractText") or ""
+        if isinstance(abstract, list):
+            abstract = " ".join(str(x) for x in abstract)
+        import re as _re
+        abstract = _re.sub(r"<[^>]+>", " ", str(abstract))
+        abstract = _re.sub(r"\s+", " ", abstract).strip()
+        recs.append({
+            "pubno": str(pubno),
+            "appno": str(d.get("applicationNumberText") or ""),
+            "title": str(d.get("inventionTitle") or d.get("title") or ""),
+            "abstract": abstract,
+            "claim1": "",
+            "family_id": "",
+            "cpc": cpc,
+            "ipc": ipc,
+            "uspc": uspc,
+            "prio_date": "",
+            "app_date": str(d.get("applicationFilingDate") or ""),
+            "pub_date": str(d.get("datePublished") or d.get("publicationDate") or ""),
+            "grant_date": str(d.get("grantDate") or ""),
+            "assignee": str(applicant),
+            "inventor": str(inventor),
+        })
+    return recs
+
+
+def epo_biblio_to_record(pub: str, biblio: Dict[str, Any]) -> Dict[str, Any]:
+    """EPO biblio dict (epo_client.biblio result) → one record. EPO's biblio
+    path carries title/abstract/applicants/IPC only; everything else lands
+    empty (honestly blank), fill via patent_get_claim1 / epo_family."""
+    applicants = biblio.get("applicants") or []
+    if not isinstance(applicants, list):
+        applicants = [applicants]
+    ipc = biblio.get("ipc") or []
+    if not isinstance(ipc, list):
+        ipc = [ipc]
+    return {
+        "pubno": pub,
+        "appno": "",
+        "title": str(biblio.get("title") or ""),
+        "abstract": str(biblio.get("abstract") or ""),
+        "claim1": "",
+        "family_id": "",
+        "cpc": "",
+        "ipc": "; ".join(str(x) for x in ipc[:6]),
+        "prio_date": "",
+        "app_date": "",
+        "pub_date": "",
+        "grant_date": "",
+        "assignee": "; ".join(str(x) for x in applicants),
+        "inventor": "",
+    }
+
+
+# Fields that no current source fills in-band — surfaced honestly as gaps.
+KNOWN_GAPS = {
+    "legal_status": "需 EPO/USPTO 法律狀態查詢(FTO 用)",
+    "citations": "需 EPO/GPSS 引用資料",
+    "family": "GPSS 與 Google 路皆不提供 INPADOC family_id;去重僅到公開號級,家族級 collapse 須走 epo_family",
+}

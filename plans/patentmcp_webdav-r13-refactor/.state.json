@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "state": "implementing",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-03T08:19:03.310Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-03T08:40:36.036Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "proposal/design/idef0/grafcet/sequence/data-schema 完成；使用者拍板 WebDAV 完整版+R13 積極拆+breaking 容許"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-03T08:40:36.183Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "tasks.md 6 群 + handoff.md + test-vectors/errors/observability 完成"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-03T08:40:49.227Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "開始實作：依 tasks.md 六群交付"
+    }
+  ]
+}

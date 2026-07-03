@@ -1,0 +1,14 @@
+[
+  { "id": "TV-1", "description": "provision idempotent：同 owner 同 subject 兩次 → 同 token，不重建目錄", "input": {"calls": ["cache_provision(alice,q3)", "cache_provision(alice,q3)"]}, "expected": {"same_token": true} },
+  { "id": "TV-2", "description": "跨 owner DAV 存取 → 403，無 bytes 洩露，無 identity fallback", "input": {"auth": "bob", "target": "alice-cache", "method": "PROPFIND"}, "expected": {"status": 403} },
+  { "id": "TV-3", "description": "無認證 → 401 帶 WWW-Authenticate", "input": {"auth": null, "method": "GET"}, "expected": {"status": 401, "header": "WWW-Authenticate"} },
+  { "id": "TV-4", "description": "dirty close 拒絕：export 後再改 → 409 + 未落地清單；force → 回收", "input": {"seq": ["PUT a.csv", "export", "PUT b.csv", "close"]}, "expected": {"status": 409, "error_code": "WORKSPACE_CLOSE_DIRTY", "unlanded": ["b.csv"]} },
+  { "id": "TV-5", "description": "export target 不可達 → 502 EXPORT_TARGET_UNREACHABLE，不臆造目錄", "input": {"target": "/nonexistent/dir/out"}, "expected": {"status": 502, "error_code": "EXPORT_TARGET_UNREACHABLE"} },
+  { "id": "TV-6", "description": "reaper class-aware：dirty deliverable-cache 超 3600s 不 reap；ephemeral 對照組 reap", "input": {"idle_seconds": 4000}, "expected": {"deliverable_survives": true, "ephemeral_reaped": true} },
+  { "id": "TV-7", "description": "screening_build.py golden：同一 records JSON 與舊 build_screening_table 產出 byte-equal CSV", "input": {"records_json": "tests/fixtures/records_sample.json"}, "expected": {"byte_equal": true} },
+  { "id": "TV-8", "description": "TOOL_LANDED redirect：呼叫下架 tool 回 typed envelope + usage，不執行舊邏輯", "input": {"tool": "build_screening_table"}, "expected": {"error_code": "TOOL_LANDED", "has_usage": true} },
+  { "id": "TV-9", "description": "landing script 缺依賴 → MISSING_DEPENDENCY typed fail-fast（figure_extract 無 poppler）", "input": {"script": "figure_extract.py", "env": "no-poppler"}, "expected": {"error_code": "MISSING_DEPENDENCY", "exit_nonzero": true} },
+  { "id": "TV-10", "description": "MOVE 同 token 內 rename 成功；跨 token Destination 拒絕", "input": {"method": "MOVE", "dest": "other-token/x"}, "expected": {"cross_token_rejected": true} },
+  { "id": "TV-11", "description": "LOCK 後他人 PUT → 423", "input": {"seq": ["LOCK(alice)", "PUT(bob)"]}, "expected": {"status": 423} },
+  { "id": "TV-12", "description": "vendored _lib hash 同步：與 src/_pure 不一致 → test fail", "input": {"mutate": "skills/patentworks/scripts/_lib/pure.py"}, "expected": {"test_fails": true} }
+]
