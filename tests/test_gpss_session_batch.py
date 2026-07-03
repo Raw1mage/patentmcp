@@ -140,7 +140,7 @@ class SingleCallStillThrowawayTest(unittest.TestCase):
         # the impl should see session_client=None and build a throwaway client.
         seen = {}
 
-        async def _fake_fig_impl(pn, session_client=None):
+        async def _fake_fig_impl(pn, session_client=None, all_figures=False):
             seen["client"] = session_client
             return {"success": True, "download_url": "x"}
 
