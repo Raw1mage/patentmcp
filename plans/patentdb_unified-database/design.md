@@ -10,13 +10,15 @@
 - 三個下載工具已接 cache：`gpss_download_patent_pdf`（L1933/2030）、`gpss_download_patent_xml`（L2083/2182）、`fetch_patent_pdf`（L2245/2283/2337）。
 - patentmcp 既有 sqlite 範式：`bq_usage.sqlite`（計費帳本）、`.specbase/*.sqlite`。
 
-## Goals
+## Goals / Non-Goals
+
+### Goals
 
 - 給 patentdb 一個跨專案結構化書目層（sqlite），可全文檢索、可 query、可跨案複用。
 - 把 candidates.csv 的書目+評分沉澱進 DB，但不廢除 CSV（CSV 為專案視圖）。
 - schema 容忍稀疏，register 不要求完整，upsert 漸進合併。
 
-## Non-Goals
+### Non-Goals
 
 - 不做雲端同步/多人鎖。
 - 不引入 ORM。

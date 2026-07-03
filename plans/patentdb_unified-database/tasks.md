@@ -36,5 +36,5 @@
 
 - [x] 5.1 `patentdb/README.md` 補雙層架構（sqlite 結構化層 + blob 層 + 成本加權收集判準 + 百萬級設計 + 背景吸收腳本）
 - [x] 5.2 patentworks skill `flows/priorsearch.md` §5 修正 I/O 現況（接 patentdb_query，移除「靠手動填充」錯誤描述）+ §3 加 DD-12 腳踏兩條船（召回並行查 patentdb）+ republish XDG
-- [ ] 5.3 rebuild patentmcp 容器，驗證新工具線上可呼叫
-- [ ] 5.4 event_record 收尾 + plan 收斂 verified
+- [x] 5.3 rebuild patentmcp 容器，驗證新工具線上可呼叫
+- [x] 5.4 event_record 收尾 + plan 收斂 verified
