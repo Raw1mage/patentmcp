@@ -1,0 +1,30 @@
+[
+  {
+    "title": "patent_search dispatcher — official ladder hit",
+    "participants": ["Agent", "patent_search (MCP)", "search_dispatcher", "GPSSClient", "EPOClient", "PPUBSClient", "GPatentsClient"],
+    "messages": [
+      { "from": "Agent", "to": "patent_search (MCP)", "label": "patent_search(cpc, keyword, num, allow_scraping=False)" },
+      { "from": "patent_search (MCP)", "to": "search_dispatcher", "label": "normalize → QuerySpec" },
+      { "from": "search_dispatcher", "to": "GPSSClient", "label": "configured()? + axes supported? → search(conditions)" },
+      { "from": "GPSSClient", "to": "search_dispatcher", "label": "hits (gpss JSON)" },
+      { "from": "search_dispatcher", "to": "patent_search (MCP)", "label": "gpss_to_records + provenance[gpss=hit, epo=skipped, ppubs=skipped]" },
+      { "from": "patent_search (MCP)", "to": "Agent", "label": "{success, records, source=gpss, provenance, gaps}" }
+    ]
+  },
+  {
+    "title": "patent_search dispatcher — all-official-miss, scraping gate",
+    "participants": ["Agent", "patent_search (MCP)", "search_dispatcher", "GPSSClient", "EPOClient", "PPUBSClient", "GPatentsClient"],
+    "messages": [
+      { "from": "Agent", "to": "patent_search (MCP)", "label": "patent_search(keyword, allow_scraping=False)" },
+      { "from": "patent_search (MCP)", "to": "search_dispatcher", "label": "normalize → QuerySpec" },
+      { "from": "search_dispatcher", "to": "GPSSClient", "label": "search → miss/error (provenance: miss)" },
+      { "from": "search_dispatcher", "to": "EPOClient", "label": "search CQL → miss (provenance: miss)" },
+      { "from": "search_dispatcher", "to": "PPUBSClient", "label": "run_query → miss (provenance: miss)" },
+      { "from": "search_dispatcher", "to": "patent_search (MCP)", "label": "allow_scraping=False → SCRAPING_REQUIRED (no gpatents call)" },
+      { "from": "patent_search (MCP)", "to": "Agent", "label": "{success=false, error_code=SCRAPING_REQUIRED, provenance}" },
+      { "from": "Agent", "to": "patent_search (MCP)", "label": "(user consent) patent_search(..., allow_scraping=True)" },
+      { "from": "search_dispatcher", "to": "GPatentsClient", "label": "tail rung: search (SoftScrapePolicy)" },
+      { "from": "patent_search (MCP)", "to": "Agent", "label": "{success, records, source=gpatents, provenance.scraping=true}" }
+    ]
+  }
+]

@@ -8,7 +8,8 @@
 
 ### `patentmcp`(MCP server,`vendor/patents-mcp/`)
 專利資料檢索與檔案交付。fork 自 openpharma/patents-mcp(MIT)並擴充:
-- **檢索**:`gpatents_search`(Google Patents,語義排序+代表圖,已上線)、`gpss_search`(TIPO GPSS 官方 API,首選,待 userCode)、`uspto_patents`(ppubs)、Google BigQuery(降級不用於互動)。
+- **檢索**:`patent_search`(**單一檢索入口**,來源梯內建:TIPO GPSS 官方 API 首選 → EPO OPS → USPTO PPUBS → gated Google Patents 爬蟲;依憑證與查詢軸自動路由,每級嘗試記入 `provenance`;爬蟲尾級須 `allow_scraping=true` 明確授權,否則官方全 miss 即 `SCRAPING_REQUIRED` fail-fast)。
+  - 舊分散檢索工具已下架:`gpss_search`、`epo_search`、`gpatents_search`、`uspto_patents` 的 `ppubs_search_*` methods → 一律改用 `patent_search`。單號取文工具(`epo_family`/`epo_biblio`/`gpatents_get`/`ppubs_batch_get_claims`/PPUBS 全文)保留。
 - **取文/產物**:`gpatents_get`(完整摘要+claims)、`gpatents_download_pdf/figure`(代表圖/PDF)。
 - **建表**:`build_screening_table`(search→家族去重→切 Claim1→**欄位隨選 CSV**→handle;>300 擋下)。
 - **檔案交付**:docxmcp 式 token+blob store(`/files/{token}/blob/{rel}`),`stage_file` 落地任意檔回 handle,bytes 不過 context。

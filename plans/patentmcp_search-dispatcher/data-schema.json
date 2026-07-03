@@ -1,0 +1,58 @@
+{
+  "schemas": [
+    {
+      "name": "QuerySpec",
+      "kind": "json",
+      "fields": [
+        { "name": "cpc", "type": "string|null", "notes": "CPC 分類軸;GPSS=CS、EPO=cpc=、PPUBS=CPC/ 語法" },
+        { "name": "ipc", "type": "string|null", "notes": "IPC 分類軸;GPSS=IC、EPO=ic=" },
+        { "name": "uspc", "type": "string|null", "notes": "USPC 軸(CCL/<class>/<subclass>);僅 PPUBS 支援 → 直達路由" },
+        { "name": "keyword", "type": "string|null", "notes": "關鍵字;GPSS keyword_field 選欄(TI/AB/CL 組合)" },
+        { "name": "keyword_field", "type": "string", "notes": "預設 TI/AB;僅 GPSS 生效" },
+        { "name": "applicant", "type": "string|null", "notes": "GPSS=AX、EPO=pa=、PPUBS 欄位語法;gpatents 不支援" },
+        { "name": "inventor_country", "type": "string|null", "notes": "GPSS=IY(國別);其他來源不支援" },
+        { "name": "pub_number", "type": "string|null", "notes": "單號直查;GPSS=PN(三地通用)" },
+        { "name": "date_from", "type": "string|null", "notes": "YYYYMMDD;GPSS=ID range、EPO=pd、gpatents=after" },
+        { "name": "date_to", "type": "string|null", "notes": "YYYYMMDD" },
+        { "name": "databases", "type": "string[]|null", "notes": "GPSS patDB(USA/USB/CNA/CNB/TWA/TWB…);其他來源映射 countries" },
+        { "name": "num", "type": "int", "notes": "預設 30;EPO 二段 biblio 受 15/min 節流,大 num 記 biblio_truncated" },
+        { "name": "skip", "type": "int", "notes": "分頁偏移" },
+        { "name": "allow_scraping", "type": "bool", "notes": "預設 False;官方全 miss 時 False→SCRAPING_REQUIRED、True→gpatents 尾級" }
+      ]
+    },
+    {
+      "name": "AXIS_CAPABILITY",
+      "kind": "config",
+      "fields": [
+        { "name": "gpss", "type": "set", "notes": "cpc,ipc,keyword,applicant,inventor_country,pub_number,date,databases — 全軸(無 uspc)" },
+        { "name": "epo", "type": "set", "notes": "cpc,ipc,keyword,applicant,pub_number,date — CQL;search 只回 pubno,需 biblio 二段" },
+        { "name": "ppubs", "type": "set", "notes": "uspc(獨有),cpc,ipc,keyword,applicant,date — US-only" },
+        { "name": "gpatents", "type": "set", "notes": "keyword(語義),pub_number,date(before/after),countries — 無分類/申請人過濾" }
+      ]
+    },
+    {
+      "name": "ProvenanceEntry",
+      "kind": "json",
+      "fields": [
+        { "name": "source", "type": "enum(gpss|epo|ppubs|gpatents)", "notes": "梯級名" },
+        { "name": "status", "type": "enum(hit|miss|skipped|error)", "notes": "該級結果" },
+        { "name": "reason", "type": "string|null", "notes": "not_configured / axis_unsupported / zero_hits / http_error:<code> / scraping_not_authorized" },
+        { "name": "scraping", "type": "bool", "notes": "該級是否為爬蟲(僅 gpatents=true)" },
+        { "name": "elapsed_ms", "type": "int|null", "notes": "該級耗時;skipped 為 null" }
+      ]
+    },
+    {
+      "name": "PatentSearchEnvelope",
+      "kind": "message",
+      "fields": [
+        { "name": "success", "type": "bool", "notes": "" },
+        { "name": "records", "type": "Record[]", "notes": "screening_table.py 統一 record schema(pubno/appno/title/abstract/claim1/family_id/cpc/ipc/dates/assignee/inventor + claim1_empty)" },
+        { "name": "source", "type": "string", "notes": "實際命中的梯級" },
+        { "name": "provenance", "type": "ProvenanceEntry[]", "notes": "每級一筆,含 skipped" },
+        { "name": "gaps", "type": "string[]", "notes": "該來源填不了的欄位(誠實缺口)" },
+        { "name": "total", "type": "int|null", "notes": "來源宣告的總命中數(如有)" },
+        { "name": "error_code", "type": "string|null", "notes": "SCRAPING_REQUIRED / ALL_SOURCES_MISS / INVALID_PARAMS(失敗時)" }
+      ]
+    }
+  ]
+}

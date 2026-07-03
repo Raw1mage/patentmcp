@@ -30,9 +30,11 @@ mcp = FastMCP(
         "**patentworks** skill — it is the playbook for these tools "
         "(disclosure -> screening -> drafting) and carries the per-jurisdiction "
         "drafting rules that decide which tool to call and what to deliver. "
-        "Source priority: GPSS (gpss_search, primary) > EPO (epo_family / "
-        "epo_biblio / epo_search) > Google Patents (gpatents_*, rate-limited) > "
-        "BigQuery (cheap metadata only). Tool results return file handles; "
+        "Patent SEARCH goes through the single patent_search tool — the "
+        "source ladder (GPSS > EPO > PPUBS > gated Google Patents scraping) "
+        "is built into the server; do not pick sources yourself. Scraping "
+        "requires allow_scraping=True with explicit user authorization. "
+        "Tool results return file handles; "
         "bytes are delivered via /files/{token}/blob/{rel}, not through context."
     ),
 )
@@ -57,6 +59,7 @@ from patent_mcp_server._token_store import default_store
 from patent_mcp_server import _file_server
 from patent_mcp_server import screening_table as _st
 from patent_mcp_server import search_audit as _sa
+from patent_mcp_server import search_dispatcher as _sd
 from patent_mcp_server import patentdb_store as _pdb
 from patent_mcp_server.constants import Defaults, GooglePatentsCountries
 from patent_mcp_server.util.errors import ApiError
@@ -284,8 +287,6 @@ async def uspto_patents(
     Use the method parameter to specify the operation type.
 
     Available methods:
-    - ppubs_search_patents: Search granted patents in USPTO Public Search
-    - ppubs_search_applications: Search published patent applications
     - ppubs_get_full_document: Get full patent document by GUID
     - ppubs_get_patent_by_number: Get granted patent's full text by number
     - ppubs_download_patent_pdf: Download granted patent as PDF
@@ -310,13 +311,8 @@ async def uspto_patents(
 
     Args:
         method: The operation to perform (required)
-        query: For ppubs_search_*: Search query string using USPTO syntax
-        start: For ppubs_search_*: Starting position for results (default: 0)
-        limit: For ppubs_search_*/search_*: Maximum results to return (default: 100/25)
-        sort: For ppubs_search_*/search_*: Sort order
-        default_operator: For ppubs_search_*: Default operator AND/OR (default: OR)
-        expand_plurals: For ppubs_search_*: Include plural forms (default: True)
-        british_equivalents: For ppubs_search_*: Include British spellings (default: True)
+        limit: For search_*: Maximum results to return (default: 25)
+        sort: For search_*: Sort order
         guid: For ppubs_get_full_document: Document unique identifier
         source_type: For ppubs_get_full_document: Document type (USPAT or US-PGPUB)
         publication_number: For ppubs_get_full_document: convenience — when guid/
@@ -351,34 +347,12 @@ async def uspto_patents(
         file_data_to_date: For get_dataset_product: Filter files to date (YYYY-MM-DD)
     """
 
-    # Route to the appropriate method
-    if method == "ppubs_search_patents":
-        if not query:
-            return {"error": True, "message": "query parameter is required for ppubs_search_patents"}
-        return await ppubs_client.run_query(
-            query=query,
-            start=start,
-            limit=limit,
-            sort=sort,
-            default_operator=default_operator,
-            sources=["USPAT"],
-            expand_plurals=expand_plurals,
-            british_equivalents=british_equivalents
-        )
-
-    elif method == "ppubs_search_applications":
-        if not query:
-            return {"error": True, "message": "query parameter is required for ppubs_search_applications"}
-        return await ppubs_client.run_query(
-            query=query,
-            start=start,
-            limit=limit,
-            sort=sort,
-            default_operator=default_operator,
-            sources=["US-PGPUB"],
-            expand_plurals=expand_plurals,
-            british_equivalents=british_equivalents
-        )
+    # Route to the appropriate method.
+    # Search methods are retired (plans/patentmcp_search-dispatcher DD-6):
+    # all patent SEARCHING goes through the single patent_search dispatcher.
+    if method in ("ppubs_search_patents", "ppubs_search_applications"):
+        return {"success": False,
+                "message": "search methods retired — use patent_search"}
 
     elif method == "ppubs_get_full_document":
         if guid and source_type:
@@ -824,8 +798,7 @@ async def google_budget_status() -> Dict[str, Any]:
 # Google Patents (web endpoint) Tools — ranked search, figures, PDF
 # =====================================================================
 
-@mcp.tool()
-async def gpatents_search(
+async def _gpatents_search_impl(
     query: str,
     countries: Optional[List[str]] = None,
     num: Optional[int] = 10,
@@ -1040,6 +1013,7 @@ async def build_screening_table(
     exclude_fields: Optional[List[str]] = None,
     max_rows: int = 300,
     num: int = 100,
+    allow_scraping: bool = False,
     filename: str = "screening.csv",
 ) -> Dict[str, Any]:
     """Run a CPC-anchored search and LAND the candidate set as a human-readable
@@ -1052,77 +1026,32 @@ async def build_screening_table(
     (landscape→分類; priorart→日期+CPC; fto→日期+申請人+法律狀態; minimal→無);
     `extra_fields`/`exclude_fields` fine-tune. AI columns are always appended.
 
-    Source: GPSS when GPSS_USER_CODE is set (fills all columns), else Google
-    Patents (partial — no claim1/cpc/appno/family from search; those land blank).
+    Source: the patent_search dispatcher ladder (GPSS → EPO → PPUBS → gated
+    Google Patents). The scraping tail only runs with allow_scraping=True;
+    non-GPSS sources fill fewer columns (blanks are honest gaps).
 
     Returns {success, handle{token,rel,download_url,...}, count, deduped, source,
     columns, gaps} — or {success, too_broad, count, suggestion} when the hit
     count exceeds max_rows (narrow the query; do not analyze a divergent set).
     """
-    # 1) search → normalized records
-    if gpss_client.configured():
-        import asyncio
-        conditions: List[GPSSCondition] = []
-        if cpc:
-            conditions.append(GPSSCondition("CS", cpc))
-        if keyword:
-            conditions.append(GPSSCondition("TI/AB", keyword))
-        if date_from or date_to:
-            conditions.append(GPSSCondition("ID", f"{date_from or ''}:{date_to or ''}"))
-        
-        target_num = max(num, max_rows)
-        chunk_size = 50
-        records = []
-        skip = 0
-        
-        while len(records) < target_num:
-            current_num = min(chunk_size, target_num - len(records))
-            res = await gpss_client.search(
-                conditions=conditions, databases=databases,
-                fields="PN,AN,ID,AD,PR,TI,AB,CL,IC,CS,UC,PA,IN",
-                num=current_num, skip=skip, fmt="json",
-            )
-            if not res.get("success"):
-                if len(records) > 0:
-                    logger.warning(
-                        "GPSS search pagination failed at skip=%d: %s",
-                        skip, res.get("error") or res.get("message")
-                    )
-                    break
-                return {"success": False, "error": res.get("error") or res.get("message") or "GPSS search failed"}
-            
-            page_records = _st.gpss_to_records(res)
-            if not page_records:
-                break
-            records.extend(page_records)
-            
-            total_available = res.get("total")
-            if total_available is not None:
-                try:
-                    total_available = int(total_available)
-                except ValueError:
-                    total_available = None
-            
-            if total_available is not None and len(records) >= total_available:
-                break
-                
-            skip += len(page_records)
-            await asyncio.sleep(1.0)
-            
-        source = "gpss"
-    else:
-        q = keyword or cpc or ""
-        if not q:
-            return {"success": False, "error": "need cpc or keyword"}
-        res = await gpatents_client.search(
-            query=q, countries=None, num=min(num, 100),
-            before=(f"publication:{date_to}" if date_to else None),
-            after=(f"publication:{date_from}" if date_from else None),
-        )
-        if not res.get("success"):
-            return {"success": False, "error": res.get("error", "search failed")}
-        records = _st.google_to_records(res.get("results", []))
-        source = "google"
+    # 1) search → normalized records via the dispatcher ladder
+    #    (GPSS → EPO → PPUBS → gated gpatents; same scraping-gate semantics)
+    spec = _sd.normalize_query(
+        cpc=cpc, keyword=keyword, databases=databases,
+        date_from=date_from, date_to=date_to,
+        num=max(num, max_rows), allow_scraping=allow_scraping,
+    )
+    env = await _sd.dispatch_search(
+        spec,
+        gpss_client=gpss_client, epo_client=epo_client,
+        ppubs_client=ppubs_client, gpatents_client=gpatents_client,
+    )
+    if not env.get("success"):
+        return {"success": False,
+                "error": env.get("error_code") or env.get("message") or "search failed",
+                "provenance": env.get("provenance", [])}
+    records = env["records"]
+    source = env["source"]
 
     count = len(records)
     # 2) >max_rows → don't produce a table; ask to narrow
@@ -1151,7 +1080,8 @@ async def build_screening_table(
     # (BR_20260628 C). legal_status/citations are never in-band either.
     gaps = {k: v for k, v in _st.KNOWN_GAPS.items()
             if (k in columns or k == "family")
-            and (source == "google" or k in ("legal_status", "citations", "family"))}
+            and (source in ("google", "gpatents", "epo", "ppubs")
+                 or k in ("legal_status", "citations", "family"))}
     return {
         "success": True,
         "handle": _handle(entry),
@@ -1194,7 +1124,7 @@ async def gpatents_get(
     WARNING: Google Patents is highly sensitive to scraping. Use ONLY as a last resort
     for single-file retrieval. DO NOT use for batch processing or automated crawling.
     
-    Use after gpatents_search to pull the complete claims (the search snippet is
+    Use after patent_search to pull the complete claims (the search snippet is
     only an excerpt). CN/JP/etc. are returned as Google's English machine
     translation. abstract + claims are returned in-band (small). When
     include_description=True the large full text is instead LANDED in the token
@@ -1534,7 +1464,7 @@ async def ppubs_batch_get_claims(publication_numbers: Optional[List[str]] = None
 async def gpatents_download_pdf(pdf_url: str, filename: Optional[str] = None) -> Dict[str, Any]:
     """Download a patent's full PDF into the token store.
 
-    Pass the `pdf_url` from a gpatents_search result. Returns a docxmcp-style
+    Pass the `pdf_url` from a patent_search (gpatents-source) result. Returns a docxmcp-style
     handle {token, rel, download_url, bytes, sha256}; the PDF bytes are stored,
     never returned through the model context. Use the token with docxmcp's
     `from_token` to pull the PDF into a report by reference.
@@ -1552,7 +1482,7 @@ async def gpatents_download_pdf(pdf_url: str, filename: Optional[str] = None) ->
 async def gpatents_download_figure(figure_url: str, filename: Optional[str] = None) -> Dict[str, Any]:
     """Download a representative-figure image into the token store.
 
-    Pass the `representative_figure_url` from a gpatents_search result. Returns a
+    Pass the `representative_figure_url` from a patent_search (gpatents-source) result. Returns a
     docxmcp-style handle {token, rel, download_url, bytes, sha256}; the image
     bytes are stored, never returned through the model context.
 
@@ -2738,8 +2668,7 @@ async def fetch_patent_pdf(
 # TIPO GPSS Tool — official REST API, CPC/IPC + claims search (US/CN)
 # =====================================================================
 
-@mcp.tool()
-async def gpss_search(
+async def _gpss_search_impl(
     cpc: Optional[str] = None,
     ipc: Optional[str] = None,
     keyword: Optional[str] = None,
@@ -2826,7 +2755,7 @@ async def gpss_search(
                 ),
             }
         except Exception as e:  # noqa: BLE001 — advisory must never break search
-            logger.warning("gpss_search claim1_audit failed: %s", e)
+            logger.warning("_gpss_search_impl claim1_audit failed: %s", e)
 
     return res
 
@@ -2857,8 +2786,7 @@ async def epo_biblio(publication_number: str) -> Dict[str, Any]:
     return await epo_client.biblio(publication_number)
 
 
-@mcp.tool()
-async def epo_search(cql: str, range: str = "1-25") -> Dict[str, Any]:
+async def _epo_search_impl(cql: str, range: str = "1-25") -> Dict[str, Any]:
     """Search EPO OPS published data with a CQL query (official, global).
 
     CQL examples: 'pa=faceheart' (applicant), 'in=poh' (inventor),
@@ -2867,6 +2795,79 @@ async def epo_search(cql: str, range: str = "1-25") -> Dict[str, Any]:
     Returns {total, count, results:[publication numbers]}.
     """
     return await epo_client.search(cql, range_=range)
+
+
+# =====================================================================
+# Unified search dispatcher — the ONLY search-class MCP tool
+# =====================================================================
+
+@mcp.tool()
+async def patent_search(
+    cpc: Optional[str] = None,
+    ipc: Optional[str] = None,
+    uspc: Optional[str] = None,
+    keyword: Optional[str] = None,
+    keyword_field: str = "TI/AB",
+    applicant: Optional[str] = None,
+    inventor_country: Optional[str] = None,
+    pub_number: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    databases: Optional[List[str]] = None,
+    num: int = 30,
+    skip: int = 0,
+    allow_scraping: bool = False,
+) -> Dict[str, Any]:
+    """Unified patent SEARCH — the single search entry point. The source ladder
+    is BUILT IN: TIPO GPSS (official, primary) → EPO OPS → USPTO PPUBS →
+    (gated) Google Patents. You do NOT pick a source; the server routes by
+    credential availability and query-axis capability, and records every
+    level's attempt in `provenance` for audit.
+
+    Scraping gate: the Google Patents tail is a scraper and only runs with
+    allow_scraping=True (requires explicit user authorization). When all
+    official sources miss and scraping is not authorized, the call fails fast
+    with error_code=SCRAPING_REQUIRED — never a silent fallback.
+
+    Args:
+        cpc: CPC classification (e.g. "G06Q50/18"; " AND "/" OR " combinable).
+        ipc: IPC classification.
+        uspc: USPC class/subclass (e.g. "705/300") — routes directly to PPUBS
+            (US-only axis; other sources don't support USPC).
+        keyword: free-text keyword; `keyword_field` picks the GPSS field
+            (TI, AB, CL, "TI/AB", "TI/AB/CL").
+        applicant: applicant/assignee name.
+        inventor_country: inventor country code (GPSS only).
+        pub_number: publication number for a direct lookup (works across
+            jurisdictions via GPSS PN).
+        date_from/date_to: publication date bounds, YYYYMMDD.
+        databases: GPSS patDB list (USA,USB,CNA,CNB,TWA,TWB…); maps to
+            country filters on other sources.
+        num/skip: pagination. Note: the EPO level fetches bibliographic data
+            per hit under a 15/min throttle — large num gets truncated there
+            (provenance notes `biblio_truncated`).
+        allow_scraping: explicit authorization for the Google Patents tail
+            (default False).
+
+    Returns {success, records[], source, provenance[], gaps[], total} —
+    records use the unified screening record schema (missing fields are
+    honestly blank and listed in `gaps`); on failure `error_code` is one of
+    INVALID_PARAMS / SCRAPING_REQUIRED / ALL_SOURCES_MISS.
+    """
+    spec = _sd.normalize_query(
+        cpc=cpc, ipc=ipc, uspc=uspc, keyword=keyword,
+        keyword_field=keyword_field, applicant=applicant,
+        inventor_country=inventor_country, pub_number=pub_number,
+        date_from=date_from, date_to=date_to, databases=databases,
+        num=num, skip=skip, allow_scraping=allow_scraping,
+    )
+    return await _sd.dispatch_search(
+        spec,
+        gpss_client=gpss_client,
+        epo_client=epo_client,
+        ppubs_client=ppubs_client,
+        gpatents_client=gpatents_client,
+    )
 
 
 # =====================================================================

@@ -8,7 +8,7 @@
 
 | 需求 | 合法可靠途徑 | 狀態 |
 |---|---|:---:|
-| 逐字 Claim 1 / 全部請求項 | `google_get_patent_claims`(非TW)、`gpss_search(pub_number)`(三地)、`uspto ppubs`(US) | ✅ 可靠 |
+| 逐字 Claim 1 / 全部請求項 | `google_get_patent_claims`(非TW)、`patent_search(pub_number=...)`(三地,底層 GPSS 首選)、`uspto ppubs`(US) | ✅ 可靠 |
 | 完整說明書全文 + 附圖文字說明(BRIEF DESCRIPTION OF THE DRAWINGS) | `google_get_patent_description`(非TW)、`uspto ppubs_get_full_document`(US) | ✅ 可靠 |
 | 原始 PDF / 圖檔影像 | `fetch_patent_pdf`(EPO images → Google citation fallback) | ✅ 可靠(見 §3) |
 
@@ -22,15 +22,15 @@
 
 取**圖檔的文字說明**完全不需要原始圖檔。依法域:
 - **非 TW 案**:`google_get_patent_description(publication_number="US-XXXXXXX-B2")` → 回完整說明書,含每個 FIG 的逐圖文字說明(如「FIG.5 預測跌倒用的狀態機狀態轉移圖(綠/黃/橘/紅四態)」)。逐字請求項用 `google_get_patent_claims`。
-- **TW 案**:`gpss_search(pub_number="TW...", databases=["TWA","TWB"])`。
-- **US 案(次選/交叉)**:`uspto_patents(method="ppubs_get_full_document", guid=...)`。
+- **TW 案**:`patent_search(pub_number="TW...", databases=["TWA","TWB"])`。
+- **US 案(次選/交叉)**:`uspto_patents(method="ppubs_get_full_document", publication_number="US...")`。
 
 ⚠️ **工具名辨識**:用 `google_get_patent_*`(BigQuery 合法 API),**不是** `gpatents_*`(網頁爬蟲,本 flow 禁用)。
 
 ## 3. 原始 PDF / 圖檔影像
 
 ### 3.1 紅線:爬蟲非法,禁用;但「針對已知專利逐件小量下載」合法
-- **🚫 禁止**:`gpatents_search` / `gpatents_get` 等**批量爬取** patents.google.com 網頁。這是會被限速封鎖、且性質上屬爬蟲的行為。
+- **🚫 禁止**:授權檢索爬蟲尾級(`patent_search(allow_scraping=True)`)或用 `gpatents_get` 等**批量爬取** patents.google.com 網頁(舊 `gpatents_search` 工具已下架)。這是會被限速封鎖、且性質上屬爬蟲的行為。
 - **✅ 允許**:針對 shortlist 上**已知的特定專利號**,**逐件、小量**下載 Google Patents 託管的**公開專利 PDF**。這是「對已知公開文件的單件存取」,不是批量爬取——量小(通常 ≤10 件)、目標明確(具體 PN)、檔案本身是公眾可免費取得的官方公報 PDF。
 
 ### 3.2 逐件 PDF 下載 → docxmcp 抽圖(統一工具 `fetch_patent_pdf`)
@@ -54,7 +54,7 @@
 1. **Priority 1**:`extract_representative_figure(PN)` — 高階一鍵(PDF pipeline,報告級高清)。**首選**。
 2. **Priority 2**:`gpss_download_representative_figure(PN)` — TW 案 TIPO 官方圖(已強制單線程 + 隨機延遲;勿並發呼叫)。
 3. **Priority 3**:`gpatents_download_figure(figure_url)` — 僅當 figure_url 非 403;新案常觸發 CDN 防盜鏈回 `CDN_FORBIDDEN`,此時降級回 Priority 1 的 PDF pipeline。
-4. **🚫 禁止**:直接使用 `gpatents_search` 結果的 `representative_figure_url` 嵌入報告。該欄位是 **~60x80 像素低解析度索引縮圖**(`gpatents_search` 結果已標 `representative_figure_resolution: "thumbnail"`),放大至報告寬度會嚴重模糊/發綠塊。縮圖**僅供辨識**,不可作為交付圖檔。
+4. **🚫 禁止**:直接使用爬蟲級結果的 `representative_figure_url` 嵌入報告。該欄位是 **~60x80 像素低解析度索引縮圖**(結果已標 `representative_figure_resolution: "thumbnail"`),放大至報告寬度會嚴重模糊/發綠塊。縮圖**僅供辨識**,不可作為交付圖檔。
 
 ### 3.3 端點健康度 smoke test(動手前先驗)
 下載前先用一件已知案(如 `TWI854998B`)試一發:

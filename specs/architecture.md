@@ -51,6 +51,7 @@
 - **檢索層 (`patentmcp`, `screening`)**
   - 負責資料取得、CPC/keyword 查詢、候選去重、建表、取文、PDF/figure/fulltext handle 化。
   - 不負責最終法律裁決；只提供可稽核資料與 AI 預篩欄位。
+  - **單一檢索入口(2026-07, plan `patentmcp_search-dispatcher`)**:`patent_search` 是唯一 SEARCH 工具;來源梯(GPSS→EPO→PPUBS→gated gpatents)內建於 `search_dispatcher.py`,呼叫者不選來源。舊分散檢索工具(`gpss_search`/`epo_search`/`gpatents_search`/`uspto_patents` 的 `ppubs_search_*`)已下架;單號取文工具保留。
 - **分析層 (`analysis`, planned skill boundary)**
   - 負責把任意來源材料正規化為技術特徵、要件對照（Claim Chart）、差異點、FTO/無效/前案可專利性比對分析、drafting basis。
   - 輸入來源可為 `retrieval_mcp`、`user_provided`、`file`、`mixed`。
@@ -63,15 +64,16 @@
   - 負責把大型或二進位交付物落地並回 token/blob handle。
 
 ## Critical File Index
-- `/home/pkcs12/projects/PatentDrafter/README.md`
-- `/home/pkcs12/projects/PatentDrafter/.mcp.json`
-- `/home/pkcs12/projects/PatentDrafter/vendor/patents-mcp/src/patent_mcp_server/patents.py`
-- `/home/pkcs12/projects/PatentDrafter/skills/patentworks/SKILL.md`
-- `/home/pkcs12/projects/PatentDrafter/skills/patentworks/flows/disclosure.md`
-- `/home/pkcs12/projects/PatentDrafter/skills/patentworks/flows/screening.md`
-- `/home/pkcs12/projects/PatentDrafter/skills/patentworks/flows/drafting.md`
-- `/home/pkcs12/projects/PatentDrafter/skills/patent-practitioner-workflow.md`
-- `/home/pkcs12/projects/PatentDrafter/specs/20260320_repo-planner-specs-plan/`
+- `/home/pkcs12/projects/patentmcp/README.md`
+- `/home/pkcs12/projects/patentmcp/mcp.json`
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/patents.py`
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/search_dispatcher.py`
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/screening_table.py`
+- `/home/pkcs12/projects/patentmcp/skills/patentworks/SKILL.md`
+- `/home/pkcs12/projects/patentmcp/skills/patentworks/flows/screening.md`
+- `/home/pkcs12/projects/patentmcp/skills/patentworks/flows/priorsearch.md`
+- `/home/pkcs12/projects/patentmcp/skills/patent-practitioner-workflow.md`
+- `/home/pkcs12/projects/patentmcp/plans/patentmcp_search-dispatcher/`
 
 ## Key Architectural Tensions
 - **舊 spec vs 現行 README 落差**：舊 `specs/architecture.md` 仍描述 `source/`、`.claude/agents/`、`sample/` 八階段 prompt pipeline，但現行 repo 已重定位為 PatentWorks MCP + skill。
@@ -80,7 +82,14 @@
 - **法遵邊界**：AI 做預篩、分析與起草草稿；人類仍需複核法律裁決。
 
 ## Debug / Observability Map
-- 檢索工具邊界：`vendor/patents-mcp/src/patent_mcp_server/patents.py` 的 MCP tool docstring 與返回 schema。
+- 檢索工具邊界：`src/patent_mcp_server/patents.py` 的 MCP tool docstring 與返回 schema。
+- 統一檢索 dispatcher 邊界(plan `patentmcp_search-dispatcher`, 2026-07):
+  - **`src/patent_mcp_server/search_dispatcher.py`**(~400 行):`QuerySpec` dataclass + `normalize_query()`(無檢索軸 → `INVALID_PARAMS` fail-fast,零後端呼叫)、`AXIS_CAPABILITY` 矩陣(各來源支援的查詢軸)、`dispatch_search()` 來源梯:GPSS(官方首選)→ EPO search→biblio 二段(15/min throttle,大 num 截斷記 `biblio_truncated`)→ PPUBS(`uspc` 軸直達、US-only)→ gated gpatents 爬蟲尾級。
+  - **Provenance 契約**:每級嘗試一筆 ProvenanceEntry(含 skip 理由/錯誤);單級 error 記錄後續走下一級,不靜默吞。回傳 PatentSearchEnvelope `{success, records[], source, provenance[], gaps[], total, error_code?}`(統一 screening record schema,缺欄誠實留空列入 gaps)。
+  - **爬蟲閘**:gpatents 尾級只在 `allow_scraping=True` 執行;官方全 miss 且未授權 → `SCRAPING_REQUIRED` fail-fast(符合天條 §11,與 `fetch_patent_pdf` 同一 gate 語義)。全梯 miss → `ALL_SOURCES_MISS`。
+  - **舊工具下架面**:`gpss_search`/`epo_search`/`gpatents_search` 函式本體改名 `_*_impl` 供內部呼叫(`patent_get_claim1`/`fetch_patent_pdf` 等仍用);`uspto_patents` 的 `ppubs_search_patents`/`ppubs_search_applications` methods 拒收並回結構化錯誤指引 `patent_search`。`build_screening_table` 內部改接 dispatcher(對外格式不變,新增 `allow_scraping=False` 參數)。
+  - **正規化 adapters**:`screening_table.py` 新增 `ppubs_to_records`、`epo_biblio_to_record`(既有 `gpss_to_records`/`gp_to_records` 之外)。
+  - **測試**:`tests/test_search_dispatcher.py`(TV-1~TV-8 + backend-error 續走 + build_screening_table 改接,13 tests;monkeypatch clients 不打真網路)。spec package:`plans/patentmcp_search-dispatcher/`。
 - 原始 PDF/圖檔取得邊界（plan `patent-pdf-fetch`, 2026-06）：`fetch_patent_pdf(publication_number, sources?, filename?, include_attempts?)` 統一工具，依序路由 `epo_images`（`EPOClient.images()` + `download_image_pdf()`，EPO OPS 官方影像 API）→ `gpss_pdf`（TIPO 單線程）→ `google_citation`（`GooglePatentsClient.resolve_pdf_url()` 解析專利頁真實雜湊 `citation_pdf_url`）。回 docxmcp 風格 token handle（bytes 不經 model context），token 交 docxmcp `decompose(format=pdf)` 抽圖。端到端實證含 TW 案。文字（claims/全文/圖說）仍走 `google_*` BigQuery + GPSS/USPTO PPUBS。
 - 代表圖抓取與降級邊界（plan `remediation_drawing-scraping-cdn`, 2026-06, BR_20260628）：
   - **單線程節流（A）**：所有 GPSS 抓圖工具（`gpss_download_representative_figure` / `_patent_pdf` / `_patent_xml`）共用 module-level `_GPSS_SCRAPE_LOCK`（`patents.py`）序列化（Concurrency=1）+ `_gpss_scrape_pace()` 隨機延遲（env `GPSS_SCRAPE_MIN/MAX_DELAY`，預設 1~3s），防 Cloudflare Managed Challenge。
@@ -113,4 +122,5 @@
 ## Architecture Sync Note
 - 2026-06-15: 已將架構 SSOT 從舊八階段 prompt pipeline 重構為 PatentWorks MCP + skill 現況；新增 analysis 作為資料來源無關的 planned boundary。
 - 2026-06-26: 獨立分析技能流程 `skills/patentworks/flows/analysis.md` 實作完成，並已同步更新 `SKILL.md` 路由表，以及 `screening.md` 與 `drafting.md` 的銜接說明。
+- 2026-07-03: 單一檢索入口上線(plan `patentmcp_search-dispatcher`)。新增 `search_dispatcher.py` + `patent_search` tool;`gpss_search`/`epo_search`/`gpatents_search`/`uspto_patents` search methods 下架;`build_screening_table` 改接 dispatcher;mcp.json 0.3.0;README/skill 文件同步。Critical File Index 舊 `PatentDrafter`/`vendor/patents-mcp` 失效路徑同步修正為現行 repo 佈局。詳見 Debug/Observability Map dispatcher 段。
 - 2026-06-28: 處理三份 BR(plan `br20260628_tooling_skill_gpss_gaps`)。`patents.py` + `screening_table.py` 工具層強化(顯式爬蟲 gate / 參數命名統一 + alias / 代表圖失敗分級 / PPUBS 便利包裝 / GPSS claim1_empty 旗標,20 tests 全過);`patentworks/SKILL.md §5` 加來源梯窮舉門檻 + 工具清單更新 + 爬蟲天條天平重寫。BR①-A(工具未 surface)判定為 opencode side、非本 repo 範圍。詳見 Debug/Observability Map 對應段落。

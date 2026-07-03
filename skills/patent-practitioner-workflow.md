@@ -129,18 +129,18 @@
 
 **裝配流程**:
 ```
-search(優先 GPSS, CPC+關鍵詞) → 命中數
+patent_search(CPC+關鍵詞;來源梯內建,GPSS 首選) → 命中數
   ├─ >300 → 回「太發散 + 建議收斂方式」,不繼續分析
   └─ ≤300 → 組去重 CSV(PatNo/Title/Abstract/Claim1/family_id/members) → blob
             → agent 爬 CSV 逐格消化,寫回 蒸餾 + 判定 + 命中要件
             → 交付同一張 enriched CSV
 ```
 
-> 來源注記:GPSS 的 search 一次呼叫即回 PatNo/Title/Abstract/Claims(`expFld`),最適合裝配此表;Claim1 由 claims.claim[0] 切首項(偶為前言,真 claim1 在 [1])。**GPSS 不提供 INPADOC 家族 → 以 `epo_family` 補(已驗證,正確合併 US/CN/TW)**。
+> 來源注記:`patent_search` 走 GPSS 級時一次呼叫即回 PatNo/Title/Abstract/Claims(`expFld`),最適合裝配此表;Claim1 由 claims.claim[0] 切首項(偶為前言,真 claim1 在 [1])。**GPSS 不提供 INPADOC 家族 → 以 `epo_family` 補(已驗證,正確合併 US/CN/TW)**。
 
 ## 五、本生產線的分工對應
 
-- **MCP tool**(patentmcp,皆已上線):`gpss_search`(首選,一次回全欄)、`gpss_download_representative_figure`(GPSS代表圖下載)、`epo_family/biblio/search`(官方家族/摘要/CQL)、`gpatents_search/get/download_*`(語義+圖)、`build_screening_table`(search→去重→CSV→handle)、`stage_file`(任意檔→handle)。
+- **MCP tool**(patentmcp,皆已上線):`patent_search`(**單一檢索入口**,來源梯內建:GPSS 首選→EPO→PPUBS→gated 爬蟲,一次回全欄+provenance)、`gpss_download_representative_figure`(GPSS代表圖下載)、`epo_family/biblio`(官方家族/摘要)、`gpatents_get/download_*`(單號取文+圖,最後手段)、`build_screening_table`(search→去重→CSV→handle)、`stage_file`(任意檔→handle)。舊 `gpss_search`/`epo_search`/`gpatents_search`/`ppubs_search_*` 已下架,一律改用 `patent_search`。
 - **skill**(`patentworks`,已建):router + flows(disclosure/screening/drafting)+ 法域 reference,編排「search → 逐筆消化 → 評分 CSV」。
 - **CSV / docxmcp**:結果落地成 CSV / 報告,經 token+blob handle 交付。
 - 資料來源優先序:GPSS(首選)> EPO(家族/摘要/CQL,零限速)> Google Patents(語義+圖,需節流)> BigQuery(僅便宜 metadata)。

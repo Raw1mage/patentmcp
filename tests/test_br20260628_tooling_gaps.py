@@ -287,9 +287,9 @@ class Claim1EmptyTest(unittest.TestCase):
         self.assertFalse(by_pub["TWFULL"]["claim1_empty"])
 
 
-# ── P6: gpss_search surfaces claim1_audit advisory (BR3-D) ──────────
+# ── P6: _gpss_search_impl surfaces claim1_audit advisory (BR3-D) ──────────
 class GpssSearchClaim1AuditTest(unittest.TestCase):
-    """gpss_search must surface a claim1_audit so a caller of the tool (not just
+    """_gpss_search_impl must surface a claim1_audit so a caller (not just
     build_screening_table) knows which pub numbers need a PPUBS fallback."""
 
     def _run_with_stub(self, gpss_payload):
@@ -299,7 +299,7 @@ class GpssSearchClaim1AuditTest(unittest.TestCase):
         orig = P.gpss_client.search
         P.gpss_client.search = _stub  # type: ignore
         try:
-            return asyncio.run(P.gpss_search(keyword="x"))
+            return asyncio.run(P._gpss_search_impl(keyword="x"))
         finally:
             P.gpss_client.search = orig  # type: ignore
 

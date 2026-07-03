@@ -1,0 +1,33 @@
+{
+  "diagram_title": "patent_search dispatcher runtime ladder",
+  "Steps": [
+    { "id": "S0", "name": "Idle — receive patent_search call", "initial": true },
+    { "id": "S1", "name": "Validate & normalize query axes" },
+    { "id": "S2", "name": "Try GPSS (official, US/CN/TW)" },
+    { "id": "S3", "name": "Try EPO OPS (search→biblio two-phase)" },
+    { "id": "S4", "name": "Try USPTO PPUBS (US axes / USPC CCL)" },
+    { "id": "S5", "name": "Scraping gate check" },
+    { "id": "S6", "name": "gpatents tail rung (authorized scraping)" },
+    { "id": "S7", "name": "Normalize records + assemble provenance" },
+    { "id": "S8", "name": "Return unified envelope / structured error" }
+  ],
+  "Gates": [
+    { "id": "T1", "from": "S0", "to": "S1", "condition": "call received" },
+    { "id": "T2", "from": "S1", "to": "S2", "condition": "params valid AND gpss.configured()" },
+    { "id": "T2b", "from": "S1", "to": "S3", "condition": "params valid AND NOT gpss.configured()" },
+    { "id": "T2c", "from": "S1", "to": "S4", "condition": "US-only axis (USPC CCL) requested" },
+    { "id": "T2x", "from": "S1", "to": "S8", "condition": "invalid params → fail-fast error" },
+    { "id": "T3", "from": "S2", "to": "S7", "condition": "GPSS hit" },
+    { "id": "T4", "from": "S2", "to": "S3", "condition": "GPSS miss/error (recorded in provenance)" },
+    { "id": "T5", "from": "S3", "to": "S7", "condition": "EPO hit (biblio fetched)" },
+    { "id": "T6", "from": "S3", "to": "S4", "condition": "EPO miss/unconfigured (recorded)" },
+    { "id": "T7", "from": "S4", "to": "S7", "condition": "PPUBS hit" },
+    { "id": "T8", "from": "S4", "to": "S5", "condition": "PPUBS miss (recorded)" },
+    { "id": "T9", "from": "S5", "to": "S6", "condition": "allow_scraping == True" },
+    { "id": "T10", "from": "S5", "to": "S8", "condition": "allow_scraping == False → SCRAPING_REQUIRED structured error" },
+    { "id": "T11", "from": "S6", "to": "S7", "condition": "gpatents hit (provenance.scraping=true)" },
+    { "id": "T12", "from": "S6", "to": "S8", "condition": "all rungs miss → structured all-miss error with full provenance" },
+    { "id": "T13", "from": "S7", "to": "S8", "condition": "records normalized" }
+  ],
+  "Edges": []
+}

@@ -13,6 +13,8 @@ output/
 *.egg-info/
 **/*.egg-info/
 .specbase/*.sqlite
+.specbase/*.sqlite-shm
+.specbase/*.sqlite-wal
 build/
 dist/
 wheels/

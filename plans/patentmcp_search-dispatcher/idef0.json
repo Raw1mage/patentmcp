@@ -1,0 +1,38 @@
+{
+  "diagram_title": "Unified Patent Search Dispatcher (patent_search)",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "name": "Normalize Query Axes",
+      "inputs": ["Unified params (cpc/ipc/keyword/applicant/inventor_country/pub_number/date/countries/num/skip)"],
+      "controls": ["Unified axis schema", "Fail-fast param validation"],
+      "outputs": ["Normalized QuerySpec"],
+      "mechanisms": ["search_dispatcher.py"]
+    },
+    {
+      "id": "A2",
+      "name": "Select Source Ladder Rung",
+      "inputs": ["Normalized QuerySpec"],
+      "controls": ["Source priority policy GPSS→EPO→PPUBS", "configured() availability", "Axis capability matrix", "allow_scraping gate (default False)"],
+      "outputs": ["Routing decision (source + backend-native query)"],
+      "mechanisms": ["gpss_client.configured()", "epo_client.configured()", "axis→backend mapper"]
+    },
+    {
+      "id": "A3",
+      "name": "Execute Backend Search",
+      "inputs": ["Routing decision"],
+      "controls": ["Client throttling (GPSS single-thread+sleep, EPO 15/min, SoftScrapePolicy)"],
+      "outputs": ["Raw backend hits", "Per-rung attempt result"],
+      "mechanisms": ["GPSSClient.search", "EPOClient.search + biblio (two-phase)", "ppubs_client.run_query", "GooglePatentsClient.search (gated tail)"]
+    },
+    {
+      "id": "A4",
+      "name": "Normalize Records & Assemble Provenance",
+      "inputs": ["Raw backend hits", "Per-rung attempt results"],
+      "controls": ["Unified record schema (screening_table.py)", "Honest-gap discipline (blank, never faked)"],
+      "outputs": ["Unified envelope {records, source, provenance, gaps}"],
+      "mechanisms": ["gpss_to_records", "ppubs_to_records (new)", "epo biblio mapper (new)", "google_to_records"]
+    }
+  ]
+}

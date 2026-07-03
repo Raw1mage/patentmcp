@@ -1,0 +1,50 @@
+[
+  {
+    "id": "TV-1",
+    "description": "GPSS configured + cpc/keyword → GPSS 命中,EPO/PPUBS skipped",
+    "input": { "cpc": "G06Q50/18", "keyword": "patent search", "num": 5, "gpss_configured": true },
+    "expected": { "success": true, "source": "gpss", "provenance": [{ "source": "gpss", "status": "hit" }, { "source": "epo", "status": "skipped" }, { "source": "ppubs", "status": "skipped" }] }
+  },
+  {
+    "id": "TV-2",
+    "description": "GPSS 未 configured → EPO search→biblio 二段",
+    "input": { "cpc": "G06Q50/18", "gpss_configured": false, "epo_configured": true },
+    "expected": { "success": true, "source": "epo", "provenance": [{ "source": "gpss", "status": "skipped", "reason": "not_configured" }, { "source": "epo", "status": "hit" }] }
+  },
+  {
+    "id": "TV-3",
+    "description": "USPC 軸(CCL/)→ 直達 PPUBS,GPSS/EPO skipped(axis_unsupported)",
+    "input": { "uspc": "705/300", "gpss_configured": true },
+    "expected": { "success": true, "source": "ppubs", "provenance": [{ "source": "gpss", "status": "skipped", "reason": "axis_unsupported" }, { "source": "epo", "status": "skipped", "reason": "axis_unsupported" }, { "source": "ppubs", "status": "hit" }] }
+  },
+  {
+    "id": "TV-4",
+    "description": "官方三級全 miss + allow_scraping=False → SCRAPING_REQUIRED,不打 gpatents",
+    "input": { "keyword": "obscure query", "allow_scraping": false, "all_official_miss": true },
+    "expected": { "success": false, "error_code": "SCRAPING_REQUIRED", "gpatents_called": false }
+  },
+  {
+    "id": "TV-5",
+    "description": "官方全 miss + allow_scraping=True → gpatents 尾級,provenance.scraping=true",
+    "input": { "keyword": "obscure query", "allow_scraping": true, "all_official_miss": true },
+    "expected": { "success": true, "source": "gpatents", "provenance_last": { "source": "gpatents", "status": "hit", "scraping": true } }
+  },
+  {
+    "id": "TV-6",
+    "description": "全來源 miss(含授權爬蟲)→ ALL_SOURCES_MISS + 完整 provenance",
+    "input": { "keyword": "impossible", "allow_scraping": true, "all_miss": true },
+    "expected": { "success": false, "error_code": "ALL_SOURCES_MISS", "provenance_length": 4 }
+  },
+  {
+    "id": "TV-7",
+    "description": "無任何檢索軸 → INVALID_PARAMS fail-fast,不打任何後端",
+    "input": {},
+    "expected": { "success": false, "error_code": "INVALID_PARAMS", "backends_called": 0 }
+  },
+  {
+    "id": "TV-8",
+    "description": "uspto_patents 舊 search method 被拒並指引 patent_search",
+    "input": { "tool": "uspto_patents", "method": "ppubs_search_patents", "query": "CCL/705/300" },
+    "expected": { "success": false, "error_contains": "patent_search" }
+  }
+]

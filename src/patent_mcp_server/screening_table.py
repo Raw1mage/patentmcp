@@ -274,6 +274,88 @@ def gpss_to_records(gpss_json: Dict[str, Any]) -> List[Dict[str, Any]]:
     return recs
 
 
+def ppubs_to_records(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """USPTO PPUBS run_query native JSON → records. PPUBS search hits carry no
+    claim1/family_id; those land empty (honestly blank), fill via
+    ppubs_batch_get_claims / epo_family."""
+    docs = result.get("patents") or result.get("docs") or []
+    if not isinstance(docs, list):
+        docs = [docs]
+    recs = []
+    for d in docs:
+        if not isinstance(d, dict):
+            continue
+        pubno = (d.get("publicationReferenceDocumentNumber")
+                 or d.get("patentNumber") or d.get("guid") or "")
+        applicant = d.get("applicantName") or d.get("assigneeEntityName") or ""
+        if isinstance(applicant, list):
+            applicant = "; ".join(str(x) for x in applicant)
+        inventor = d.get("inventorsShort") or d.get("inventorName") or ""
+        if isinstance(inventor, list):
+            inventor = "; ".join(str(x) for x in inventor)
+        cpc = d.get("cpcCombinationClassificationText") or d.get("cpcAdditionalFlattened") or ""
+        if isinstance(cpc, list):
+            cpc = "; ".join(str(x) for x in cpc[:6])
+        ipc = d.get("ipcCodeFlattened") or ""
+        if isinstance(ipc, list):
+            ipc = "; ".join(str(x) for x in ipc[:6])
+        uspc = d.get("uspcFullClassificationFlattened") or ""
+        if isinstance(uspc, list):
+            uspc = "; ".join(str(x) for x in uspc[:6])
+        abstract = d.get("abstractHtml") or d.get("abstractText") or ""
+        if isinstance(abstract, list):
+            abstract = " ".join(str(x) for x in abstract)
+        import re as _re
+        abstract = _re.sub(r"<[^>]+>", " ", str(abstract))
+        abstract = _re.sub(r"\s+", " ", abstract).strip()
+        recs.append({
+            "pubno": str(pubno),
+            "appno": str(d.get("applicationNumberText") or ""),
+            "title": str(d.get("inventionTitle") or d.get("title") or ""),
+            "abstract": abstract,
+            "claim1": "",
+            "family_id": "",
+            "cpc": cpc,
+            "ipc": ipc,
+            "uspc": uspc,
+            "prio_date": "",
+            "app_date": str(d.get("applicationFilingDate") or ""),
+            "pub_date": str(d.get("datePublished") or d.get("publicationDate") or ""),
+            "grant_date": str(d.get("grantDate") or ""),
+            "assignee": str(applicant),
+            "inventor": str(inventor),
+        })
+    return recs
+
+
+def epo_biblio_to_record(pub: str, biblio: Dict[str, Any]) -> Dict[str, Any]:
+    """EPO biblio dict (epo_client.biblio result) → one record. EPO's biblio
+    path carries title/abstract/applicants/IPC only; everything else lands
+    empty (honestly blank), fill via patent_get_claim1 / epo_family."""
+    applicants = biblio.get("applicants") or []
+    if not isinstance(applicants, list):
+        applicants = [applicants]
+    ipc = biblio.get("ipc") or []
+    if not isinstance(ipc, list):
+        ipc = [ipc]
+    return {
+        "pubno": pub,
+        "appno": "",
+        "title": str(biblio.get("title") or ""),
+        "abstract": str(biblio.get("abstract") or ""),
+        "claim1": "",
+        "family_id": "",
+        "cpc": "",
+        "ipc": "; ".join(str(x) for x in ipc[:6]),
+        "prio_date": "",
+        "app_date": "",
+        "pub_date": "",
+        "grant_date": "",
+        "assignee": "; ".join(str(x) for x in applicants),
+        "inventor": "",
+    }
+
+
 # Fields that no current source fills in-band — surfaced honestly as gaps.
 KNOWN_GAPS = {
     "legal_status": "需 EPO/USPTO 法律狀態查詢(FTO 用)",

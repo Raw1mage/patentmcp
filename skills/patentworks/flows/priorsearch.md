@@ -63,7 +63,7 @@ output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 
 | 欄位 | 意義 | 不允許 |
 |---|---|---|
 | `query_id` | 查詢序號(復現錨) | 跳號或重複 |
-| `source` | `gpss`/`epo`/`uspto`/`google` | 爬蟲 `gpatents_*` |
+| `source` | `patent_search` 回傳的 `source`(`gpss`/`epo`/`uspto`)或單號取文的 `google` | 爬蟲級(`gpatents`) |
 | `database` | `TWA/TWB/CNA/CNB/USA/USB` 或 epo/google region | 留空 |
 | `axis.class_codes` | 該查詢實際用的分類碼(可多) | 填願望而非實際送出值 |
 | `axis.class_scheme` | `ipc`/`cpc` | 與 class_codes 不符 |
@@ -98,7 +98,7 @@ output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 
   "ts": "2026-06-28T18:07:00+08:00",
   "kind": "matrix_query",
   "query_id": "Q07",
-  "tool": "gpss_search",
+  "tool": "patent_search",
   "request": {"database": "USA", "class_scheme": "cpc", "class_codes": ["G06Q20/02"], "keywords": ["milestone payment"], "boolean": "AND", "date_from": "2015-01-01", "date_to": "2026-06-28"},
   "hits": 42,
   "artifact": "raw/Q07.json",
@@ -142,8 +142,8 @@ output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 
 
 ## 1. 來源與紅線(硬規定)
 
-- **官方 REST API 優先**。檢索主力 **TIPO GPSS**(`gpss_search`,一站涵蓋 US/CN/TW);全文/圖說文字補 **`google_*` BigQuery 合法 API**(非 TW)、**EPO OPS**、**USPTO PPUBS**。各來源能力與優先序見 `../SKILL.md` §5。
-- **🚫 網頁爬蟲非法,禁用**。`gpatents_*`(`gpatents_search`/`gpatents_get`/`gpatents_download_*`)爬 patents.google.com 網頁,**一律不得用於本 flow 的檢索與批量抓取**。
+- **檢索一律用單一入口 `patent_search`**——來源梯已內建於 server(TIPO GPSS 官方首選,一站涵蓋 US/CN/TW → EPO OPS → USPTO PPUBS → gated 爬蟲),每級嘗試記入 `provenance`。全文/圖說文字補 **`google_*` BigQuery 合法 API**(非 TW)、**EPO OPS**、**USPTO PPUBS** 單號取文工具。各級能力知識見 `../SKILL.md` §5。
+- **🚫 本 flow 禁用爬蟲**。一律保持 `patent_search(allow_scraping=False)`(預設),**嚴禁授權爬蟲尾級**;單號爬蟲取文工具(`gpatents_get`/`gpatents_download_*`)亦禁用於本 flow 的檢索與批量抓取。官方全 miss 回 `SCRAPING_REQUIRED` 時,誠實記缺口,不降級。
 - **`google_*`(BigQuery 合法 API)≠ `gpatents_*`(爬蟲)**:前者走註冊 service account 查公開資料集,合法可靠;要逐字 claims/全文/圖說用 `google_get_patent_claims` / `google_get_patent_description`。
 - **原始專利 PDF 下載**:見 §5——**僅允許針對已知專利號、逐件小量下載公開 PDF**,不得批量。
 - **CPC/IPC 一次性錨定鐵則**：CPC/IPC 分類代碼**必須作為基本限制條件（即 AND 運算子）直接寫入原始檢索條件式中**。嚴禁在檢索結果返回後進行「第二輪二次 CPC 篩選」，以防因定義偏差誤殺原先有相關的專利。原始檢索後應直接產出包含所有相關專利的大池，僅進行同案去重與相關性評等。
@@ -162,7 +162,7 @@ output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 
 | AND/OR 組合型態 | **≥ 2** | 至少 2 種布林型態,不可全 `SINGLE` 單詞海撈(分類×關鍵字、關鍵字 OR 同義詞…) |
 | 總查詢筆數 | **≥ 12** | 多維交叉的最低笛卡兒覆蓋 |
 
-> **分類軸只用 CPC/IPC(使用者規則 2026-06-28)。** USPC 不納入檢索軸——GPSS `gpss_search` 本就只有 `cpc`/`ipc` 參數;主檢索一律 CPC/IPC 錨定,不要求 USPC。
+> **分類軸只用 CPC/IPC(使用者規則 2026-06-28)。** USPC 不納入檢索軸——主檢索一律 `patent_search(cpc=.../ipc=...)` CPC/IPC 錨定,不用 `uspc` 參數。
 
 **campaign 覆寫語法**(寫在 `00_campaign.md`,HTML 註解標記,raise-only):
 ```
@@ -178,22 +178,22 @@ output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 
 | 大陸 | `CNA`(公開) `CNB`(公告) | **中文** | `ipc` |
 | 美國 | `USA`(公開) `USB`(公告) | **英文** | `ipc` / `cpc` |
 
-- **分類軸只用 CPC/IPC(使用者規則 2026-06-28)。** 不使用 USPC——`gpss_search` 本就只有 `cpc`/`ipc` 參數。
+- **分類軸只用 CPC/IPC(使用者規則 2026-06-28)。** 不使用 USPC——`patent_search` 只用 `cpc`/`ipc` 參數(`uspc` 參數不用於本 flow)。
 - **關鍵字語言必須匹配資料庫**(US 庫搜中文回零筆)。
 - **TW/CN 共通分類用 `ipc` 參數**(GPSS 的 `cpc` 對 TW 常回零);US 案 `ipc`/`cpc` 皆可。
 - **多分類錨點仍是硬要求**:跨 IPC/CPC 至少 3 個不同分類碼(不可只圍一個 G06Q 近似碼海撈)。
 - **keyword 用單一複合詞**(多詞空格 AND 常回 `No record`);多概念交叉靠 `分類軸(ipc/cpc) × 單關鍵字 × 日期`,並刻意變換布林型態(AND 限縮 / OR 擴同義詞),不可全程單詞海撈。
-- 逐字 Claim 1 三地通用:`gpss_search(pub_number="...")`。
+- 逐字 Claim 1 三地通用:`patent_search(pub_number="...")`。
 
 ## 3. 流程
 
 ### A. 建夾 + 校準
 1. 建工作資料夾(§0 結構),寫 `00_campaign.md`(主題/IPC 錨點/三地/日期區間/件數上限/硬條件/加分維度)。
-2. 用 `gpss_search` 對每個 IPC 錨點 + 代表關鍵字跑**小量探針**(`num=2~5`),把命中量級記入 `01_search/probes.md`。過寬(數千筆)收緊 IPC/加日期;過窄換上層分類/補同義詞。
+2. 用 `patent_search` 對每個 IPC 錨點 + 代表關鍵字跑**小量探針**(`num=2~5`),把命中量級記入 `01_search/probes.md`。過寬(數千筆)收緊 IPC/加日期;過窄換上層分類/補同義詞。
 
 ### B. 召回 + 落地(委派子代理)
 3. 委派**一個**子代理跑完整檢索矩陣(`各分類錨點(ipc/cpc) × 各情境關鍵字概念群 × 三地資料庫 × 日期 × 布林型態`),須滿足 §1.5 檢索強度契約的硬地板:
-   - **明令只用官方 API**(`gpss_search` 為主,必要時 `epo_*` / `uspto_patents` / `google_*` BigQuery),**嚴禁 `gpatents_*` 爬蟲**。
+   - **明令只走官方梯**:檢索一律 `patent_search`(且 `allow_scraping=False` 預設不得改),單號取文必要時 `epo_family`/`epo_biblio` / `uspto_patents` 全文 / `google_*` BigQuery;**嚴禁授權爬蟲尾級與 `gpatents_*` 取文工具**。
    - **每跑一條查詢就 append 一行**到 `01_search/matrix-log.jsonl`(schema 見 §0),`axis` 如實記錄該條實際送出的分類軸/關鍵字/概念群/布林/日期與命中數——這是 `search_audit` 機檢的唯一證據,**不是事後補的願望清單**。
    - 子代理:吸收巨量 JSON(落地 `01_search/raw/`)→ 硬條件過濾 → 同案去重(公開 A/公告 B)→ 收斂至件數上限 → 寫 `02_pool/candidates.csv`。**此過程嚴禁施加任何第二輪 CPC 條件篩選，維持檢索式所定範疇**。
 4. 主代理**兩段複核**(先過程、再產物——順序不可顛倒):
@@ -203,9 +203,9 @@ output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 
 
 ### C. 重點前案深挖(針對所有評等為 5 級相關性的專利進行，不再受限於固定數量限制) → `02_pool/shortlist.json`
 5. 針對所有評等為 5 級的重點專利，逐件取**逐字 Claim 1 + 完整全文/圖說**,依法域選來源：
-   - **TW 案**:`gpss_search(pub_number="TW...", databases=["TWA","TWB"])`。
+   - **TW 案**:`patent_search(pub_number="TW...", databases=["TWA","TWB"])`。
    - **US/EP/WO/JP/CN/KR/… 案(非 TW)**:`google_get_patent_claims(...)` + `google_get_patent_description(...)`(BigQuery 合法 API,回全部請求項 + 完整說明書含 BRIEF DESCRIPTION OF THE DRAWINGS 逐圖文字說明)。
-   - **US 案次選**:`uspto_patents(method="ppubs_get_full_document", guid=...)`。
+   - **US 案次選**:`uspto_patents(method="ppubs_get_full_document", publication_number="US...")`。
 6. **代表圖(圖檔影像)**：優先呼叫 `gpss_download_representative_figure` (TW 案優先，見 §5 與 `../reference/priorsearch/pdf-figure-extraction.md`) 取得絕對圖檔網址並完成下載。
 
 ### D. 交付物產出 → `99_deliverables/`
