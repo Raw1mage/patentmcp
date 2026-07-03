@@ -33,11 +33,11 @@
 - [x] 5.2 `_dav.py`：OPTIONS/PROPFIND(0/1 multistatus)/GET/PUT/DELETE/MKCOL/MOVE/LOCK/UNLOCK + in-memory lock table（TTL）
 - [x] 5.3 掛載 `/dav/{subject}/{rel:path}` 於 build_app extras（不引入第二 lifespan）
 - [x] 5.4 MCP tools：cache_provision（idempotent）/ cache_list / cache_export（N:M、COPY、EXPORT_TARGET_UNREACHABLE）/ cache_close（dirty gate、force）
-- [~] 5.5 rclone 實掛載驗證：copyto/lsf/cat/mkdir/moveto/deletefile + 跨 owner 403 + 無認證 401（TestClient 已覆蓋 method 表 + 401/403/423/207；rclone host 實掛留整合階段）
+- [x] 5.5 rclone 實掛載驗證：mkdir(MKCOL)/rcat(PUT)/lsf(PROPFIND)/cat(GET)/moveto(MOVE)/copyto(COPY)/deletefile(DELETE) + 空 collection 可見 + 無認證 401 + 錯密碼 401 + 跨 token MOVE 403 → **rclone host 實掛 12/12 全綠**。整合驗證揪出並修 4 層 unit test 漏抓的真 bug：(a) PROPFIND rel 尾斜線→startswith 誤判 not_found；(b) list_files 只列 file→空 MKCOL dir 對 PROPFIND 隱形 + Depth:1 誤回整棵遞迴樹（改 stat_entry/list_dir 檔案系統感知）；(c) gateway prefix 烤進 base_href/Destination needle→href 對不上（lsf 空）+ 合法同 token MOVE 誤判 cross_token 403（改 request-path 推導、prefix-agnostic）；(d) COPY 未列入 DAV_METHODS→rclone copyto 405（新增 _copy handler）。回填 3 個 unit regression test（COPY/空 collection/Depth:1 語義）。
 
 ## 6. 宣告與文件同步
 
 - [x] 6.1 mcp.json：version 0.4.0 + R13.5 兩平面 instructions
 - [x] 6.2 skills/patentworks：SKILL.md 路由表 + flows/screening.md 改本地建表工作流 + DAV 三層心智/export 紀律
 - [x] 6.3 README.md + specs/architecture.md 全貌同步
-- [x] 6.4 全套測試（host venv）綠：`.venv/bin/python -m pytest tests/ -q` → 134 passed；vendor-sync `scripts/sync_pure_lib.py` 無 drift。（container image build + `webctl.sh refresh` 後 UDS /health /tools 屬整合階段，未在本 group 執行）
+- [x] 6.4 全套測試（host venv）綠：`.venv/bin/python -m pytest tests/ -q` → **136 passed**（含 5.5 揪 bug 後回填的 3 個 regression test）；vendor-sync `scripts/sync_pure_lib.py` 無 drift。**container 整合驗證（本輪補做）**：`webctl.sh restart` rebuild+recreate → UDS `/health` ok、`/healthz` 200、`/tools` 31 tools（cache_* 全在、pool_fetch present、build_screening_table 已下架）、`/dav` OPTIONS 回 DAV:1,2 + 401 WWW-Authenticate。

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "state": "implementing",
+  "state": "living",
   "profile": [],
   "history": [
     {
@@ -34,6 +34,22 @@
       "by": "pkcs12",
       "mode": "promote",
       "reason": "開始實作：依 tasks.md 六群交付"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-03T10:45:14.362Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "R13 compute/landing split + WebDAV working-cache 全落地; 134 pytest passed; vendor sync 無 drift; docs/architecture 同步; 5.5 rclone 實掛 + 6.4 container UDS 整合驗證延整合階段"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-03T10:46:51.932Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "使用者明確指示畢業上線"
     }
   ]
 }

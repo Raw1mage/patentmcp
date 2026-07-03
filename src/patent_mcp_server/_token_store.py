@@ -320,6 +320,45 @@ class TokenStore:
             })
         return out
 
+    def stat_entry(self, token: str, rel: str) -> tuple[bool, bool, int, float]:
+        """Filesystem-aware stat for one rel within a token dir → (exists, is_dir,
+        size, mtime). rel="" is the collection root (always an existing dir). Used
+        by PROPFIND so empty collections (MKCOL with no files yet) are visible —
+        list_files() only rglobs is_file() and never sees an empty dir."""
+        entry = self.resolve(token)
+        if not rel:
+            return (True, True, 0, 0.0)
+        target = self._safe_target(entry.dir_path, rel)
+        if not target.exists():
+            return (False, False, 0, 0.0)
+        st = target.stat()
+        is_dir = target.is_dir()
+        return (True, is_dir, st.st_size if not is_dir else 0, st.st_mtime)
+
+    def list_dir(self, token: str, rel: str = "") -> Optional[list[dict[str, Any]]]:
+        """List the DIRECT children (files AND sub-dirs) of rel within a token dir,
+        for PROPFIND Depth:1. Returns None if rel is not an existing directory.
+        Distinct from list_files() (recursive, files-only): WebDAV clients (rclone)
+        walk one Depth:1 level at a time and expect empty sub-dirs to appear."""
+        entry = self.resolve(token)
+        base = entry.dir_path.resolve()
+        target = base if not rel else self._safe_target(entry.dir_path, rel)
+        if not target.is_dir():
+            return None
+        out: list[dict[str, Any]] = []
+        for path in sorted(target.iterdir()):
+            if path.name == _META_NAME:
+                continue
+            st = path.stat()
+            is_dir = path.is_dir()
+            out.append({
+                "rel": str(path.relative_to(base)),
+                "is_dir": is_dir,
+                "size": st.st_size if not is_dir else 0,
+                "mtime": st.st_mtime,
+            })
+        return out
+
     def mkdir(self, token: str, rel: str) -> Path:
         """Create a directory at rel inside a token dir (MKCOL). Traversal-safe."""
         entry = self.resolve(token)

@@ -37,7 +37,7 @@ from xml.sax.saxutils import escape as _xml_escape
 
 DAV_METHODS = [
     "OPTIONS", "PROPFIND", "GET", "HEAD", "PUT", "DELETE",
-    "MKCOL", "MOVE", "LOCK", "UNLOCK",
+    "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK",
 ]
 
 DEFAULT_LOCK_TTL_SECONDS = 3600
@@ -196,6 +196,13 @@ class DavHandler:
                body: bytes = b"", headers: Optional[dict] = None):
         headers = {k.lower(): v for k, v in (headers or {}).items()}
         m = method.upper()
+        # Normalize a trailing slash: WebDAV clients (rclone, curl) PROPFIND a
+        # collection as `.../sub/`; the route hands us rel="sub/". Membership
+        # checks compare against store rels like "sub/a.txt", so a trailing
+        # slash turns `rel + "/"` into "sub//" and every startswith() misses,
+        # yielding a false not_found on an existing collection (integration bug
+        # 5.5: unit TestClient hit only the root rel="" path and never saw it).
+        rel = rel.rstrip("/")
         if m == "OPTIONS":
             return self._options()
         if m == "PROPFIND":
@@ -210,6 +217,8 @@ class DavHandler:
             return self._mkcol(token, rel)
         if m == "MOVE":
             return self._move(token, rel, subject, owner, mount_prefix, headers)
+        if m == "COPY":
+            return self._copy(token, rel, subject, owner, mount_prefix, headers)
         if m == "LOCK":
             return self._lock(token, rel, owner, headers)
         if m == "UNLOCK":
@@ -226,29 +235,36 @@ class DavHandler:
         }, b"")
 
     def _propfind(self, token, rel, base_href, headers):
+        # Filesystem-aware PROPFIND. Depth:0 = the named resource only; Depth:1 =
+        # the resource + its DIRECT children (WebDAV clients like rclone walk one
+        # level at a time and expect empty collections to appear). Driven by
+        # stat_entry/list_dir, NOT list_files() — the latter is recursive+files-only
+        # and cannot see an empty MKCOL dir (integration bug 5.5).
         depth = headers.get("depth", "1")
         try:
-            files = self._store.list_files(token)
+            exists, is_dir, size, mtime = self._store.stat_entry(token, rel)
         except Exception as e:  # noqa: BLE001
             return self._err(404, "not_found", str(e))
-        if rel:
-            # PROPFIND on a specific member
-            match = [f for f in files if f["rel"] == rel]
-            children = [f for f in files
-                        if f["rel"].startswith(rel + "/")] if depth != "0" else []
-            if not match and not children:
-                # maybe a collection prefix
-                if not any(f["rel"].startswith(rel + "/") for f in files):
-                    return self._err(404, "not_found", f"no such resource: {rel}")
-            entries = match + children if depth != "0" else match
-            body = build_multistatus(base_href.rstrip("/"),
-                                     [{**e, "rel": e["rel"]} for e in entries],
-                                     include_self=False)
-        else:
-            entries = files if depth != "0" else []
-            body = build_multistatus(base_href, entries, include_self=True)
+        if not exists:
+            return self._err(404, "not_found", f"no such resource: {rel}")
+        base = base_href if base_href.endswith("/") else base_href + "/"
+        # Self response for the named resource.
+        self_href = base + (rel + "/" if rel and is_dir else rel)
+        parts = ['<?xml version="1.0" encoding="utf-8"?>',
+                 '<D:multistatus xmlns:D="DAV:">',
+                 _propstat_response(self_href, is_dir=is_dir, size=size,
+                                    mtime=mtime)]
+        if is_dir and depth != "0":
+            children = self._store.list_dir(token, rel) or []
+            for c in children:
+                crel = c["rel"]
+                href = base + (crel + "/" if c["is_dir"] else crel)
+                parts.append(_propstat_response(
+                    href, is_dir=c["is_dir"], size=c.get("size", 0),
+                    mtime=c.get("mtime", 0.0)))
+        parts.append("</D:multistatus>")
         return (207, {"Content-Type": 'application/xml; charset="utf-8"'},
-                body.encode("utf-8"))
+                "".join(parts).encode("utf-8"))
 
     def _get(self, token, rel, *, head):
         if not rel:
@@ -320,6 +336,36 @@ class DavHandler:
         except Exception as e:  # noqa: BLE001
             return self._store_err(e)
         return (201, {"Content-Length": "0"}, b"")
+
+    def _copy(self, token, rel, subject, owner, mount_prefix, headers):
+        # Server-side COPY within one subject cache (rclone `copyto`). Same
+        # cross-token guard as MOVE (Destination must stay in-subject), but the
+        # source is preserved. Overwrite honours the WebDAV Overwrite header.
+        dst_rel = self._dest_rel(headers.get("destination"), subject,
+                                 mount_prefix)
+        if dst_rel is None:
+            return self._err(403, "cross_token_move",
+                             "COPY Destination must stay within the same subject cache")
+        lock_token = _if_lock_token(headers.get("if"))
+        if self._locks.blocks_write(token, dst_rel, owner, lock_token):
+            return self._err(423, "locked", "destination is locked")
+        try:
+            src = self._store.blob_path(token, rel)
+        except Exception as e:  # noqa: BLE001
+            return self._err(404, "not_found", str(e))
+        overwrite = headers.get("overwrite", "T").upper() != "F"
+        try:
+            exists, _, _, _ = self._store.stat_entry(token, dst_rel)
+        except Exception:  # noqa: BLE001
+            exists = False
+        if exists and not overwrite:
+            return self._err(412, "precondition_failed",
+                             "destination exists and Overwrite: F")
+        try:
+            self._store.write_file(token, dst_rel, src.read_bytes())
+        except Exception as e:  # noqa: BLE001
+            return self._store_err(e)
+        return (201 if not exists else 204, {"Content-Length": "0"}, b"")
 
     def _lock(self, token, rel, owner, headers):
         ttl = _parse_timeout(headers.get("timeout"))

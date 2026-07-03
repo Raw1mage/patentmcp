@@ -365,11 +365,28 @@ def build_app(mcp, store):
                               "identity does not own this subject cache")
 
         # 4. Dispatch the DAV method against the resolved token namespace.
-        base_href = f"{prefix}{_DAV_MOUNT_PREFIX}/{subject}/"
+        #    base_href / mount_prefix MUST reflect the path the CLIENT actually
+        #    used, not the env gateway prefix: a direct localhost caller hits
+        #    `/dav/...` (no prefix) while a gateway caller may carry `/patentmcp`.
+        #    Baking PATENTS_GATEWAY_PREFIX into the returned href broke rclone
+        #    (PROPFIND hrefs不對 → empty listing) and mis-flagged same-token MOVE
+        #    as cross_token (Destination needle不匹配) — integration bug 5.5.
+        #    Derive base_href by stripping the matched rel off the real req path;
+        #    keep mount_prefix as the bare mount so _dest_rel's find() stays
+        #    prefix-agnostic across direct/gateway callers.
+        req_path = request.url.path
+        rel_stripped = rel.rstrip("/")
+        req_stripped = req_path.rstrip("/")
+        if rel_stripped and req_stripped.endswith(rel_stripped):
+            base_href = req_stripped[: len(req_stripped) - len(rel_stripped)]
+        else:
+            base_href = req_path
+        if not base_href.endswith("/"):
+            base_href += "/"
         body = await request.body()
         status, hdrs, out = _dav_handler.handle(
             method, token=token, rel=rel, subject=subject, owner=ident.owner,
-            mount_prefix=f"{prefix}{_DAV_MOUNT_PREFIX}", base_href=base_href,
+            mount_prefix=_DAV_MOUNT_PREFIX, base_href=base_href,
             body=body, headers=dict(request.headers),
         )
         _log.info("[dav] %s %s/%s owner=%s status=%d", method, subject, rel,

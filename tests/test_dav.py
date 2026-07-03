@@ -75,13 +75,28 @@ def test_propfind_multistatus_wellformed(tmp_path):
     entry = store.provision("q3", "alice")
     store.write_file(entry.token, "chapters/c1.md", b"hello")
     h = _dav.DavHandler(store, _dav.LockTable())
+    # Depth:1 on root lists DIRECT children only (the `chapters/` collection),
+    # NOT the grandchild file — WebDAV clients (rclone) recurse one level at a
+    # time. The old assertion expected the grandchild and thereby固化了 the
+    # integration bug that broke rclone (5.5).
     s, hdrs, body = h.handle("PROPFIND", token=entry.token, rel="", subject="q3",
                              owner="alice", mount_prefix="/dav",
                              base_href="/dav/q3/", headers={"Depth": "1"})
     assert s == 207
     doc = minidom.parseString(body)  # raises on malformed XML
     assert doc.getElementsByTagName("D:response")
-    assert b"chapters/c1.md" in body
+    assert b"chapters/" in body
+    assert b"chapters/c1.md" not in body  # grandchild not at Depth:1
+    # Descending into the collection reveals the file, and an EMPTY dir is visible
+    store.mkdir(entry.token, "emptydir")
+    s2, _, body2 = h.handle("PROPFIND", token=entry.token, rel="chapters",
+                            subject="q3", owner="alice", mount_prefix="/dav",
+                            base_href="/dav/q3/", headers={"Depth": "1"})
+    assert s2 == 207 and b"chapters/c1.md" in body2
+    s3, _, body3 = h.handle("PROPFIND", token=entry.token, rel="emptydir/",
+                            subject="q3", owner="alice", mount_prefix="/dav",
+                            base_href="/dav/q3/", headers={"Depth": "1"})
+    assert s3 == 207  # empty MKCOL dir is found, not a false 404
 
 
 # ── auth unit ────────────────────────────────────────────────────────
@@ -165,6 +180,44 @@ def test_dav_owner_full_cycle(tmp_path):
     assert o.status_code == 200 and o.headers.get("DAV") == "1,2"
     # DELETE
     assert client.request("DELETE", "/dav/q3/a.csv", headers=h).status_code == 204
+
+
+def test_dav_copy_same_subject(tmp_path):
+    # COPY (rclone `copyto`) within one subject cache preserves the source.
+    # Regression for integration bug 5.5: COPY was absent from DAV_METHODS
+    # (rclone copyto -> 405) and the gateway-prefix mismatch mis-flagged the
+    # Destination as cross_token.
+    client, store = _make_app(tmp_path)
+    entry = store.provision("q3", "alice")
+    store.set_credential(entry.token, "pw")
+    h = _basic("alice", "pw")
+    assert client.put("/dav/q3/a.csv", content=b"x", headers=h).status_code == 201
+    r = client.request("COPY", "/dav/q3/a.csv",
+                       headers={**h, "Destination": "/dav/q3/b.csv"})
+    assert r.status_code in (201, 204)
+    # both source and copy exist
+    assert client.get("/dav/q3/a.csv", headers=h).content == b"x"
+    assert client.get("/dav/q3/b.csv", headers=h).content == b"x"
+    # cross-subject COPY Destination -> 403
+    x = client.request("COPY", "/dav/q3/a.csv",
+                       headers={**h, "Destination": "/dav/OTHER/b.csv"})
+    assert x.status_code == 403
+
+
+def test_dav_propfind_empty_collection_visible(tmp_path):
+    # Regression 5.5: an empty MKCOL dir must appear in PROPFIND (list_files
+    # only sees files, so an empty collection was invisible -> false 404).
+    client, store = _make_app(tmp_path)
+    entry = store.provision("q3", "alice")
+    store.set_credential(entry.token, "pw")
+    h = _basic("alice", "pw")
+    assert client.request("MKCOL", "/dav/q3/empty", headers=h).status_code == 201
+    # PROPFIND the empty dir directly -> 207, not 404
+    p = client.request("PROPFIND", "/dav/q3/empty", headers={**h, "Depth": "1"})
+    assert p.status_code == 207
+    # and it shows up as a child of root at Depth:1
+    r = client.request("PROPFIND", "/dav/q3", headers={**h, "Depth": "1"})
+    assert r.status_code == 207 and b"empty/" in r.content
 
 
 # ── helpers ──
