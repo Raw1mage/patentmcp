@@ -2997,7 +2997,8 @@ def _require_owner(owner_identity: Optional[str]) -> Optional[Dict[str, Any]]:
 
 @mcp.tool()
 async def cache_provision(subject_id: str,
-                          owner_identity: str) -> Dict[str, Any]:
+                          owner_identity: str,
+                          issue_webdav_credential: bool = False) -> Dict[str, Any]:
     """Provision (idempotent) a WebDAV working cache bound to a deliverable
     subject, returning its mount path + a one-time Basic credential.
 
@@ -3008,8 +3009,18 @@ async def cache_provision(subject_id: str,
     persisted. Mount it with any WebDAV client (rclone/davfs2) using Basic auth
     username=<owner_identity> password=<credential> against the mount path.
 
+    issue_webdav_credential (default false): R14.6 MCP-rail credential
+    bootstrap (fleet standard; docxmcp reference commit 54eac2e). Holding the
+    MCP socket IS the capability, so the rail may re-mint this cache's Basic
+    credential without the HTTP chicken-and-egg. Opt-in ONLY: absent/false
+    keeps the payload byte-identical to the prior behaviour (天條 §11 — no
+    silent extra fields). WARNING: setting it ROTATES the credential — any
+    existing WebDAV mount using the old password is invalidated. Set it only
+    when creating or rebuilding a host mount.
+
     Returns {success, token, subject_id, owner_identity, mount_path,
-    credential?} — `credential` present only on first provision.
+    credential?} — `credential` present only on first provision, or whenever
+    issue_webdav_credential=true.
     """
     err = _require_owner(owner_identity)
     if err:
@@ -3026,7 +3037,12 @@ async def cache_provision(subject_id: str,
         "owner_identity": owner_identity,
         "mount_path": f"{_DAV_MOUNT_PREFIX}/{subject_id}",
     }
-    if existing is None or not entry.credential_hash:
+    if issue_webdav_credential:
+        # R14.6 MCP-rail issuance: mint-or-rotate, cleartext returned ONCE.
+        secret = _secrets.token_urlsafe(24)
+        token_store.set_credential(entry.token, secret)
+        out["credential"] = secret
+    elif existing is None or not entry.credential_hash:
         secret = _secrets.token_urlsafe(24)
         token_store.set_credential(entry.token, secret)
         out["credential"] = secret

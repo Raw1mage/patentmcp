@@ -95,3 +95,42 @@ def test_export_missing_cache(patched_store, tmp_path):
     (tmp_path / "x").mkdir()
     r = _run(P.cache_export("nope", str(tmp_path / "x" / "o"), "alice"))
     assert r["success"] is False and r["error_code"] == "CACHE_NOT_FOUND"
+
+
+# ── R14.6 MCP-rail credential issuance (BR_20260706) ──────────────────
+def test_issue_webdav_credential_rotates(patched_store):
+    P, store = patched_store
+    r1 = _run(P.cache_provision("q3", "alice"))
+    c1 = r1["credential"]
+    token = r1["token"]
+    # re-provision with the flag -> mint/rotate, cleartext returned again
+    r2 = _run(P.cache_provision("q3", "alice", issue_webdav_credential=True))
+    assert r2["success"] and r2["token"] == token
+    c2 = r2["credential"]
+    assert c2 != c1
+    # old credential invalidated, new one verifies (rotation semantics)
+    assert store.verify_credential(token, c1) is False
+    assert store.verify_credential(token, c2) is True
+
+
+def test_default_payload_byte_identical_without_flag(patched_store):
+    P, _ = patched_store
+    r1 = _run(P.cache_provision("q3", "alice"))
+    # first provision: credential minted exactly once
+    assert set(r1.keys()) == {"success", "token", "subject_id",
+                              "owner_identity", "mount_path", "credential"}
+    # re-provision WITHOUT the flag: pre-BR payload, no extra fields, no re-leak
+    r2 = _run(P.cache_provision("q3", "alice"))
+    assert r2 == {
+        "success": True,
+        "token": r1["token"],
+        "subject_id": "q3",
+        "owner_identity": "alice",
+        "mount_path": "/dav/q3",
+    }
+
+
+def test_issue_flag_still_requires_owner(patched_store):
+    P, _ = patched_store
+    r = _run(P.cache_provision("q3", "", issue_webdav_credential=True))
+    assert r["success"] is False and r["error_code"] == "OWNER_REQUIRED"

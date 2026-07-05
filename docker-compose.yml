@@ -36,6 +36,13 @@ services:
       # GCP service-account key, read-only. Override the host path via SA_KEY in .env.
       - "${SA_KEY:-${HOME}/.config/patents-mcp/sa-key.json}:/secrets/sa-key.json:ro"
       # Token store on a named volume so handles survive --force-recreate.
+      # R14.5 (mcp-integration-standard): this volume + the DAV face wired into
+      # build_app IS the per-host WebDAV working-cache provisioning. patentmcp's
+      # auth provider is builtin-only (token-store-backed Basic auth,
+      # _auth_provider.py — the AUTH_PROVIDER=builtin equivalent; no
+      # gateway-backed variant exists, so no env switch is needed). Credential
+      # bootstrap over the MCP rail: cache_provision(issue_webdav_credential
+      # =true) — R14.6, rotate-on-call, default payload unchanged.
       - "patentmcp-sessions:/var/cache/patentmcp/sessions"
     environment:
       PYTHONIOENCODING: utf-8

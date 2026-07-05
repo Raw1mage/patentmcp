@@ -233,3 +233,55 @@ def _tmp():
     import tempfile
     d = tempfile.mkdtemp(prefix="pmdav_")
     return __import__("pathlib").Path(d)
+
+
+# ── R14.4 path-traversal rejection (BR_20260706) ─────────────────────
+def test_put_traversal_rejected_400():
+    store = TokenStore(sessions_root=_tmp())
+    entry = store.provision("q3", "alice")
+    h = _dav.DavHandler(store, _dav.LockTable())
+    status, _, body = h.handle(
+        "PUT", token=entry.token, rel="../evil.txt", subject="q3",
+        owner="alice", mount_prefix="/dav", base_href="/dav/q3/",
+        body=b"pwn")
+    assert status == 400
+    assert b"STAGE_PATH_TRAVERSAL" in body
+    # nothing escaped the token namespace
+    assert not (entry.dir_path.parent / "evil.txt").exists()
+
+
+def test_put_absolute_rel_rejected_400():
+    store = TokenStore(sessions_root=_tmp())
+    entry = store.provision("q3", "alice")
+    h = _dav.DavHandler(store, _dav.LockTable())
+    status, _, body = h.handle(
+        "PUT", token=entry.token, rel="/etc/passwd", subject="q3",
+        owner="alice", mount_prefix="/dav", base_href="/dav/q3/",
+        body=b"pwn")
+    assert status == 400
+    assert b"STAGE_PATH_ABSOLUTE" in body
+
+
+def test_delete_traversal_rejected_4xx(tmp_path):
+    store = TokenStore(sessions_root=_tmp())
+    entry = store.provision("q3", "alice")
+    # plant a file OUTSIDE the token dir that traversal would target
+    outside = entry.dir_path.parent / "victim.txt"
+    outside.write_bytes(b"keep")
+    h = _dav.DavHandler(store, _dav.LockTable())
+    status, _, _ = h.handle(
+        "DELETE", token=entry.token, rel="../victim.txt", subject="q3",
+        owner="alice", mount_prefix="/dav", base_href="/dav/q3/")
+    assert 400 <= status < 500
+    assert outside.exists()          # victim untouched
+
+
+def test_propfind_traversal_rejected_4xx(tmp_path):
+    store = TokenStore(sessions_root=_tmp())
+    entry = store.provision("q3", "alice")
+    h = _dav.DavHandler(store, _dav.LockTable())
+    status, _, _ = h.handle(
+        "PROPFIND", token=entry.token, rel="../", subject="q3",
+        owner="alice", mount_prefix="/dav", base_href="/dav/q3/",
+        headers={"Depth": "1"})
+    assert 400 <= status < 500
