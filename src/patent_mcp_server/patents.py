@@ -18,6 +18,7 @@ import sys
 from typing import Any, Dict, List, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 # Initialize FastMCP server. The instructions reach every client (stdio + http)
 # via InitializeResult — they point at the companion patentworks skill so the
@@ -38,6 +39,14 @@ mcp = FastMCP(
         "bytes are delivered via /files/{token}/blob/{rel}, not through context."
     ),
 )
+
+# Read-only annotation for query-class tools. Clients (e.g. opencode's batch
+# tool) admit readOnlyHint=true MCP tools into batched execution — sequential,
+# payload order, never parallel — so several lookups cost one turn without
+# fanning out against source-API rate limits. patent_search qualifies: its
+# patentdb absorb is an idempotent internal cache write, semantically still a
+# query (user ruling 2026-07-06).
+_RO = ToolAnnotations(readOnlyHint=True)
 
 # Set up logging
 logging.basicConfig(
@@ -665,7 +674,7 @@ async def uspto_patents(
 # Google Patents Tools
 # =====================================================================
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def google_get_patent(publication_number: str) -> Dict[str, Any]:
     """Get full patent details from Google Patents by publication number
 
@@ -698,7 +707,7 @@ async def google_get_patent(publication_number: str) -> Dict[str, Any]:
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def google_get_patent_claims(publication_number: str) -> Dict[str, Any]:
     """Get patent claims from Google Patents by publication number
 
@@ -731,7 +740,7 @@ async def google_get_patent_claims(publication_number: str) -> Dict[str, Any]:
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def google_get_patent_description(publication_number: str) -> Dict[str, Any]:
     """Get patent description from Google Patents by publication number
 
@@ -765,7 +774,7 @@ async def google_get_patent_description(publication_number: str) -> Dict[str, An
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def google_budget_status() -> Dict[str, Any]:
     """Report the current month's BigQuery usage against the configured budget.
 
@@ -1064,7 +1073,7 @@ async def stage_file(path: str, filename: Optional[str] = None) -> Dict[str, Any
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def gpatents_get(
     publication_number: str,
     include_description: bool = False,
@@ -1095,7 +1104,7 @@ async def gpatents_get(
 
 from ._pure.claims import clean_html_text, extract_claim1_text  # noqa: E402,F401
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def patent_get_claim1(publication_number: Optional[str] = None, full: bool = True,
                             patent_number: Optional[str] = None) -> Dict[str, Any]:
     """Retrieve the cleaned and normalized Claim 1 text for any given patent publication number.
@@ -1319,7 +1328,7 @@ async def patent_get_claim1(publication_number: Optional[str] = None, full: bool
         return {"success": False, "publication_number": pat, "error": f"Scraper error: {str(e)}"}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def ppubs_batch_get_claims(publication_numbers: Optional[List[str]] = None,
                                  patent_numbers: Optional[List[str]] = None) -> Dict[str, Any]:
     """Batch retrieve the Claim 1 text for a list of patent publication numbers.
@@ -2608,7 +2617,7 @@ async def _gpss_search_impl(
 # EPO OPS Tools — official INPADOC family / biblio / CQL search
 # =====================================================================
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def epo_family(publication_number: str) -> Dict[str, Any]:
     """Get the INPADOC patent family for a publication via EPO OPS (official).
 
@@ -2620,7 +2629,7 @@ async def epo_family(publication_number: str) -> Dict[str, Any]:
     return await epo_client.family(publication_number)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def epo_biblio(publication_number: str) -> Dict[str, Any]:
     """Get official bibliographic data + abstract for a publication via EPO OPS.
 
@@ -2645,7 +2654,7 @@ async def _epo_search_impl(cql: str, range: str = "1-25") -> Dict[str, Any]:
 # Unified search dispatcher — the ONLY search-class MCP tool
 # =====================================================================
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def patent_search(
     cpc: Optional[str] = None,
     ipc: Optional[str] = None,
@@ -3133,7 +3142,7 @@ async def cache_provision(subject_id: str,
     return out
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def cache_list(owner_identity: str) -> Dict[str, Any]:
     """List the caller's deliverable caches with their dirty state.
 
@@ -3533,7 +3542,7 @@ async def patentdb_put(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 async def patentdb_query(
     publication_number: Optional[str] = None,
     fts: Optional[str] = None,
