@@ -91,3 +91,28 @@
 **處置建議（reopen 評估）**：closed 8 天即復發，且復發面在 skill 未覆蓋的 delegation 層 → 建議 **reopen 或另立 delegation-contract 子 BR**，把「patent 子代理取圖/取文 prompt 必含 Exhaustion Gate 條款」固化進 orchestrator 的委派模板。單靠 skill §5 無法約束不讀 skill 的子代理。
 
 **本輪即時補救**：13/13 代表圖已補齊入 v3.1 docx（2.74MB→4.34MB），圖來源純官方（`provenance.scraping=false`），已目視驗證聲學章渲染。event log 已記（`research_acoustic-anomaly-detection` scope）。
+
+---
+
+## 驗證 A 通過記錄 2026-07-06（委派契約條款本身正確有效）
+
+**驗證設計**：把新寫的 SKILL.md §5「🔴 委派契約(Delegation Gate)」4 條款嵌進取圖子代理的 task prompt（模擬 opencode 將來的自動注入），dispatch 3 件跨路徑真實案，驗證條款能否讓子代理走窮舉、零無謂從缺。**這測的是「條款寫得對不對」，邏輯上先於 opencode 的自動注入橋**——注入橋只是自動搬運條款，條款本身錯了注入也白搭。
+
+**結果：3/3 取得代表圖，逐案逐級留證，零無謂從缺。**（子代理回報 + 主代理 ls/stat 落實核對，非空報）
+
+| 案 | 路徑 | 產出 | 決定性觀察 |
+|---|---|---|---|
+| CN120564339 | GPSS headless 失敗→figure_extract.py PDF 抽圖(page 2) | 829KB PNG 1654×2339 | 第①級失敗未停手,依契約降級成功 |
+| US10096234B1 | extract_representative_figure→figure_extract.py(fig1_text, page 2) | 52KB PNG 1700×2200 | 官方路徑正常 |
+| WO2018151004A1 | →figure_extract.py 回 `NO_FIGURE_PAGE_BUT_IMAGES_PRESENT`→視覺確認封面代表圖 pdftoppm 落地 | 162KB PNG 1654×2339 | **關鍵**:此觸發點正是原 BR 復發時子代理誤判「從缺」的同型;這次依契約**不宣告無圖**,條款擋住終局判斷 |
+
+**結論**：SKILL.md §5 委派契約條款正確、止血已實測有效。BR 三段進度更新為：
+- ✅ domain-local 止血（SKILL.md 委派契約）— 已 commit + **驗證 A 通過**
+- ⏳ 根因（skill→子代理 prompt 自動注入橋）— handoff opencode `BR_20260706_skill_delegation_clauses_no_runtime_injection_into_subagent_prompt`，未修
+- ⏳ 驗證 B（自動注入有效）— 等 opencode 根因修好
+
+**BR 維持 REOPENED**：patentmcp 這 repo 對本 BR 的責任（止血 + 驗證條款正確）已執行完畢；最終 close 卡在 opencode 根因（跨 repo 依賴）。
+
+**驗證 A 揭出的 patentmcp 工具層 friction（另立 issue 追蹤，非本 BR 範疇）**：
+1. `patentdb/<國>/<案>/` 目錄 root 擁有權 → PNG 需 sudo 落地 chown；容器化流程無 sudo 會 EACCES。
+2. WO 純掃描 PDF（無文字層）→ `figure_extract.py` text-based 定位器天然失效，目前靠人工視覺確認封面；缺 OCR / 「封面內嵌圖」自動化 fallback。
