@@ -2705,13 +2705,24 @@ async def patent_search(
         date_from=date_from, date_to=date_to, databases=databases,
         num=num, skip=skip, allow_scraping=allow_scraping,
     )
-    return await _sd.dispatch_search(
+    envelope = await _sd.dispatch_search(
         spec,
         gpss_client=gpss_client,
         epo_client=epo_client,
         ppubs_client=ppubs_client,
         gpatents_client=gpatents_client,
     )
+    # patentdb inline-absorb side-effect (DD-11 延伸：每次檢索命中即吸收書目，
+    # 零額外 toolcall、零網路）。永不阻斷檢索回傳；吸收結果記入 envelope 供稽核。
+    if envelope.get("success") and envelope.get("records"):
+        try:
+            cost = "high" if envelope.get("source") == "gpatents" else "low"
+            absorb = _pdb.import_records(envelope["records"], acquisition_cost=cost)
+            envelope["patentdb_absorb"] = absorb
+        except Exception as e:  # noqa: BLE001 — absorb must never break search
+            logger.warning(f"patentdb absorb failed for patent_search: {e}")
+            envelope["patentdb_absorb"] = {"error": "absorb_failed", "detail": str(e)}
+    return envelope
 
 
 # =====================================================================

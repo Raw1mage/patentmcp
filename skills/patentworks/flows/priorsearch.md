@@ -249,7 +249,8 @@ patentdb/                            ← 全域庫(patentmcp repo 根,非工作�
 ```
 
 **自動化現況(已實作,非手動)**:書目與實體的入庫**由工具自動完成,不需 AI 手動填**——
-- `build_screening_table` 拿到 CSV 的當下**inline 自動吸收書目**進 `patentdb.sqlite`(DD-11,零額外 toolcall)。
+- **`patent_search` 每次命中即自動吸收**(2026-07-06 入 server):成功回傳的 records 當場 upsert 進 `patentdb.sqlite`,回傳 envelope 帶 `patentdb_absorb: {imported, updated, skipped}` 供稽核;吸收失敗永不阻斷檢索(`absorb_failed` 記入 envelope)。爬蟲尾級來源標 `acquisition_cost=high`。**因此檢索矩陣跑完,池已在庫裡**——不再需要收尾手動 `patentdb_import_csv` 回填(回填僅用於歷史 CSV 救援)。
+- `screening_build.py` 落 CSV 的當下**inline 自動吸收書目**進 `patentdb.sqlite`(DD-11,零額外 toolcall;預設吸收進 patentmcp repo 的全域庫,`--repo` 可改目標、`--no-absorb` 可關,結果在 stdout JSON 的 `patentdb_absorb`)。
 - `fetch_patent_pdf` / `gpss_download_patent_pdf/xml` 下載成功即 **write-through** 落 blob + register 書目(side-effect,失敗不阻斷)。
 - 三個工具供主動操作:`patentdb_query`(pubno 精查 / FTS / country 過濾,回 completeness)、`patentdb_put`(漸進 upsert)、`patentdb_import_csv`(回填歷史 CSV)。
 

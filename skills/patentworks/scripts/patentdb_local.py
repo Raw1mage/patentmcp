@@ -252,11 +252,30 @@ def query(conn: sqlite3.Connection, publication_number=None, fts=None, country=N
     return {"count": len(rows), "total": total, "results": [_public_row(dict(r)) for r in rows]}
 
 
+# record-dict keys (unified screening record schema, _lib/screening.py) -> patentdb columns.
+# Mirrors src/patent_mcp_server/patentdb_store.py _RECORD_FIELD_MAP — keep in sync.
+_RECORD_FIELD_MAP = {
+    "title": "title_orig",
+    "abstract": "abstract",
+    "claim1": "claim1",
+    "appno": "application_no",
+    "family_id": "family_id",
+    "cpc": "cpc_codes",
+    "ipc": "ipc_codes",
+    "prio_date": "priority_date",
+    "app_date": "application_date",
+    "pub_date": "publication_date",
+    "assignee": "applicants",
+    "inventor": "inventors",
+}
+
 _CSV_HEADER_MAP = {
-    "專利號": "pubno", "名稱": "title_orig", "標題": "title_orig", "摘要": "abstract",
+    "專利號": "pubno", "公開號": "pubno", "公告號": "pubno", "代表專利號": "pubno",
+    "名稱": "title_orig", "標題": "title_orig", "摘要": "abstract",
     "獨立項": "claim1", "Claim1": "claim1", "申請號": "application_no", "家族": "family_id",
     "優先權日": "priority_date", "優先權": "priority_date", "申請日": "application_date",
-    "公開/公告日": "publication_date", "CPC": "cpc_codes", "推測CPC": "cpc_codes",
+    "公開/公告日": "publication_date", "公開日": "publication_date", "公告日": "publication_date",
+    "CPC": "cpc_codes", "推測CPC": "cpc_codes",
     "IPC": "ipc_codes", "申請人": "applicants",
 }
 
@@ -273,7 +292,8 @@ def import_csv(conn: sqlite3.Connection, csv_path: str) -> Dict[str, Any]:
                    if (h or "").strip() in _CSV_HEADER_MAP}
         conn.execute("BEGIN")
         for rec in reader:
-            pub_raw = (rec.get("專利號") or rec.get("pubno") or "").strip()
+            pub_raw = (rec.get("專利號") or rec.get("公開號") or rec.get("公告號")
+                       or rec.get("代表專利號") or rec.get("pubno") or "").strip()
             if not pub_raw:
                 skipped += 1
                 continue

@@ -35,6 +35,12 @@ services:
       - "./.run:/run/patentmcp"
       # GCP service-account key, read-only. Override the host path via SA_KEY in .env.
       - "${SA_KEY:-${HOME}/.config/patents-mcp/sa-key.json}:/secrets/sa-key.json:ro"
+      # Global patentdb (bibliographic sqlite + entity blobs) bind-mounted to
+      # the repo tree so container-side writes (search absorb / download register)
+      # and host-side landing scripts share ONE store. PATENTS_DB_ROOT (below)
+      # pins the in-container path; without this pair the container wrote an
+      # orphan /patentdb that silently vanished on rebuild.
+      - "./patentdb:/patentdb"
       # Token store on a named volume so handles survive --force-recreate.
       # R14.5 (mcp-integration-standard): this volume + the DAV face wired into
       # build_app IS the per-host WebDAV working-cache provisioning. patentmcp's
@@ -52,6 +58,8 @@ services:
       PATENTS_TOKEN_SESSIONS_ROOT: "/var/cache/patentmcp/sessions"
       PATENTS_TOKEN_TTL_SECONDS: "3600"
       PATENTS_TOKEN_SIZE_CAP_BYTES: "1073741824"
+      # Global patentdb root — MUST match the ./patentdb bind mount above.
+      PATENTS_DB_ROOT: "/patentdb"
       # Credentials — values from .env; the key path points at the mount above.
       GOOGLE_APPLICATION_CREDENTIALS: "/secrets/sa-key.json"
       GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT:-}"

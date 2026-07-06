@@ -122,7 +122,9 @@ def main(argv=None) -> int:
     p.add_argument("--source", default="records",
                    choices=["records", "gpss", "google", "ppubs", "epo"],
                    help="input normalization source (default records = already normalized)")
-    p.add_argument("--repo", default=None, help="repo root (unused; accepted for landing-plane convention)")
+    p.add_argument("--repo", default=None, help="repo root (sets patentdb absorb target)")
+    p.add_argument("--no-absorb", action="store_true",
+                   help="skip the patentdb inline-absorb side-effect")
     args = p.parse_args(argv)
 
     in_path = Path(args.in_path)
@@ -145,12 +147,48 @@ def main(argv=None) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(csv_bytes)
 
+    # patentdb inline-absorb (DD-11): the records are already in memory when the
+    # CSV lands, so absorbing bibliographic rows into the global store costs zero
+    # extra network. Never blocks the CSV output; result is reported for audit.
+    absorb: dict | None = None
+    if not args.no_absorb:
+        try:
+            import patentdb_local as _pdb  # noqa: E402 — sibling landing script
+            # default absorb target = this repo's patentdb (scripts live at
+            # <repo>/skills/patentworks/scripts — 3 parents up), NOT cwd.
+            repo_root = args.repo or str(Path(__file__).resolve().parents[3])
+            db_path = _pdb._default_db(repo_root)
+            conn = _pdb._connect(db_path)
+            try:
+                created = updated = skipped = 0
+                for rec in deduped:
+                    pub_raw = (rec.get("pubno") or "").strip()
+                    if not pub_raw:
+                        skipped += 1
+                        continue
+                    fields = {col: rec[rk] for rk, col in _pdb._RECORD_FIELD_MAP.items()
+                              if rec.get(rk) not in (None, "", [])}
+                    res = _pdb.put(conn, pub_raw, fields=fields, acquisition_cost="low")
+                    if res["action"] == "created":
+                        created += 1
+                    elif res["action"] == "updated":
+                        updated += 1
+                    else:
+                        skipped += 1
+            finally:
+                conn.close()
+            absorb = {"imported": created, "updated": updated,
+                      "skipped": skipped, "db": str(db_path)}
+        except Exception as e:  # noqa: BLE001 — absorb must never break the CSV
+            absorb = {"error": "absorb_failed", "detail": f"{type(e).__name__}: {e}"}
+
     sys.stdout.write(json.dumps({
         "success": True,
         "out": str(out_path),
         "rows": len(deduped),
         "columns": columns,
         "bytes": len(csv_bytes),
+        "patentdb_absorb": absorb,
     }, ensure_ascii=False) + "\n")
     return 0
 
