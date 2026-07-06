@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- **`gpss_download_patent_pdf` unpack 崩潰(BR_20260706,已 closed)**:`_gpss_iter_result_rows` docstring 宣稱 yield 4-tuple(含 link02_href)但實際只 yield 3-tuple;消費端 `_gpss_select_harder_path` 依 docstring 做 4-way unpack,凡 GPSS 結果列表非空必炸 `not enough values to unpack (expected 4, got 3)`(no-match 案件因迴圈體未執行而倖存,造成「部分案件才炸」假象)。修復:消費端改 3-way unpack + docstring 同步。驗證:rebuild 容器後重跑 BR 三案號 — CN120932368A / US20250275686A1 回 typed no-match error,CN120564339A 成功下載 PDF(459653B);unpack 錯誤不再出現。BR 移至 `issues/closed/`。
 - **patentworks skill XDG 投影過期(BR_20260706 D1)**:投影(`~/.local/share/opencode/skills/patentworks/`)仍為 06-28 快照,教 AI 呼叫已下架的 `gpss_search`(實測 ~30 次 unknown-tool)。已以 SSOT(`skills/patentworks/`)重新同步投影並重建 manifest。
 
 ### Documented

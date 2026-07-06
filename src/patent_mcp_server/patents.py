@@ -1641,15 +1641,16 @@ def _gpss_extract_action(html: str) -> str:
 
 
 def _gpss_iter_result_rows(html: str):
-    """Yield (harder_path, doc_type, embedded_pubno_core, link02_href) for each
+    """Yield (harder_path, doc_type, embedded_pubno_core) for each
     result-list row's harder() document anchor.
 
     gpss3 list row anchors look like:
       onclick="harder(this,'/gpss3/gpsskmc/gpssbkm?<HEX>^CN_AN_CN120543023A_A_^<HEX2>^XX59_698645','pdf', ...)"
     The harder path embeds that row's pubno (`_CN120543023A_`), which is the
-    reliable per-row identity (the visible row order is NOT). link02_href (the
-    row's PN anchor) is the entry to the figure detail page — captured nearby so
-    figure scraping can follow the SAME matched row, not the first one.
+    reliable per-row identity (the visible row order is NOT). The figure detail
+    entry (row PN anchor) is resolved separately by _gpss_select_detail_link —
+    it is NOT part of this tuple (BR_20260706: a phantom 4th element here made
+    the consumer's 4-way unpack crash on every non-empty result list).
     """
     import re
     for m in re.finditer(r"harder\(this,'([^']+)','([^']+)'", html):
@@ -1697,7 +1698,7 @@ def _gpss_select_harder_path(html: str, requested: str, prefer_types=None) -> st
     if not req_core:
         return ""
     fallback = ""
-    for path, doc_type, core, _link02 in _gpss_iter_result_rows(html):
+    for path, doc_type, core in _gpss_iter_result_rows(html):
         if core != req_core:
             continue
         if prefer_types is None:

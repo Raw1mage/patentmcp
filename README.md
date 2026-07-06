@@ -29,6 +29,10 @@ disclosure(交底書)→ screening(查新)→ drafting(起草說明書)
 
 領域骨幹見 `skills/patentworks/patent-practitioner-workflow.md`。
 
+## 近期變更
+
+- **2026-07-06**:修復 `gpss_download_patent_pdf` unpack 崩潰(BR_20260706,已 closed)— 生成器 yield 3-tuple 但消費端 4-way unpack,GPSS 結果列表非空必炸;已修正並以 BR 三案號驗證(typed no-match / 成功下載)。另含檢索工具改名 stub 與 skill 投影同步,詳見 `CHANGELOG.md`。
+
 ## 設定
 
 `.mcp.json`(gitignored,含憑證路徑)註冊 patentmcp;以 `uv --directory vendor/patents-mcp run patent-mcp-server` 啟動。檢索來源金鑰:
