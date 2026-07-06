@@ -2714,6 +2714,78 @@ async def patent_search(
 
 
 # =====================================================================
+# Deprecation stubs — retired search tools (BR_20260706)
+# One release-cycle TOOL_RENAMED redirects so stale skill projections /
+# old playbooks get a typed correction instead of an unknown-tool loop.
+# =====================================================================
+
+_TOOL_RENAMED_ENVELOPE = {
+    "success": False,
+    "error_code": "TOOL_RENAMED",
+    "use": "patent_search",
+    "note": (
+        "This search tool was retired in 0.3.0 (commit 7c4330d): all search "
+        "entry points were unified into patent_search, whose source ladder "
+        "(TIPO GPSS -> EPO OPS -> USPTO PPUBS -> gated Google Patents) is "
+        "built in. Re-issue the query via patent_search; axes cpc/ipc/keyword/"
+        "applicant/pub_number/date_from/date_to/databases/num/skip carry over "
+        "unchanged. The scraper tail needs allow_scraping=True."
+    ),
+}
+
+
+@mcp.tool()
+async def gpss_search(
+    cpc: Optional[str] = None,
+    ipc: Optional[str] = None,
+    keyword: Optional[str] = None,
+    keyword_field: Optional[str] = "TI/AB",
+    inventor_country: Optional[str] = None,
+    applicant: Optional[str] = None,
+    pub_number: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    databases: Optional[List[str]] = None,
+    patent_type: Optional[str] = None,
+    case_type: Optional[str] = None,
+    fields: Optional[str] = None,
+    num: Optional[int] = 30,
+    skip: Optional[int] = 0,
+) -> Dict[str, Any]:
+    """[RENAMED -> patent_search] Retired 0.3.0. Returns a TOOL_RENAMED
+    redirect envelope; does NOT run a search. Call patent_search instead —
+    same cpc/ipc/keyword/databases axes, source ladder built in."""
+    return dict(_TOOL_RENAMED_ENVELOPE)
+
+
+@mcp.tool()
+async def epo_search(cql: Optional[str] = None, range: str = "1-25") -> Dict[str, Any]:
+    """[RENAMED -> patent_search] Retired 0.3.0. Returns a TOOL_RENAMED
+    redirect envelope; does NOT run a search. The EPO level is built into
+    patent_search's source ladder (single-number tools epo_family /
+    epo_biblio remain available)."""
+    return dict(_TOOL_RENAMED_ENVELOPE)
+
+
+@mcp.tool()
+async def gpatents_search(
+    query: Optional[str] = None,
+    countries: Optional[List[str]] = None,
+    num: Optional[int] = 10,
+    page: Optional[int] = 0,
+    before: Optional[str] = None,
+    after: Optional[str] = None,
+    status: Optional[str] = None,
+    type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """[RENAMED -> patent_search] Retired 0.3.0. Returns a TOOL_RENAMED
+    redirect envelope; does NOT run a search. The Google Patents tail is the
+    gated last level of patent_search (allow_scraping=True required);
+    single-number tools gpatents_get / gpatents_download_* remain."""
+    return dict(_TOOL_RENAMED_ENVELOPE)
+
+
+# =====================================================================
 # Cleanup Handler
 # =====================================================================
 

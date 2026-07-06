@@ -1,7 +1,7 @@
 # BUG REPORT: 工具未 surface 進 session、GPSS 缺 USPC/家族軸、US 案 Claim1 回空
 
 **Date**: 2026-06-28
-**Status**: Open
+**Status**: Resolved (2026-07-06 收敲) — A Resolved(dual UDS+TCP，工具已 surface)；B VOID(USPC 退場)；C Resolved(誠實揭露路線)；D Resolved(`_gpss_search_impl` 已帶 `claim1_empty` 旗標 + `claim1_audit{empty_count, empty_pubnos[]}`，patents.py:2585-2601；skill §5 已載 PPUBS fallback 觸發訊號)
 **Priority**: High
 **Reporter**: AI Agent (代表 User)
 **Source Session**: iSafe2.0 專利報告 R2 改良（GPSS-only 重檢索）

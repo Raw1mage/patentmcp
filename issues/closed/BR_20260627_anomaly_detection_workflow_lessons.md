@@ -1,6 +1,7 @@
 # Bug Report & Workflow Retrospective: 異常偵測前案檢索經驗總結
 
 **Date:** 2026-06-27
+**Status:** Closed (2026-07-06 收敲) — 三類建議已被後續工作全數吸收:①`build_screening_table` 崩潰/分頁問題 → R13 拆分後檢索走 `patent_search` dispatcher(來源梯內建),表格組裝 landed 為 `screening_build.py` 離線腳本(原崩潰路徑不存在);②`patent_get_claim1` PPUBS 修復 → BR_20260628_figure_pdf_tooling §B/D PASS(`publication_number` 統一 + `ppubs_batch_get_claims` 實證可靠);③`gpatents` 警語/Fail-fast/單件限定 → SKILL.md §5(line 70)已載明;④五步 SOP + search_log → `flows/priorsearch.md` 固化資料夾結構 + `matrix-log.jsonl` + `search_audit` 機檢;⑤docxmcp Mode A 規範 → SKILL.md priorsearch `04_report/` 段已載。無殘留待修項。
 **Context:** 執行「居家異常偵測與多模態感測技術」專利前案檢索與 Word 分析報告產出
 
 本報告彙整了在執行專利檢索與分析報告編譯過程中所遭遇的摩擦點 (Friction Points)、克服的工作區 (Workarounds)，以及來自使用者的嚴格流程要求。這些經驗將作為優化 `patentmcp` 工具及其 Companion Skill 的重要養分。
