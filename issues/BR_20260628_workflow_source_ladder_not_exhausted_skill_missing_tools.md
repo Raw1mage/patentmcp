@@ -1,7 +1,7 @@
 # BUG REPORT (工作流): 來源梯未窮舉即宣告無解 — skill §5 漏載「官方路由 + 單線批量軟性抓圖」新工具，且未把爬蟲定位成被授權機制
 
 **Date**: 2026-06-28
-**Status**: Resolved (2026-06-28, plan `br20260628_tooling_skill_gpss_gaps`)
+**Status**: REOPENED (2026-07-06 — 原修復 2026-06-28 已 Resolved,但 closed 8 天即復發於 delegation 層;skill §5 修復未投影到委派契約,見文末復發記錄)
 **Priority**: High
 
 > **修復摘要**:`patentworks/SKILL.md §5` 三項全做——(1) 加「來源梯窮舉門檻(Exhaustion Gate)」硬規則(宣告任一欄位缺失前須逐級走完來源梯並留證);(2) 補載 `fetch_patent_pdf`/`extract_representative_figure`/`patentmcp_batch_download_figures`/`ppubs_batch_get_claims` 並刪除過時「PDF 端點系統性故障」論斷;(3) 重寫爬蟲天條天平(同意後批量軟性機制是正規合規路徑,`scraping:true` 非違規證據)。
@@ -70,3 +70,24 @@
 ## 4. 驗證手段 (Validation Plan)
 
 * 修復後，拿本 session 三件案回歸：讀新版 §5 的 AI 應能（a）US claim 1 自動走 PPUBS 補齊；（b）代表圖先試 `fetch_patent_pdf` + `extract_representative_figure`，失敗才從已下載 PDF 抽圖；（c）需爬蟲時直接認 `patentmcp_batch_download_figures` 為正規路徑、只缺使用者同意；（d）任何缺失都附「來源梯逐級實測結果」而非一句「無解」。
+
+---
+
+## 復發記錄 2026-07-06（closed 後 8 天復發 — 升級處置訊號）
+
+**Session**: 影像式異常偵測報告 v3.1 聲學專章擴充（`research_acoustic-anomaly-detection`）
+
+**預言成真**：本 BR §4 驗證計畫(b)(d) 正是本輪被違反的項目。聲學專章 13 件核心案的深度解析，全數（13/13）被子代理寫成「官方來源（GPSS、EPO、Google Patents）之圖式取得從缺，本專章以文本解析為主」——**未走任何取圖梯就宣告從缺**，與本 BR §1.A line 20-21 記錄的毛病字面同型。
+
+**硬證據**：
+- 工作區 PDF count = **0**（`output/priorart_acoustic-anomaly` 與 `/tmp` 皆無任何 `.pdf`）→ 子代理根本沒呼叫 `fetch_patent_pdf`／`gpss_download_representative_figure` 就下結論。
+- 使用者一句話點破：「TIPO 的直接取圖法怎麼不用」。
+- 補救實測（同 session、同 13 件案）：**GPSS 直接取圖 CN 案 4/4 全中**（CN120954165A/CN115457975A/CN104978810A/CN121214974A，本來就該取得）；US/WO 9 件經 `fetch_patent_pdf`（官方 google_citation PDF）+ `figure_extract.py` 抽圖全數取得（含 3 件無文字層影像型 PDF 手動渲染圖式頁）。**最終 13/13，零從缺**。證明「從缺」是流程缺陷，不是資料不存在。
+
+**新維度（本 BR 原修復未涵蓋）— delegation 斷層**：
+- 本 BR 的修復對象是 `SKILL.md §5` + `flows/priorsearch.md`（主代理讀的 skill）。但**子代理不讀 AGENTS.md、其取圖窮舉義務靠 orchestrator 的 task prompt 傳遞**。本輪主代理委派取文子代理時，prompt 未把「代表圖必走 GPSS 直接取圖 + PDF 抽圖雙路徑才可宣告從缺」寫進去 → 子代理無 skill §5 的 Exhaustion Gate 約束，重演終局判斷。
+- **根因升級**：skill 層已修（6/28），但修復未投影到 **delegation contract**。取圖／取文窮舉門檻需成為委派 patent 檢索／取文子代理時的**強制 prompt 條款**（如同 tick-task 契約寫進 coding.txt），否則每次委派都是一次 skill §5 約束的漏斗流失。
+
+**處置建議（reopen 評估）**：closed 8 天即復發，且復發面在 skill 未覆蓋的 delegation 層 → 建議 **reopen 或另立 delegation-contract 子 BR**，把「patent 子代理取圖/取文 prompt 必含 Exhaustion Gate 條款」固化進 orchestrator 的委派模板。單靠 skill §5 無法約束不讀 skill 的子代理。
+
+**本輪即時補救**：13/13 代表圖已補齊入 v3.1 docx（2.74MB→4.34MB），圖來源純官方（`provenance.scraping=false`），已目視驗證聲學章渲染。event log 已記（`research_acoustic-anomaly-detection` scope）。
