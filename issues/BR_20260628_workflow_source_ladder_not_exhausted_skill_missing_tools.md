@@ -116,3 +116,19 @@
 **驗證 A 揭出的 patentmcp 工具層 friction（另立 issue 追蹤，非本 BR 範疇）**：
 1. `patentdb/<國>/<案>/` 目錄 root 擁有權 → PNG 需 sudo 落地 chown；容器化流程無 sudo 會 EACCES。
 2. WO 純掃描 PDF（無文字層）→ `figure_extract.py` text-based 定位器天然失效，目前靠人工視覺確認封面；缺 OCR / 「封面內嵌圖」自動化 fallback。
+
+---
+
+## 根因修復記錄 2026-07-06(opencode delegation-clauses runtime 注入橋已實作)
+
+BR §處置建議點名的根因（skill→子代理 prompt 注入橋）已在 opencode repo 實作完成：
+- **opencode commit `25e1e74d7`** + `BR_20260706_skill_delegation_clauses_no_runtime_injection_into_subagent_prompt`(Resolved)。
+- 機制：skill markdown 用 `<!-- delegation-clauses -->` sentinel 標記 executor-bound 約束;`task.ts` dispatch 時 runtime 自動從 parent pinned skills 抽區塊注入子代理 prompt。**「主代理該不該抄、有沒有抄」從自律變 runtime 保證。**
+- 本 skill(`SKILL.md §5`)委派契約 4 條款已用 sentinel 區塊包住,鏡像 `<data>/skills/patentworks` 已同步,skill index 已 reload。
+
+**三段進度更新**：
+- ✅ domain-local 止血（SKILL.md 委派契約）— commit e361e17 + 驗證 A 通過(e4a3169)
+- ✅ 根因（skill→子代理 prompt 自動注入橋）— **opencode 25e1e74d7 已修**
+- ⏳ 驗證 B（自動注入端到端有效）— **需 daemon 重啟讓新 task.ts 生效後才能測**（現 daemon 跑舊 code）。重啟後:主代理 pin patentworks → 委派取圖子代理(prompt 不手抄窮舉條款)→ 斷言子代理 prompt 實含注入的 delegation-clauses 且走窮舉。
+
+**Close 條件**：驗證 B 過 → 本 BR 可從 REOPENED 收為 Resolved。目前根因與止血都已修,只差端到端回歸驗證(卡 daemon 重啟)。

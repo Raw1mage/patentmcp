@@ -55,11 +55,14 @@ disclosure(交底書)→ screening(查新)→ analysis(分析)→ drafting(起�
      - **Claim 1 回空** → 走 ③`uspto_patents`(US 案最可靠,實證 `ppubs_batch_get_claims` 一次可補完整逐字 Claim 1);觸發訊號:`patent_search` / `build_screening_table` 的 records 帶 `claim1_empty: true`(GPSS 級回應另附 `claim1_audit{empty_count, empty_pubnos[]}`,工具層直接給,列出需補抓的公開號)。
      - **代表圖缺** → 先 `fetch_patent_pdf`(官方路由優先),圖通常**就在已下載的 PDF 裡**;`extract_representative_figure` 對掃描版回 `NO_FIGURE_PAGE_BUT_IMAGES_PRESENT`(帶 `image_count`)時,代表「圖在 PDF 內、只是定位器對無文字層失效」,應從已下載 PDF 抽圖,**不是宣告無圖**。
      - **某工具回空 / 某定位器失敗 ≠ 整件事終局無解**;一律換工具 / 走下一級 / 從已在手的中間產物再加工。
-     - **🔴 委派契約(Delegation Gate)——把 Exhaustion Gate 強制寫進子代理 task prompt(BR_20260628 復發修復,2026-07-06)**:**子代理不讀本 skill、不讀 AGENTS.md**——取圖/取文的窮舉義務**只能靠 orchestrator 的 task prompt 傳遞**。因此凡委派取文/取圖/前案吸收類子代理,task prompt **必須明文帶上**以下條款(缺這段 = 委派缺陷,子代理必重演「未走取圖梯就宣告從缺」):
-       1. **代表圖從缺前必走雙路徑**:TW/CN 案先 `patent_search(pub_number=...)` 走 GPSS headless 直接取圖;US/WO/EP 案 `fetch_patent_pdf`(官方路由優先)→ 圖通常就在下載回的 PDF 內 → `extract_representative_figure` / 從 PDF 抽圖。**兩路徑都實測失敗、且在報告留下每案每級實測結果,才可宣告「無圖」。**
-       2. **逐字 Claim 1 從缺前必走 PPUBS**:US 案 `claim1_empty:true` → `ppubs_batch_get_claims` 補抓,補不到才可宣告從缺。
-       3. **回報格式**:子代理須回「每案取得狀態 + 走過哪幾級 + 各級成功/失敗原因」,**不接受一句「官方來源圖式從缺」的終局結論**。工作區 PDF count=0 / figure count=0 而宣稱「已窮舉」= 未執行,退回重跑。
-       4. **爬蟲授權沿用主代理**:子代理不得自行決定啟用爬蟲;`allow_scraping` 由 orchestrator 依使用者授權在 task prompt 指定。
+     - **🔴 委派契約(Delegation Gate)——把 Exhaustion Gate 強制寫進子代理 task prompt(BR_20260628 復發修復,2026-07-06)**:**子代理不讀本 skill、不讀 AGENTS.md**——取圖/取文的窮舉義務**只能靠 orchestrator 的 task prompt 傳遞**。因此凡委派取文/取圖/前案吸收類子代理,task prompt **必須明文帶上**以下條款(缺這段 = 委派缺陷,子代理必重演「未走取圖梯就宣告從缺」)。**以下 `<!-- delegation-clauses -->` 區塊由 opencode runtime 於本 skill pinned 時自動注入委派子代理的 prompt(BR_20260706),不再靠主代理手抄;手抄仍是無 runtime 注入時的 fallback**:
+<!-- delegation-clauses -->
+**專利取文/取圖窮舉契約(Exhaustion Gate)——委派子代理 MUST 遵守**:
+1. **代表圖從缺前必走雙路徑**:TW/CN 案先 `patent_search(pub_number=...)` 走 GPSS headless 直接取圖;US/WO/EP 案 `fetch_patent_pdf`(官方路由優先)→ 圖通常就在下載回的 PDF 內 → `extract_representative_figure` / 從 PDF 抽圖。**兩路徑都實測失敗、且在報告留下每案每級實測結果,才可宣告「無圖」。**
+2. **逐字 Claim 1 從缺前必走 PPUBS**:US 案 `claim1_empty:true` → `ppubs_batch_get_claims` 補抓,補不到才可宣告從缺。
+3. **回報格式**:子代理須回「每案取得狀態 + 走過哪幾級 + 各級成功/失敗原因」,**不接受一句「官方來源圖式從缺」的終局結論**。工作區 PDF count=0 / figure count=0 而宣稱「已窮舉」= 未執行,退回重跑。
+4. **爬蟲授權沿用主代理**:子代理不得自行決定啟用爬蟲;`allow_scraping` 由 orchestrator 依使用者授權在 task prompt 指定。
+<!-- /delegation-clauses -->
    - **① GPSS(首選級)**——TIPO 官方 REST,一次回 PN/AN/標題/摘要/Claim1/CPC/IPC/申請人/日期,IPC 錨定,一站涵蓋 US/CN/TW。逐字 Claim 1 用 `patent_search(pub_number=...)` 單號查詢三地通用(底層仍 GPSS 首選)。**已知限制(`patent_search` 走 GPSS 級時)**:(a) **US 案 Claim 1 偶為空**(只回 "What is claimed is:" 無內文)——records 會帶 `claim1_empty: true`,須走 ③PPUBS 補抓;(b) **不提供 INPADOC 家族 ID**,去重僅到「公開號級」,要家族級 collapse 走 ②`epo_family`;(c) **無 USPC 軸**——GPSS 級只有 `cpc`/`ipc`;給 `patent_search(uspc="705/300")` 時 dispatcher 會**直達 ③PPUBS**(US-only 軸);(d) **TW 案書目欄位偶為空**(標題/申請人空欄但案件存在,非查無此案)——以 `epo_biblio(單號)` 補位,EPO OPS 書目涵蓋 TW 公告案(v3 campaign 實證 2 件補齊)。**通則:GPSS 欄位空 ≠ 資料不存在,宣告從缺前沿來源梯補位。**
    - **② EPO OPS**——歐洲專利局官方 API。檢索級由 `patent_search` 內建(search→biblio 二段,受 15/min 節流,大 `num` 會截斷並在 provenance 記 `biblio_truncated`;舊 `epo_search` 工具已下架);單號工具保留:`epo_family`(官方 INPADOC 家族)/ `epo_biblio`(摘要)。**⚠️ 流量限制與計費安全說明**：(1) **免費額度為每週 4 GB**，若超過該流量，API 會直接阻斷連線 (通常返回 HTTP 403 / Quota Exceeded) 而**不會自動扣款**，故無意外產生帳單的風險（若要無限流量需主動付年費 €2,800/年）；(2) 有每 IP 每分鐘約 10 次搜尋的頻率限制，批次呼叫時需做好節流。
    - **③ USPTO PPUBS**(`uspto_patents` + `ppubs_batch_get_claims`)——美國案完整全文 + 附圖文字說明。**取文路徑**:
