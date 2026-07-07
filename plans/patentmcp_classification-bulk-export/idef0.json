@@ -1,0 +1,82 @@
+{
+  "diagram_title": "patent_bulk_export：分類軸窮盡批次匯出完整書目至 patentdb",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "組裝純分類軸查詢",
+      "description": "接收 ipc/cpc/uspc 分類軸(至少一必填)+ databases + num，組成 GPSS conditions；keyword 不作 AND 收窄；強制 expFld=全欄",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "分頁窮盡拉取",
+      "description": "以 expSkip 為游標對 GPSS 端點自動翻頁，累積 records 至 num 上限或某頁回空(軸窮盡)；官方 miss 即真 0，不退爬蟲",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "正規化落地",
+      "description": "GPSS JSON → records 正規化(沿用 screening_table 欄位)→ CSV → patentdb_import_csv(COALESCE upsert)，只進完整 row",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    {
+      "id": "AR1",
+      "source": "EXTERNAL",
+      "target": "A1:input",
+      "type": "input",
+      "label": "分類軸(ipc/cpc/uspc) + databases + num"
+    },
+    {
+      "id": "AR2",
+      "source": "EXTERNAL",
+      "target": "A1:control",
+      "type": "control",
+      "label": "強制 expFld 全欄 + 純分類軸語義(keyword 不收窄)"
+    },
+    {
+      "id": "AR3",
+      "source": "EXTERNAL",
+      "target": "A2:control",
+      "type": "control",
+      "label": "num 硬上限 + TIPO 配額 + no-fallback 天條(miss 即真 0)"
+    },
+    {
+      "id": "AR4",
+      "source": "EXTERNAL",
+      "target": "A2:mechanism",
+      "type": "mechanism",
+      "label": "GPSS client(expQty/expSkip)+ GPSS_USER_CODE"
+    },
+    {
+      "id": "AR5",
+      "source": "EXTERNAL",
+      "target": "A3:mechanism",
+      "type": "mechanism",
+      "label": "records 正規化 + patentdb_import_csv"
+    },
+    {
+      "id": "AR6",
+      "source": "A1:output",
+      "target": "A2:input",
+      "type": "output",
+      "label": "GPSS conditions + expFld/expQty 參數"
+    },
+    {
+      "id": "AR7",
+      "source": "A2:output",
+      "target": "A3:input",
+      "type": "output",
+      "label": "跨頁累積的完整 GPSS JSON records"
+    },
+    {
+      "id": "AR8",
+      "source": "A3:output",
+      "target": "EXTERNAL",
+      "type": "output",
+      "label": "完整書目 row 入 patentdb + provenance(每頁 attempted/hit/miss)"
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A1",
+    "StepType": "initial",
+    "StepAction": "待命：接收 patent_bulk_export 呼叫(分類軸 + databases + num)",
+    "LinkInputType": [],
+    "LinkInputNumber": [],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["收到呼叫且至少一分類軸(ipc/cpc/uspc)非空"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "組裝純分類軸 GPSS conditions；強制 expFld=全欄；keyword 不作 AND 收窄；expSkip 游標歸零、records 累積器清空",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [2],
+    "LinkOutputType": "track",
+    "Condition": ["GPSS_USER_CODE 已設(configured)"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "以當前 expSkip 對 GPSS 端點拉一頁(expQty=單頁上限)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [3],
+    "LinkOutputType": "track",
+    "Condition": [],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "累積本頁 records；expSkip += 本頁筆數；記錄 provenance(該頁 attempted/hit/miss)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [2],
+    "LinkOutputNumber": [4],
+    "LinkOutputType": "track",
+    "Condition": [],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "判定續拉或停止：本頁回空 或 累積達 num 上限 → 停止；否則回 step2 續翻頁",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [3],
+    "LinkOutputNumber": [2, 5, 6],
+    "LinkOutputType": "track",
+    "Condition": [
+      "本頁非空 且 累積 < num → 回 step2 續翻頁",
+      "本頁回空 且 累積 == 0(第一頁即 0) → 真 miss，去 step5(不退爬蟲)",
+      "本頁回空或達 num 且 累積 > 0 → 軸窮盡/達量，去 step6 落地"
+    ],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 5,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "真 0 miss：回結構化結果(records=[], provenance reason=zero_hits)；不 fallback 爬蟲",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [4],
+    "LinkOutputNumber": [7],
+    "LinkOutputType": "track",
+    "Condition": [],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 6,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "GPSS JSON → records 正規化(screening_table 欄位)→ CSV → patentdb_import_csv(COALESCE upsert，完整 row 入庫)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [4],
+    "LinkOutputNumber": [7],
+    "LinkOutputType": "track",
+    "Condition": [],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 7,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "回傳：records + source=gpss + provenance(逐頁)；回 step0 待命",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [5, 6],
+    "LinkOutputNumber": [0],
+    "LinkOutputType": "track",
+    "Condition": [],
+    "SubGrafcet": []
+  }
+]

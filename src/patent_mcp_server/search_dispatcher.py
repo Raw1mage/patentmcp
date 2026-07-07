@@ -192,6 +192,121 @@ async def _run_gpss(spec: QuerySpec, gpss_client: Any) -> Tuple[List[Dict[str, A
     return records[:target], total, None
 
 
+# ── classification-axis bulk export (plans/patentmcp_classification-bulk-export) ──
+# Distinct semantics from the relevance ladder above: PURE classification axis
+# (ipc/cpc/uspc), large expQty with auto-pagination, forced full expFld, and an
+# official MISS is a true zero — NEVER falls back to the scraper tail (DD-5).
+
+BULK_EXPORT_MAX = 5000          # num hard ceiling (DD-2, TIPO quota guard)
+_BULK_PAGE = 200                # per-page expQty (stable value; paginate to reach num)
+_BULK_FIELDS = "PN,AN,ID,AD,PR,TI,AB,CL,IC,CS,UC,PA,IN"  # forced full fields (DD-3)
+
+
+async def _bulk_pull_gpss(
+    spec: QuerySpec, gpss_client: Any,
+) -> Tuple[List[Dict[str, Any]], Optional[int], List[Dict[str, Any]]]:
+    """Auto-paginate a PURE classification-axis GPSS query to exhaustion or num.
+
+    Shared internal used by patent_bulk_export (and reusable by any relevance
+    path that needs to exhaust an axis — DD-1). Returns (records, total,
+    per-page provenance). keyword is NOT combined as an AND narrowing (DD-4);
+    an empty first page means a true zero (caller must NOT fall back — DD-5).
+    """
+    from patent_mcp_server.gpss.client import GPSSCondition
+
+    conditions: List[Any] = []
+    if spec.cpc:
+        conditions.append(GPSSCondition("CS", spec.cpc))
+    if spec.ipc:
+        conditions.append(GPSSCondition("IC", spec.ipc))
+    if spec.uspc:
+        conditions.append(GPSSCondition("UC", spec.uspc))
+    # date/databases are soft filters; keyword is DELIBERATELY NOT added (DD-4).
+    if spec.date_from or spec.date_to:
+        conditions.append(GPSSCondition("ID", f"{spec.date_from or ''}:{spec.date_to or ''}"))
+
+    target = min(spec.num, BULK_EXPORT_MAX)
+    records: List[Dict[str, Any]] = []
+    prov: List[Dict[str, Any]] = []
+    skip = spec.skip
+    total: Optional[int] = None
+    while len(records) < target:
+        cur = min(_BULK_PAGE, target - len(records))
+        t0 = time.monotonic()
+        res = await gpss_client.search(
+            conditions=conditions, databases=spec.databases,
+            fields=_BULK_FIELDS, num=cur, skip=skip, fmt="json",
+        )
+        elapsed = int((time.monotonic() - t0) * 1000)
+        if not res.get("success"):
+            # status=success + boilerplate message == "no record found" → true zero
+            if res.get("status") == "success":
+                prov.append(_entry("gpss", "miss", "zero_hits", elapsed_ms=elapsed))
+                if not records:
+                    return [], _to_int(res.get("total")) or 0, prov
+                break
+            if records:
+                prov.append(_entry("gpss", "error",
+                                   _error_reason(Exception(str(res.get("error") or res.get("message")))),
+                                   elapsed_ms=elapsed))
+                logger.warning("bulk_export pagination failed at skip=%d: %s",
+                               skip, res.get("error") or res.get("message"))
+                break
+            raise BackendError(str(res.get("error") or res.get("message") or "GPSS bulk export failed"))
+        page = _st.gpss_to_records(res)
+        total = _to_int(res.get("total"))
+        if not page:
+            prov.append(_entry("gpss", "miss" if not records else "hit",
+                               "axis_exhausted", elapsed_ms=elapsed))
+            break
+        prov.append(_entry("gpss", "hit", f"page skip={skip} n={len(page)}",
+                           elapsed_ms=elapsed))
+        records.extend(page)
+        skip += len(page)
+        # `skip` is the absolute cursor (already advanced past this page); the
+        # axis is exhausted once the cursor reaches the reported total.
+        if total is not None and skip >= total:
+            break
+        await asyncio.sleep(1.0)
+    return records[:target], total, prov
+
+
+async def bulk_export(spec: QuerySpec, *, gpss_client: Any) -> Dict[str, Any]:
+    """Classification-axis bulk export entry (data-schema.json bulk_export_result).
+
+    Requires at least one classification axis (ipc/cpc/uspc). GPSS-only: an
+    official miss is a true zero and NEVER falls back to the scraper (DD-5).
+    Returns {success, records[], source, provenance[], gaps[], total,
+    error_code?}.
+    """
+    if not (spec.ipc or spec.cpc or spec.uspc):
+        return _envelope(
+            False, [], None, [], [], None, error_code="INVALID_PARAMS",
+            message="分類軸批次匯出需至少一個分類軸 (ipc/cpc/uspc)",
+        )
+    if not gpss_client.configured():
+        return _envelope(
+            False, [], None,
+            [_entry("gpss", "skipped", "not_configured")], [], None,
+            error_code="GPSS_NOT_CONFIGURED",
+            message="批次匯出僅走 TIPO GPSS 官方端點，需設 GPSS_USER_CODE",
+        )
+    try:
+        records, total, prov = await _bulk_pull_gpss(spec, gpss_client)
+    except BackendError as e:
+        return _envelope(
+            False, [], None, [_entry("gpss", "error", _error_reason(e))],
+            [], None, error_code="GPSS_ERROR", message=str(e),
+        )
+    if not records:
+        # true zero — NO scraper fallback (DD-5)
+        return _envelope(
+            True, [], "gpss", prov, list(SOURCE_GAPS.get("gpss", [])), total or 0,
+        )
+    return _envelope(True, records, "gpss", prov,
+                     list(SOURCE_GAPS.get("gpss", [])), total)
+
+
 async def _run_epo(spec: QuerySpec, epo_client: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[str]]:
     parts: List[str] = []
     if spec.cpc:

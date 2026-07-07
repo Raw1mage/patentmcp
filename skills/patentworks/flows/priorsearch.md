@@ -143,6 +143,7 @@ output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 
 ## 1. 來源與紅線(硬規定)
 
 - **檢索一律用單一入口 `patent_search`**——來源梯已內建於 server(TIPO GPSS 官方首選,一站涵蓋 US/CN/TW → EPO OPS → USPTO PPUBS → gated 爬蟲),每級嘗試記入 `provenance`。全文/圖說文字補 **`google_*` BigQuery 合法 API**(非 TW)、**EPO OPS**、**USPTO PPUBS** 單號取文工具。各級能力知識見 `../SKILL.md` §5。
+- **分類軸全景窮盡取數用 `patent_bulk_export`(coverage)**——當要把某分類軸(CPC/IPC)底下**整條書目一次全拉**(而非找最相關的幾件)時,用 `patent_bulk_export(cpc=.../ipc=..., databases=[...], num=數千)`:純分類軸、不吃 keyword(避免過度收窄)、大 num 自動分頁、強制全欄杜絕半殘 row、GPSS-only 官方 miss 即真 0 不退爬蟲(不違反本 flow 禁爬蟲鐵則),records 經 COALESCE upsert 入 patentdb。與本 flow 的 relevance 檢索矩陣互補:矩陣找相關命中,批次匯出補齊分類軸覆蓋率。詳見 `../SKILL.md` §5。
 - **🚫 本 flow 禁用爬蟲**。一律保持 `patent_search(allow_scraping=False)`(預設),**嚴禁授權爬蟲尾級**;單號爬蟲取文工具(`gpatents_get`/`gpatents_download_*`)亦禁用於本 flow 的檢索與批量抓取。官方全 miss 回 `SCRAPING_REQUIRED` 時,誠實記缺口,不降級。
 - **`google_*`(BigQuery 合法 API)≠ `gpatents_*`(爬蟲)**:前者走註冊 service account 查公開資料集,合法可靠;要逐字 claims/全文/圖說用 `google_get_patent_claims` / `google_get_patent_description`。
 - **原始專利 PDF 下載**:見 §5——**僅允許針對已知專利號、逐件小量下載公開 PDF**,不得批量。

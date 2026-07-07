@@ -1,0 +1,42 @@
+{
+  "schemas": [
+    {
+      "name": "patent_bulk_export_request",
+      "kind": "message",
+      "fields": [
+        { "name": "ipc", "type": "string?", "notes": "IPC 分類軸；ipc/cpc/uspc 至少一非空" },
+        { "name": "cpc", "type": "string?", "notes": "CPC 分類軸" },
+        { "name": "uspc", "type": "string?", "notes": "USPC 分類軸(US-only)" },
+        { "name": "keyword", "type": "string?", "notes": "選填；不作 AND 收窄(DD-4)" },
+        { "name": "databases", "type": "string[]?", "notes": "如 CN/US；預設 DB_DEFAULT" },
+        { "name": "num", "type": "int", "notes": "目標拉取上限(跨頁累積)，硬上限如 5000(DD-2)" }
+      ]
+    },
+    {
+      "name": "gpss_page_params",
+      "kind": "config",
+      "fields": [
+        { "name": "expQty", "type": "int", "notes": "單頁筆數(實測穩定值 200/500)" },
+        { "name": "expSkip", "type": "int", "notes": "分頁游標，每頁 += 本頁筆數" },
+        { "name": "expFld", "type": "string", "notes": "強制 PN,ID,TI,IN,PA,AB,CS,CL(DD-3，不可縮欄)" },
+        { "name": "expFmt", "type": "string", "notes": "json(僅 json/xml，CSV 需自轉)" }
+      ]
+    },
+    {
+      "name": "bulk_export_result",
+      "kind": "json",
+      "fields": [
+        { "name": "records", "type": "record[]", "notes": "跨頁累積的完整書目(screening_table 正規化欄位)；真 0 時為 []" },
+        { "name": "source", "type": "string", "notes": "固定 gpss(批次匯出不退其他來源)" },
+        { "name": "provenance", "type": "object[]", "notes": "逐頁 attempted/hit/miss + reason(zero_hits 等)；no-fallback 證據(DD-5)" }
+      ]
+    },
+    {
+      "name": "patents (patentdb 既有表，不改)",
+      "kind": "table",
+      "fields": [
+        { "name": "pubno / title_en / title_orig / applicant / cpc / claim1 ...", "type": "既有欄位", "notes": "put() COALESCE-only upsert；批次匯出保證完整 row，回補 title_en 空白件不破壞既有非空欄位(DD-6)" }
+      ]
+    }
+  ]
+}

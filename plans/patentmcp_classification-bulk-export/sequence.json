@@ -1,0 +1,17 @@
+[
+  {
+    "title": "patent_bulk_export 分類軸批次匯出時序",
+    "participants": ["AI/Caller", "patent_bulk_export", "GPSS client", "GPSS API", "records 正規化", "patentdb_import_csv"],
+    "messages": [
+      { "from": "AI/Caller", "to": "patent_bulk_export", "label": "ipc/cpc/uspc + databases + num" },
+      { "from": "patent_bulk_export", "to": "GPSS client", "label": "組裝純分類軸 conditions + 強制 expFld 全欄 + num" },
+      { "from": "GPSS client", "to": "GPSS API", "label": "GET gpss_api?expQty=單頁&expSkip=游標 (迴圈)" },
+      { "from": "GPSS API", "to": "GPSS client", "label": "本頁 JSON records (或 0)" },
+      { "from": "GPSS client", "to": "GPSS client", "label": "累積 + expSkip 前進；末頁回空或達 num 則停 (loop)" },
+      { "from": "GPSS client", "to": "patent_bulk_export", "label": "跨頁完整 records + provenance (或真 0，不退爬蟲)" },
+      { "from": "patent_bulk_export", "to": "records 正規化", "label": "GPSS JSON → screening_table 欄位 → CSV" },
+      { "from": "records 正規化", "to": "patentdb_import_csv", "label": "CSV 批次入庫 (COALESCE upsert)" },
+      { "from": "patent_bulk_export", "to": "AI/Caller", "label": "records + source=gpss + provenance" }
+    ]
+  }
+]

@@ -2734,6 +2734,64 @@ async def patent_search(
     return envelope
 
 
+@mcp.tool()
+async def patent_bulk_export(
+    ipc: Optional[str] = None,
+    cpc: Optional[str] = None,
+    uspc: Optional[str] = None,
+    databases: Optional[List[str]] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    num: int = 2000,
+    skip: int = 0,
+) -> Dict[str, Any]:
+    """Classification-axis BULK EXPORT — exhaustively pull a whole classification
+    axis's bibliography from TIPO GPSS in one call (plans/patentmcp_classification-
+    bulk-export). This is the complement of patent_search: patent_search finds the
+    few MOST RELEVANT hits (keyword AND-narrowing, num≈30, scraper tail); this
+    pulls the WHOLE axis (pure classification, large expQty, auto-pagination).
+
+    Semantics (distinct from patent_search on purpose):
+      • PURE classification axis — requires at least one of ipc/cpc/uspc; keyword
+        is intentionally NOT accepted (no AND-narrowing that would over-constrain
+        the axis and cause false zero-hits).
+      • Large expQty — `num` up to 5000, paginated via expSkip until the axis is
+        exhausted or num is reached; full expFld is forced (title/applicant/
+        abstract/CPC/claims all populated — no half-empty rows).
+      • GPSS-only, NO scraper fallback — an official miss is a TRUE zero
+        (records=[], provenance reason=zero_hits); never returns SCRAPING_REQUIRED
+        and never calls the Google Patents scraper.
+      • Landed into patentdb (COALESCE upsert) so only COMPLETE rows enter; safe
+        to re-run to backfill previously half-empty rows without clobbering.
+
+    Args:
+        ipc/cpc/uspc: classification axis (at least one required).
+        databases: GPSS patDB list (USA,USB,CNA,CNB,TWA,TWB…); defaults US+CN.
+        date_from/date_to: optional publication-date bounds, YYYYMMDD.
+        num: target row count (auto-paginated), hard-capped at 5000.
+        skip: starting expSkip offset (resume/continue a large pull).
+
+    Returns {success, records[], source="gpss", provenance[], gaps[], total,
+    error_code?}. error_code is INVALID_PARAMS (no axis) / GPSS_NOT_CONFIGURED /
+    GPSS_ERROR.
+    """
+    spec = _sd.normalize_query(
+        ipc=ipc, cpc=cpc, uspc=uspc, databases=databases,
+        date_from=date_from, date_to=date_to, num=num, skip=skip,
+    )
+    envelope = await _sd.bulk_export(spec, gpss_client=gpss_client)
+    # patentdb absorb (same side-effect contract as patent_search): forced-full
+    # expFld guarantees complete rows; COALESCE upsert backfills, never clobbers.
+    if envelope.get("success") and envelope.get("records"):
+        try:
+            absorb = _pdb.import_records(envelope["records"], acquisition_cost="low")
+            envelope["patentdb_absorb"] = absorb
+        except Exception as e:  # noqa: BLE001 — absorb must never break export
+            logger.warning(f"patentdb absorb failed for patent_bulk_export: {e}")
+            envelope["patentdb_absorb"] = {"error": "absorb_failed", "detail": str(e)}
+    return envelope
+
+
 # =====================================================================
 # Deprecation stubs — retired search tools (BR_20260706)
 # One release-cycle TOOL_RENAMED redirects so stale skill projections /
