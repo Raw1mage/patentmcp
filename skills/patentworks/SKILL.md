@@ -7,7 +7,7 @@ description: 專利全流程工作站。四種任務:(A) 把發明材料/idea �
 
 > **搭配 `patentmcp` MCP 使用**:本 skill 是這組工具的劇本;檢索/取文工具(`patent_search` 單一檢索入口、`epo_family`/`epo_biblio`、`gpatents_get`/`gpatents_download_*`、`fetch_patent_pdf`、`pool_fetch`)都來自 patentmcp。沒有該 MCP 時本 skill 無法執行實際檢索。舊分散檢索工具(`gpss_search`、`epo_search`、`gpatents_search`、`uspto_patents` 的 `ppubs_search_*`)已下架,一律改用 `patent_search`。
 >
-> **Companion skill `patentworks` — 動手前先載入(point-of-decision)。** 你現在讀到的這份文本,可能是透過 `patentmcp_init` 工具/`prompts/get` 在動作邊界收到的**可攜 in-band 濃縮本**;本 skill 才是完整劇本(五法域起草規則、flow 檔、資料樹規範、法遵自檢)。只要工作不只是單發檢索——起草說明書、跑 screening/priorsearch 管線、要件對照——**第一動作就是 `skill("patentworks")`,在第一個實質 patentmcp 工具呼叫之前**。tool-chain idiom(選 flow、選來源梯判讀、交付契約)住在 skill 裡,per-tool `description` 裝不下;在決策當下載入才擋得掉「自己選檢索來源、自己拼 OOXML/CSV」的反射。**這是 advisory,不是 gate**:純 MCP 客戶端(無 skill 機制)光憑這份 doctrine 直接呼叫工具仍屬正確——guide 對上述紀律自足,skill 加深度、非前置條件,不破壞協議可攜性。
+> **現在就載入 companion skill `patentworks` — 這是你的第一動作,不是建議。** 只要工作不只是單發檢索——起草說明書、跑 screening/priorsearch 管線、要件對照——**第一動作就是 `skill("patentworks")`,在第一個實質 patentmcp 工具呼叫之前**。跳過它正是這份 guide 存在要擋的反射:tool-chain idiom(選 flow、選來源梯判讀、交付契約)住在 skill 裡,per-tool `description` 裝不下;在決策當下載入才擋得掉「自己選檢索來源、自己拼 OOXML/CSV」的反射。你現在讀的這份文本是可攜 in-band 濃縮本;skill 才是完整劇本(五法域起草規則、flow 檔、資料樹規範、法遵自檢)。**不要把載入當可選**——任何有 skill 機制的 host,它就是欽定的第一步。唯一的窄保留是**協議層**:純 MCP 客戶端(無 skill 機制)光憑這份 doctrine 直接呼叫工具仍屬正確(R0.3 可攜性,guide 對上述紀律自足)。「非協議 gate」不等於「有機制也可以不載」。
 >
 > **兩平面(R13):container 只留網路/憑證工作,確定性後處理落地為 host-local skill 腳本。** 以下 8 個舊工具現回 typed `TOOL_LANDED` redirect(不再執行舊邏輯,`landing.usage` 直接給對應腳本呼叫式),請改呼叫 `skills/patentworks/scripts/` 下的本地腳本(每支 `python3 <腳本> --help` 印完整參數):
 >
@@ -21,11 +21,11 @@ description: 專利全流程工作站。四種任務:(A) 把發明材料/idea �
 > | `stage_file`                                          | **無腳本替代**:改用 WebDAV working cache(`cache_provision` → 掛載 PUT → `cache_export`) |
 > | `clean_html_text`/`extract_claim1_text`(內部函式)     | `claims_tools.py`(`clean-html`/`extract-claim1`/`claim1-empty`)                         |
 >
-> **WebDAV working cache(交付物暫存三層心智)**:`cache` = 可拋的工作樹(mount 掛載處);`truth store`(專案 repo / `output/`)= 交付物的家;**export 是顯式動作**,不 export 就不算落地。流程:`cache_provision(subject_id, owner_identity)` 拿到 `mount_path` + **一次性 Basic 憑證**(只存 hash)→ 用 rclone/davfs2 掛載後**投料/取件走 mount**(byte 不過 context)→ 成品就緒 `cache_export(subject_id, target, owner_identity)` COPY 落地(target parent 不存在 → `EXPORT_TARGET_UNREACHABLE`)→ `cache_close`(有未 export 的 dirty 檔 → `WORKSPACE_CLOSE_DIRTY` 擋下,列未落地清單,除非 `force=True`)。DAV 面強制認證,無 fallback。憑證絕不寫進報告/log。
+> **WebDAV working cache — 完整機制是 fleet SSOT(`mcp-integration-standard` R2.0 + R14),不在此重述(R14.8)**。這裡只留兩件必須在動作邊界手上的事:
 >
-> **憑證自助 bootstrap(R14.6,fleet 標準,docxmcp reference commit 54eac2e)**:首次 `cache_provision` 就回一次性 `credential`;憑證遺失或要重建 mount 時,`cache_provision(subject_id, owner_identity, issue_webdav_credential=True)` 走 MCP-rail 重發——**持有 MCP socket 本身就是授權**,免掉 HTTP 先有雞先有蛋。**警告:此旗標會 ROTATE 憑證,任何用舊密碼的現存 mount 立即失效**,只在建立/重建 host mount 時帶。不帶(預設 false)時 payload 與舊行為 byte-identical(天條 §11 無 silent 欄位)。
->
-> **anti-reflex 鐵律(寫在手上)**:檔案坐落在 gdrive / 網路 FUSE 掛載,**永遠不是** WebDAV working cache 不可用的理由——這是**兩軸混淆**的經典 category error。Location(`.md`/圖檔坐落哪個檔案系統)與 Transfer(bytes 怎麼過 host↔container 邊界)是**正交**的;只按 Transfer 軸路由。WebDAV 這條走 pass-by-value(bytes 過 DAV wire,容器不需看見任何 host path);它在本 host 不通,真因是 **credential / mount 未 provision**(見 `issues/` webdav-provision BR),與 gdrive/FUSE 無關。有疑慮時,`cache_provision` + mount 這條 pass-by-value 到處都能用;大檔只是多付 context/傳輸成本。
+> - **anti-reflex 鐵律(寫在手上)**:檔案坐落在 gdrive / 網路 FUSE 掛載,**永遠不是** WebDAV 不可用的理由——這是**兩軸混淆**的經典 category error。Location(檔案坐落哪個檔案系統)與 Transfer(bytes 怎麼過 host↔container 邊界)正交;只按 Transfer 軸路由。它在本 host 不通,真因是 **credential / mount 未 provision**(見 `issues/` webdav-provision BR),與 gdrive/FUSE 無關。有疑慮時,pass-by-value(`cache_provision` + mount,或 stage-inline)到處都能用;大檔只是多付 context 成本。
+> - **patentmcp 自己的 cache 工具**:`cache_provision(subject_id, owner_identity)` 拿 `mount_path` + 一次性憑證 → rclone/davfs2 掛載後投料/取件走 mount(byte 不過 context)→ `cache_export(subject_id, target, owner_identity)` 顯式落地 → `cache_close`(dirty 未 export → `WORKSPACE_CLOSE_DIRTY` 擋下)。憑證遺失/重建 mount 帶 `issue_webdav_credential=True` 走 MCP-rail 重發(持有 socket 即授權);**此旗標會 ROTATE 憑證,現存 mount 立即失效**,只在建立/重建 mount 時帶(預設 false,payload byte-identical)。憑證絕不寫進報告/log。
+> - **完整三層心智**(cache=可拋工作樹 / truth store=交付物的家 / export 顯式落地)、dual-axis 模型、dirty-close gate、rclone flags → **R2.0 + R14**,不要憑記憶重建。
 
 專利從 idea 到申請的全流程。依需求選一個 flow,**先讀對應 flow 檔再執行**。
 
