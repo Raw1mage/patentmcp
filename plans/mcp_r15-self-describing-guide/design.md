@@ -15,7 +15,7 @@ patentmcp 現況（recon 2026-07-07）：
   handler**（需新建）。
 - companion skill `skills/patentworks/SKILL.md`（章節：完整管線 / 選 flow / 共用原則 /
   領域骨幹 / 專利工作池資料樹規範）= R15 要投影的 doctrine source。
-- 尚無 `patentmcp_guide` tool。
+- 尚無 `patentmcp_init` tool。
 
 因此 R15 對 patentmcp 的 delta：加 guide tool、**新建 prompts handler** 並加 R15 entry、
 補 signpost、建 one-source 投影機制。
@@ -24,8 +24,8 @@ patentmcp 現況（recon 2026-07-07）：
 
 **Goals**
 
-- `patentmcp_guide` MCP tool 回傳完整 usage doctrine（R15.1 tool 面）。
-- `prompts/get patentmcp_guide` 回傳同源 doctrine（R15.1 prompts 面；需新建 handler）。
+- `patentmcp_init` MCP tool 回傳完整 usage doctrine（R15.1 tool 面）。
+- `prompts/get patentmcp_init` 回傳同源 doctrine（R15.1 prompts 面；需新建 handler）。
 - `instructions` + server instructions 補 signpost（R15.3）。
 - doctrine 單一來源投影，杜絕三份漂移（R15.5）。
 
@@ -36,8 +36,8 @@ patentmcp 現況（recon 2026-07-07）：
 
 ## Decisions
 
-- **DD-1 (dual-protocol 同源投影)**：`patentmcp_guide` tool 與 `prompts/get`
-  `patentmcp_guide` entry 都從**同一份 doctrine 來源**投影，byte-identical。拒絕手維護
+- **DD-1 (dual-protocol 同源投影)**：`patentmcp_init` tool 與 `prompts/get`
+  `patentmcp_init` entry 都從**同一份 doctrine 來源**投影，byte-identical。拒絕手維護
   兩份（R15.5 要杜絕的漂移）。
 
 - **DD-2 (doctrine 來源 = SKILL.md 為權威 source)**：**選定：直接以
@@ -50,10 +50,10 @@ patentmcp 現況（recon 2026-07-07）：
 
 - **DD-4 (signpost 措辭，service-authored 非 nudge)**：在 `mcp.json.instructions`
   與 server instructions 各補一句：
-  `"USAGE GUIDE: this service self-ships its full usage doctrine — call patentmcp_guide (or prompts/get patentmcp_guide) for organ-coordination, cross-tool tradeoffs, pre-call disciplines, and gotchas before first use."`
+  `"USAGE GUIDE: this service self-ships its full usage doctrine — call patentmcp_init (or prompts/get patentmcp_init) for organ-coordination, cross-tool tradeoffs, pre-call disciplines, and gotchas before first use."`
   service 自己的 manifest 宣告，走既有 instructions rail，不注入對話流。
 
-- **DD-5 (guide tool 註冊形態)**：`patentmcp_guide` 註冊為標準 MCP tool，
+- **DD-5 (guide tool 註冊形態)**：`patentmcp_init` 註冊為標準 MCP tool，
   `annotations: {readOnlyHint:true, destructiveHint:false, idempotentHint:true, openWorldHint:false}`，
   無 input 參數（或可選 `section` 過濾）。`patentmcp_` prefix 慣例一致。
 
@@ -91,8 +91,8 @@ flowchart TB
   end
   subgraph SRV["patentmcp server (src/patent_mcp_server/patents.py)"]
     LOAD["startup load doctrine<br/>(fail-fast if missing, DD-3)"]
-    GUIDE["patentmcp_guide tool<br/>(tools/call, R15.1)"]
-    PROMPT["prompts/get patentmcp_guide<br/>(new handler, R15.1)"]
+    GUIDE["patentmcp_init tool<br/>(tools/call, R15.1)"]
+    PROMPT["prompts/get patentmcp_init<br/>(new handler, R15.1)"]
     INSTR["server instructions<br/>+ signpost (R15.3)"]
   end
   subgraph MAN["mcp.json"]

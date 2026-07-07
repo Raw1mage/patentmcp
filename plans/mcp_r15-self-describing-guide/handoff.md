@@ -2,8 +2,8 @@
 
 ## Execution Contract
 
-- 交付 `patentmcp_guide` MCP tool + `prompts/list`+`prompts/get patentmcp_guide` handler + `mcp.json`/server instructions signpost + doctrine one-source 投影(SKILL.md 為 source,啟動 fail-fast)。
-- Done 定義:rebuild container 後,`patentmcp_guide` tool 與 `prompts/get patentmcp_guide` 回 byte-identical doctrine;instructions 含 signpost;source 缺失時啟動 fail-fast;對照 mcp-integration-standard §13 R15.1/R15.2/R15.3/R15.5 逐項通過。
+- 交付 `patentmcp_init` MCP tool + `prompts/list`+`prompts/get patentmcp_init` handler + `mcp.json`/server instructions signpost + doctrine one-source 投影(SKILL.md 為 source,啟動 fail-fast)。
+- Done 定義:rebuild container 後,`patentmcp_init` tool 與 `prompts/get patentmcp_init` 回 byte-identical doctrine;instructions 含 signpost;source 缺失時啟動 fail-fast;對照 mcp-integration-standard §13 R15.1/R15.2/R15.3/R15.5 逐項通過。
 
 ## Required Reads
 
@@ -19,6 +19,6 @@
 
 ## Execution-Ready Checklist
 
-- [x] recon 完成:FastMCP 有 @mcp.prompt、_skills_root() 可複用、Dockerfile 已 COPY skills/
+- [x] recon 完成:FastMCP 有 @mcp.prompt、\_skills_root() 可複用、Dockerfile 已 COPY skills/
 - [x] designed gate 通過、docs profile 已設
 - [ ] docxmcp `bin/mcp_server.py` + `bin/_mcp_prompts.py` 範本已對照(prompts 註冊形態)

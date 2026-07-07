@@ -24,14 +24,14 @@
 
 ## Effective Requirement Description
 
-1. **R15.1 dual-protocol guide（雙寫）**：新增 `patentmcp_guide` MCP **tool**
+1. **R15.1 dual-protocol guide（雙寫）**：新增 `patentmcp_init` MCP **tool**
    (`tools/call`)，回傳 patentmcp 的完整 usage doctrine（單次呼叫拿到 organ
    coordination + cross-tool tradeoffs + pre-call disciplines + gotchas）。同時
-   新增 `prompts/get` 的 **R15 usage-guide prompt entry**（名 `patentmcp_guide`
+   新增 `prompts/get` 的 **R15 usage-guide prompt entry**（名 `patentmcp_init`
    或 `usage`），回傳**同一份** doctrine。（patentmcp 現無 prompts handler，需新建。）
 2. **R15.3 signpost**：在 `mcp.json.instructions`（且/或 server 內建 instructions
-   常數）新增一句宣告 guide surface 存在（"call `patentmcp_guide`
-   (or `prompts/get patentmcp_guide`) for the full usage doctrine before first
+   常數）新增一句宣告 guide surface 存在（"call `patentmcp_init`
+   (or `prompts/get patentmcp_init`) for the full usage doctrine before first
    use"）。此為 service-authored manifest 宣告，非 host 注入 nudge。
 3. **R15.5 one-source**：guide tool body、`prompts/get` body、companion skill
    `patentworks/SKILL.md` 三者 doctrine 必須來自**單一 source**（投影，不手維護三份）。
@@ -44,7 +44,7 @@
 
 ### IN
 
-- 在 patentmcp repo 內實作 `patentmcp_guide` tool + `prompts/get` guide handler +
+- 在 patentmcp repo 內實作 `patentmcp_init` tool + `prompts/get` guide handler +
   instructions signpost + one-source 投影機制。
 - 驗證：guide tool 可呼叫並回傳 doctrine；prompts/get 同 doctrine；instructions 含
   signpost；doctrine 與 SKILL.md 同源（drift 檢查）。
@@ -73,7 +73,7 @@
 ## What Changes
 
 - `src/patent_mcp_server/patents.py`（+ `_http_app.py` 若 prompts 掛 HTTP 層）：註冊
-  `patentmcp_guide` tool；**新建** `prompts/list`+`prompts/get` handler 加入 usage-guide
+  `patentmcp_init` tool；**新建** `prompts/list`+`prompts/get` handler 加入 usage-guide
   entry；server instructions 常數補 signpost。
 - `mcp.json`：`instructions` 補 signpost 句。
 - 新增 one-source doctrine 投影（機制待 design 定：讀 SKILL.md vs 抽共享檔）。
@@ -82,8 +82,8 @@
 
 ### New Capabilities
 
-- `patentmcp_guide` tool：單呼叫取得 patentmcp 完整 usage doctrine（in-band, portable）。
-- `prompts/get patentmcp_guide`：bare-client 可達的同源 doctrine 投影（新建 handler）。
+- `patentmcp_init` tool：單呼叫取得 patentmcp 完整 usage doctrine（in-band, portable）。
+- `prompts/get patentmcp_init`：bare-client 可達的同源 doctrine 投影（新建 handler）。
 
 ### Modified Capabilities
 

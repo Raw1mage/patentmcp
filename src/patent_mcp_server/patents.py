@@ -38,7 +38,7 @@ mcp = FastMCP(
         "Tool results return file handles; "
         "bytes are delivered via /files/{token}/blob/{rel}, not through context. "
         "USAGE GUIDE: this service self-ships its full usage doctrine — call "
-        "patentmcp_guide (or prompts/get patentmcp_guide) for organ-coordination, "
+        "patentmcp_init (or prompts/get patentmcp_init) for organ-coordination, "
         "cross-tool tradeoffs, pre-call disciplines, and gotchas before first use."
     ),
 )
@@ -57,8 +57,8 @@ _RO = ToolAnnotations(readOnlyHint=True)
 #
 # The patentworks companion skill SKILL.md IS the single authoritative
 # usage doctrine (cross-tool tradeoffs / source ladder / pre-call
-# disciplines / organ coordination / gotchas). The patentmcp_guide TOOL
-# and the prompts/get patentmcp_guide entry both project THIS file, so
+# disciplines / organ coordination / gotchas). The patentmcp_init TOOL
+# and the prompts/get patentmcp_init entry both project THIS file, so
 # all three faces stay byte-identical (R15.5 no-drift). Loaded once at
 # first access and cached; missing/empty source fails fast (天條 11 —
 # a guide with no doctrine is byte-identical to no contract).
@@ -94,7 +94,7 @@ def _guide_doctrine() -> str:
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"DOCTRINE_SOURCE_MISSING: patentmcp usage doctrine not found at "
-            f"{_DOCTRINE_PATH}; the patentmcp_guide surface cannot serve an "
+            f"{_DOCTRINE_PATH}; the patentmcp_init surface cannot serve an "
             f"empty contract (天條 11). Confirm Dockerfile COPY skills/ and "
             f"PATENTS_SKILLS_ROOT."
         ) from exc
@@ -2938,33 +2938,35 @@ _GUIDE_ANNOTATIONS = ToolAnnotations(
 
 
 @mcp.tool(annotations=_GUIDE_ANNOTATIONS)
-async def patentmcp_guide() -> str:
-    """patentmcp's full usage doctrine (R15 self-describing organism).
+async def patentmcp_init() -> str:
+    """Read-only: returns patentmcp's usage doctrine, no side effects (R15 self-describing organism).
 
-    Returns the complete patentworks usage doctrine in one call: cross-tool
+    Despite the `init` name this makes NO state changes — call it ONCE before
+    first use to receive, in-band, the complete patentworks usage doctrine in one
+    call: cross-tool
     tradeoffs (multi-source search flow selection + the GPSS>EPO>PPUBS>gated
     Google Patents source ladder), pre-call disciplines (patent work-pool data
     tree spec, scratch->/tmp, scraping authorization), organ coordination
     (container + UDS transport + patentworks skill + host-local scripts +
     WebDAV working cache), and counter-intuitive gotchas. This is delivered
     context (arrives in-band at the action boundary) rather than doctrine you
-    must remember to load. Same content as `prompts/get patentmcp_guide`
+    must remember to load. Same content as `prompts/get patentmcp_init`
     (byte-identical, single source). No arguments."""
     return _guide_doctrine()
 
 
 @mcp.prompt(
-    name="patentmcp_guide",
+    name="patentmcp_init",
     description=(
-        "patentmcp's full usage doctrine (R15 self-describing organism): "
+        "Read-only: patentmcp's usage doctrine, no side effects (R15 self-describing organism): "
         "cross-tool tradeoffs, pre-call disciplines, organ coordination, and "
-        "gotchas. Same content as the patentmcp_guide tool; this prompts/get "
+        "gotchas. Same content as the patentmcp_init tool; this prompts/get "
         "face is reachable by bare MCP clients. No arguments."
     ),
 )
-def patentmcp_guide_prompt() -> str:
+def patentmcp_init_prompt() -> str:
     """prompts/get face of the R15 guide. Byte-identical to the
-    patentmcp_guide TOOL — both project _guide_doctrine() (the patentworks
+    patentmcp_init TOOL — both project _guide_doctrine() (the patentworks
     SKILL.md single source), so the doctrine lives in exactly one place
     (R15.5 no-drift)."""
     return _guide_doctrine()
