@@ -77,18 +77,17 @@ def _skills_root() -> _Path:
 
 
 _DOCTRINE_PATH = _skills_root() / "patentworks" / "SKILL.md"
-_DOCTRINE_CACHE: Optional[str] = None
 
 
 def _guide_doctrine() -> str:
     """Return the patentmcp R15 usage doctrine (patentworks SKILL.md).
 
     Fail-fast on missing/empty source — never serve an empty guide (天條 11).
-    Cached after first read; same file read by tool + prompts/get faces so
-    both are byte-identical (R15.5 no-drift)."""
-    global _DOCTRINE_CACHE
-    if _DOCTRINE_CACHE is not None:
-        return _DOCTRINE_CACHE
+    Read per-request (NOT cached): the doctrine is a few-KB markdown file read
+    only on the cold `patentmcp_init` / prompts/get path, never a hot loop, so
+    a fresh read costs nothing and lets a bind-mounted doctrine edit take effect
+    with zero image rebuild (R15 live-reload). Same file read by tool +
+    prompts/get faces so both stay byte-identical (R15.5 no-drift)."""
     try:
         text = _DOCTRINE_PATH.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
@@ -104,7 +103,6 @@ def _guide_doctrine() -> str:
             f"{_DOCTRINE_PATH} is empty/whitespace; refusing to serve an "
             f"empty guide (天條 11)."
         )
-    _DOCTRINE_CACHE = text
     return text
 
 

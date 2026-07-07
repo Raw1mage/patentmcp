@@ -27,10 +27,31 @@ services:
     #            ./.run bind mount (R1.1; this is what surfaces patentmcp_* tools).
     #   --port → additional outward TCP for direct IDE / cross-host access (R1.7),
     #            same MCP API. Both bound by ONE process (single app lifespan).
-    command: ["--transport", "http", "--uds", "/run/patentmcp/patentmcp.sock", "--host", "0.0.0.0", "--port", "8000"]
+    command:
+      [
+        "--transport",
+        "http",
+        "--uds",
+        "/run/patentmcp/patentmcp.sock",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
     ports:
       - "8000:8000"
     volumes:
+      # R15 live-reload (fleet bind-mount, 2026-07-07): server source + skill
+      # tree are pure interpreted Python / markdown — mount them as live host
+      # files so editing code needs only `restart` (process re-read) and editing
+      # doctrine needs ZERO action (it's read per-request, patents.py
+      # _guide_doctrine). The .venv (deps) is NOT mounted — it's built inside the
+      # image per the container's arch and stays baked; only a dependency change
+      # (pyproject/uv.lock) warrants a rebuild. editable install
+      # (__editable__.patent_mcp_server.pth → /app/server/src) makes the src bind
+      # authoritative on import.
+      - "./src:/app/server/src"
+      - "./skills:/app/skills"
       # IPC rendezvous (host ./.run holds the socket once uvicorn binds it).
       - "./.run:/run/patentmcp"
       # GCP service-account key, read-only. Override the host path via SA_KEY in .env.
