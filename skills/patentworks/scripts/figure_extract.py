@@ -34,6 +34,39 @@ from pathlib import Path
 
 _POPPLER_BINS = ["pdfinfo", "pdftoppm", "pdftotext", "pdfimages"]
 
+
+def _repo_root() -> Path:
+    """patentmcp repo root. This script lives at
+    ``<repo>/skills/patentworks/scripts/figure_extract.py`` → 3 parents up."""
+    return Path(__file__).resolve().parents[3]
+
+
+def src_dir(repo: "str | None" = None) -> Path:
+    """Repo-local PERSISTENT intermediate-artefact directory ``<repo>/.src/``.
+
+    Unified landing plane (plans/infra_docxmcp-stateless-container DD-6/DD-6a) —
+    the same convention docxmcp uses via ``docx_utils.src_dir()``. Cross-step /
+    cross-session / cross-restart artefacts (downloaded figures a later step
+    inserts into a docx) land here so they survive restarts, unlike system
+    ``/tmp``. Gitignored; created 0700 so private working artefacts never land
+    world-readable. Root resolution order:
+      1. explicit ``repo`` arg (the ``--repo`` landing-plane hook)
+      2. ``$PATENTMCP_SRC_ROOT`` env (absolute)
+      3. ``<repo>/.src`` (default)
+    """
+    if repo:
+        base = Path(repo).expanduser().resolve()
+    else:
+        env = os.environ.get("PATENTMCP_SRC_ROOT")
+        base = Path(env).expanduser().resolve() if env else _repo_root()
+    d = base / ".src"
+    d.mkdir(parents=True, exist_ok=True)
+    try:
+        d.chmod(0o700)
+    except OSError:
+        pass
+    return d
+
 _FIG1_PATTERNS = [
     re.compile(r"\bFIG\.?\s*1\b", re.IGNORECASE),
     re.compile(r"\bFIGURE\s*1\b", re.IGNORECASE),
@@ -149,9 +182,13 @@ def main(argv=None) -> int:
         epilog=__doc__,
     )
     p.add_argument("--pdf", required=True, help="input PDF path")
-    p.add_argument("--out", required=True, help="output PNG path")
+    p.add_argument("--out", default=None,
+                   help="output PNG path. If omitted, lands in the unified "
+                        ".src/ landing plane (DD-6a): <src_dir>/fig_<pdfstem>.png")
     p.add_argument("--dpi", type=int, default=200, help="render DPI (default 200)")
-    p.add_argument("--repo", default=None, help="repo root (unused; landing-plane convention)")
+    p.add_argument("--repo", default=None,
+                   help="repo root for the .src/ landing plane (DD-6a). When "
+                        "--out is omitted, the figure lands under <repo>/.src/.")
     args = p.parse_args(argv)
 
     missing = [b for b in _POPPLER_BINS if shutil.which(b) is None]
@@ -183,7 +220,13 @@ def main(argv=None) -> int:
     if png is None:
         raise ScriptError("RENDER_FAILED", f"pdftoppm failed to render page {loc['page']}")
 
-    out_path = Path(args.out)
+    # Landing plane (DD-6a): explicit --out wins; otherwise land in the unified
+    # persistent .src/ dir (NOT system /tmp) so the figure survives restarts and
+    # a later step (e.g. docx insertion) can re-read it.
+    if args.out:
+        out_path = Path(args.out)
+    else:
+        out_path = src_dir(args.repo) / f"fig_{pdf_path.stem}.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(png)
 

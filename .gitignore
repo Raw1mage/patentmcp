@@ -10,6 +10,11 @@ output/
 **/.venv/
 .tmp/
 **/.tmp/
+
+# Repo-local intermediate artefacts for file-type tool workflows (DD-6:
+# patentmcp/docxmcp 中間產物一律落 repohome/.src/，持久非-ephemeral，取代 /tmp。gitignored、host 持久、0700）
+.src/
+**/.src/
 *.egg-info/
 **/*.egg-info/
 .specbase/*.sqlite
