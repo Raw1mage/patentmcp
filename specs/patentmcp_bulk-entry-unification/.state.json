@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-10T05:18:01.360Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-10T05:23:47.912Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "bulk 統一入口設計完成:DD-1..DD-7、IDEF0/GRAFCET、envelope 超集契約"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-10T05:23:48.042Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "tasks 6 phase 拆解完成,handoff 契約就緒"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-10T05:23:48.179Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "開始實作:dispatcher bulk() + patent_bulk wrapper + stub 化 + 測試"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-10T05:38:29.489Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "全 13 tasks 完成;pytest 175 passed 0 fail;驗證B兩輪探測通過;三BR歸檔;architecture 同步"
+    },
+    {
+      "from": "verified",
+      "to": "implementing",
+      "at": "2026-07-10T06:07:50.507Z",
+      "by": "pkcs12",
+      "mode": "migration",
+      "reason": "revise:使用者擴充 EPO auto date-slicing(DD-8/DD-9,tasks Phase 7);verified 退回 implementing"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-10T06:17:56.430Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "Phase 7 EPO auto date-slicing 完成:epo_slice_plan + slice_plan 參數 + 12 新測試;全套件 187 passed 0 fail;issue_20260710_epo_bulk_auto_date_slicing 已 Resolved 歸檔;architecture/SKILL.md 同步"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-10T06:23:01.952Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user-confirmed graduation"
+    }
+  ]
+}

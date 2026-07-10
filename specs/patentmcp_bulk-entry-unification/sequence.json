@@ -1,0 +1,30 @@
+[
+  {
+    "title": "patent_bulk source=epo 收割(per-page absorb)",
+    "participants": ["MCP呼叫者", "patents.py wrapper", "dispatcher.bulk", "EPO OPS", "patentdb"],
+    "messages": [
+      { "from": "MCP呼叫者", "to": "patents.py wrapper", "label": "patent_bulk(source=epo, keyword, num, skip)" },
+      { "from": "patents.py wrapper", "to": "dispatcher.bulk", "label": "bulk(spec, source=epo, absorb_cb)" },
+      { "from": "dispatcher.bulk", "to": "EPO OPS", "label": "search(CQL←_keyword_to_cql, range)" },
+      { "from": "EPO OPS", "to": "dispatcher.bulk", "label": "公開號一頁(≤100)" },
+      { "from": "dispatcher.bulk", "to": "EPO OPS", "label": "biblio 逐件 fan-out(15/min)" },
+      { "from": "dispatcher.bulk", "to": "patentdb", "label": "absorb_cb(page_records) — 每頁立即 COALESCE upsert" },
+      { "from": "dispatcher.bulk", "to": "EPO OPS", "label": "下一頁(直到 num/total/skip wall)" },
+      { "from": "dispatcher.bulk", "to": "patents.py wrapper", "label": "envelope{records, total, next_skip, exhausted}" },
+      { "from": "patents.py wrapper", "to": "MCP呼叫者", "label": "envelope + patentdb_absorb 累計" }
+    ]
+  },
+  {
+    "title": "patent_bulk source=gpss(export/harvest 內部二路)",
+    "participants": ["MCP呼叫者", "patents.py wrapper", "dispatcher.bulk", "GPSS", "patentdb"],
+    "messages": [
+      { "from": "MCP呼叫者", "to": "patents.py wrapper", "label": "patent_bulk(source=gpss, [keyword?], axis, num)" },
+      { "from": "patents.py wrapper", "to": "dispatcher.bulk", "label": "bulk(spec, source=gpss)" },
+      { "from": "dispatcher.bulk", "to": "GPSS", "label": "keyword缺→_bulk_pull_gpss(全欄expFld) / keyword給→_bulk_pull_gpss_kw" },
+      { "from": "GPSS", "to": "dispatcher.bulk", "label": "expSkip 分頁至窮盡或 num" },
+      { "from": "dispatcher.bulk", "to": "patents.py wrapper", "label": "envelope(+next_skip/exhausted 補算)" },
+      { "from": "patents.py wrapper", "to": "patentdb", "label": "收尾 absorb(COALESCE upsert)" },
+      { "from": "patents.py wrapper", "to": "MCP呼叫者", "label": "envelope + patentdb_absorb" }
+    ]
+  }
+]

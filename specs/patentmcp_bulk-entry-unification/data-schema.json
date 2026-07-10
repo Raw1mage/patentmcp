@@ -1,0 +1,35 @@
+{
+  "schemas": [
+    {
+      "name": "patent_bulk_request",
+      "kind": "message",
+      "fields": [
+        { "name": "source", "type": "\"gpss\"|\"epo\"", "notes": "必填,無預設(DD-1);其他值→INVALID_PARAMS" },
+        { "name": "ipc/cpc/uspc", "type": "string?", "notes": "分類軸;uspc 僅 gpss 分支有效" },
+        { "name": "keyword", "type": "string?", "notes": "gpss:給了即收割語義(拉整軸勿給,DD-2);epo:布林→CQL(_keyword_to_cql)" },
+        { "name": "keyword_field", "type": "string", "notes": "gpss 有效(TI/AB/CL...);epo 忽略(恆 txt=),契約如實標注" },
+        { "name": "applicant/inventor_country", "type": "string?", "notes": "inventor_country 僅 gpss" },
+        { "name": "databases", "type": "string[]?", "notes": "gpss patDB 清單;epo 忽略" },
+        { "name": "date_from/date_to", "type": "string?", "notes": "ISO 或 YYYYMMDD,normalize_query 統一" },
+        { "name": "num", "type": "int", "notes": "gpss cap 5000;epo 預設 100(一頁)、cap skip wall 2000" },
+        { "name": "skip", "type": "int", "notes": "續撈起點,配 next_skip 使用" }
+      ]
+    },
+    {
+      "name": "patent_bulk_envelope",
+      "kind": "json",
+      "fields": [
+        { "name": "success", "type": "bool", "notes": "" },
+        { "name": "records", "type": "record[]", "notes": "統一 record schema(store 轉換層既有)" },
+        { "name": "source", "type": "\"gpss\"|\"epo\"|null", "notes": "" },
+        { "name": "provenance", "type": "entry[]", "notes": "後端嘗試軌跡" },
+        { "name": "gaps", "type": "string[]", "notes": "該源已知缺欄" },
+        { "name": "total", "type": "int?", "notes": "後端宣告總命中" },
+        { "name": "next_skip", "type": "int", "notes": "DD-3:兩源皆有;下次呼叫的 skip" },
+        { "name": "exhausted", "type": "bool", "notes": "total 達成或(epo)skip wall;true=不必續撈" },
+        { "name": "patentdb_absorb", "type": "{imported,updated,skipped}", "notes": "epo=跨頁累計;gpss=收尾一次" },
+        { "name": "error_code", "type": "string?", "notes": "見 errors.md" }
+      ]
+    }
+  ]
+}

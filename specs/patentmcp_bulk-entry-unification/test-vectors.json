@@ -1,0 +1,44 @@
+[
+  {
+    "id": "TV-1",
+    "description": "gpss 無 keyword → 分類軸 export 路徑",
+    "input": { "tool": "patent_bulk", "source": "gpss", "cpc": "G08B21/04", "num": 200 },
+    "expected": { "success": true, "source": "gpss", "route": "gpss_export", "envelope_keys": ["next_skip", "exhausted", "patentdb_absorb"] }
+  },
+  {
+    "id": "TV-2",
+    "description": "gpss 有 keyword → keyword 收割路徑",
+    "input": { "tool": "patent_bulk", "source": "gpss", "keyword": "fall and (radar or mmwave)", "num": 200 },
+    "expected": { "success": true, "source": "gpss", "route": "gpss_harvest" }
+  },
+  {
+    "id": "TV-3",
+    "description": "epo → 收割路徑,keyword 布林轉 CQL,per-page absorb",
+    "input": { "tool": "patent_bulk", "source": "epo", "keyword": "radar AND fall", "num": 100 },
+    "expected": { "success": true, "source": "epo", "cql_contains": "txt=radar and txt=fall", "absorb_calls_per_page": true, "envelope_keys": ["next_skip", "exhausted"] }
+  },
+  {
+    "id": "TV-4",
+    "description": "無效/缺失 source → INVALID_PARAMS,零後端呼叫",
+    "input": { "tool": "patent_bulk", "source": "uspto", "cpc": "G08B21/04" },
+    "expected": { "success": false, "error_code": "INVALID_PARAMS", "backend_calls": 0 }
+  },
+  {
+    "id": "TV-5",
+    "description": "_keyword_to_cql 四類:布林/片語/括號/NOT",
+    "input": { "cases": ["radar AND fall", "\"millimeter wave\" OR radar", "(radar OR lidar) AND fall", "radar NOT vehicle"] },
+    "expected": { "outputs": ["txt=radar and txt=fall", "txt=\"millimeter wave\" or txt=radar", "(txt=radar or txt=lidar) and txt=fall", "txt=radar not txt=vehicle"] }
+  },
+  {
+    "id": "TV-6",
+    "description": "EPO 中途中斷不丟已落地頁;next_skip 續撈冪等",
+    "input": { "scenario": "absorb_cb 收前 N 頁後模擬中斷;以 next_skip 重呼叫" },
+    "expected": { "pages_landed_before_break": ">=N", "resume_no_clobber": true, "absorb_exception_does_not_break_harvest": true }
+  },
+  {
+    "id": "TV-7",
+    "description": "三舊工具 → TOOL_RENAMED stub",
+    "input": { "tools": ["patent_bulk_export", "patent_bulk_harvest", "epo_bulk_harvest"] },
+    "expected": { "error_code": "TOOL_RENAMED", "use": "patent_bulk", "backend_calls": 0 }
+  }
+]

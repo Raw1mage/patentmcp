@@ -6,6 +6,8 @@
 
 ## 0. 固化工作資料夾(與 docxmcp src package 調和)
 
+> **⚠️ 鐵律:`02_pool/candidates.csv` 是 records 實體池,不是母數計數。** landscape 報告的每一個「N 筆」都必須對應 `candidates.csv` 裡 N 列真實 records(有公開號/標題/IPC/日期)。`patent_search`/`patent_bulk` 回的 `total`、或 `num=1` 的數字,只是 GPSS **檢索命中計數(bibliometric count)**——未去雜訊、未去重(含多國家族 + 跨簇重複)、未重分類,**連一筆公開號都沒有**。把母數當「N 筆池」寫報告是方法論造假。母數只能誠實當「宏觀命中量級」(標明未清洗計數);要成為有效樣本,必須實撈 records 落地本 CSV,跑完 §2 的 篩雜訊 → 去重(公開號/家族級)→ 重分類 三道工序。無 records = 三道工序無法執行 = 報告不合格。詳見 `../SKILL.md` 共用原則「鐵律 0」。
+
 每個檢索任務建立一個工作資料夾,結構固定。`04_report/` 直接採 docxmcp 文字文件 package 慣例(`manifest.json` + `body.md` + `media/`),使其能無痛餵進 docxmcp Mode A assemble。
 
 > **落點(MUST)**:工作資料夾根 `priorart_<topic>/` **一律建在專案的 `output/` 底下**(即 `output/priorart_<topic>/`),**不得**散落在專案根目錄(cwd 根)。理由:`priorart_<topic>/` 整包是任務的「中間產物 + 衍生交付物」(原始檢索 JSON、候選池、素材圖、報告 package、最終 DOCX/XLSX),全部屬於產出物範疇;專案根目錄只保留使用者輸入面(`input/`)、最終呈交給使用者的成品,以及計畫治理檔(`plans/`)。把工作資料夾落在根層會污染交付目錄根、混淆「輸入 vs 產出」邊界。若專案無 `output/` 則先建立。
@@ -143,7 +145,7 @@ output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 
 ## 1. 來源與紅線(硬規定)
 
 - **檢索一律用單一入口 `patent_search`**——來源梯已內建於 server(TIPO GPSS 官方首選,一站涵蓋 US/CN/TW → EPO OPS → USPTO PPUBS → gated 爬蟲),每級嘗試記入 `provenance`。全文/圖說文字補 **`google_*` BigQuery 合法 API**(非 TW)、**EPO OPS**、**USPTO PPUBS** 單號取文工具。各級能力知識見 `../SKILL.md` §5。
-- **分類軸全景窮盡取數用 `patent_bulk_export`(coverage)**——當要把某分類軸(CPC/IPC)底下**整條書目一次全拉**(而非找最相關的幾件)時,用 `patent_bulk_export(cpc=.../ipc=..., databases=[...], num=數千)`:純分類軸、不吃 keyword(避免過度收窄)、大 num 自動分頁、強制全欄杜絕半殘 row、GPSS-only 官方 miss 即真 0 不退爬蟲(不違反本 flow 禁爬蟲鐵則),records 經 COALESCE upsert 入 patentdb。與本 flow 的 relevance 檢索矩陣互補:矩陣找相關命中,批次匯出補齊分類軸覆蓋率。詳見 `../SKILL.md` §5。
+- **窮盡批次取數用 `patent_bulk`(coverage,source 必填顯式選源)**——當要把某結果集**整批書目一次全拉**(而非找最相關的幾件)時,用 `patent_bulk(source="gpss"|"epo", ...)`:GPSS 分支無 keyword → 分類軸 export(純分類軸、強制全欄杜絕半殘 row;拉整軸勿給 keyword)、有 keyword → 收割;EPO 分支布林 keyword 自動轉 CQL、per-page absorb 防逾時丟頁、`next_skip` 續撈。兩源皆官方-only、miss 即真 0 不退爬蟲(不違反本 flow 禁爬蟲鐵則),records 經 COALESCE upsert 入 patentdb。舊 `patent_bulk_export`/`patent_bulk_harvest`/`epo_bulk_harvest` 已下架(TOOL_RENAMED 轉址)。與本 flow 的 relevance 檢索矩陣互補:矩陣找相關命中,批次拉取補齊覆蓋率。詳見 `../SKILL.md` §5。
 - **🚫 本 flow 禁用爬蟲**。一律保持 `patent_search(allow_scraping=False)`(預設),**嚴禁授權爬蟲尾級**;單號爬蟲取文工具(`gpatents_get`/`gpatents_download_*`)亦禁用於本 flow 的檢索與批量抓取。官方全 miss 回 `SCRAPING_REQUIRED` 時,誠實記缺口,不降級。
 - **`google_*`(BigQuery 合法 API)≠ `gpatents_*`(爬蟲)**:前者走註冊 service account 查公開資料集,合法可靠;要逐字 claims/全文/圖說用 `google_get_patent_claims` / `google_get_patent_description`。
 - **原始專利 PDF 下載**:見 §5——**僅允許針對已知專利號、逐件小量下載公開 PDF**,不得批量。

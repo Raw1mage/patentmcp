@@ -2793,6 +2793,175 @@ async def patent_search(
 
 
 @mcp.tool()
+async def patent_bulk(
+    source: Optional[str] = None,
+    ipc: Optional[str] = None,
+    cpc: Optional[str] = None,
+    uspc: Optional[str] = None,
+    keyword: Optional[str] = None,
+    keyword_field: str = "TI/AB",
+    applicant: Optional[str] = None,
+    inventor_country: Optional[str] = None,
+    databases: Optional[List[str]] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    num: int = 100,
+    skip: int = 0,
+    slice_plan: bool = False,
+) -> Dict[str, Any]:
+    """Unified BULK harvest — exhaustively pull a result set from ONE explicitly
+    chosen source in a single call, with server-side auto-pagination (and, for
+    EPO, biblio fan-out). The single bulk entry point (patent_bulk_export /
+    patent_bulk_harvest / epo_bulk_harvest were folded into this).
+
+    `source` is REQUIRED and has NO default — you must commit to "gpss" or "epo".
+    A missing/other source returns INVALID_PARAMS and touches NO backend. There
+    is deliberately no auto-route and no cross-source fallback: the two backends
+    differ sharply in quota / throttle / coverage, so an implicit default would
+    silently blow the wrong quota. Choosing the source = committing to its cost.
+
+    source="gpss" (TIPO GPSS):
+      • no keyword → classification-axis EXPORT (pure ipc/cpc/uspc, full expFld
+        forced). *** To pull a WHOLE axis, DO NOT pass keyword *** — a keyword
+        AND-narrows the axis and can produce false zero-hits.
+      • keyword given → keyword HARVEST (keyword + optional classification, GPSS
+        field-internal and/or/not honored via keyword_field).
+      • Quota model: TIPO time-window quota; num can be raised large (suggest
+        ~2000) to land a multi-thousand-row slice in one call — GPSS books biblio
+        inline per page so there is no fan-out timeout risk. Hard-capped at 5000.
+      • One collect-then-absorb at the end (no fan-out timeout window).
+
+    source="epo" (EPO OPS):
+      • keyword boolean (AND/OR/NOT + "quoted phrases" + parens) is translated to
+        CQL; classification via ipc/cpc, applicant via pa=.
+      • Throttle model: OPS ~15/min + a deep-paging skip wall (~2000); every ref
+        needs a second-stage biblio fetch. Keep num MODEST (default 100 = one OPS
+        page) so a single call stays under the client timeout; raise to 300-500
+        only on a fast link. Each page is absorbed the moment its biblio fan-out
+        finishes (per-page absorb) so a timeout never discards landed pages.
+      • EPO IGNORES `keyword_field` (always searches txt=), and `uspc`,
+        `databases`, `inventor_country` (no EPO equivalent) — passing them has
+        no effect on the EPO branch.
+
+    Continuation (both sources): the envelope carries `next_skip` and `exhausted`.
+    To resume a partial pull, re-call with skip=<returned next_skip>; the patentdb
+    COALESCE upsert makes resume idempotent (re-running never clobbers non-empty
+    rows). `exhausted=True` means total (or the EPO skip wall) was reached.
+
+    EPO large-population workflow (slice_plan=True, source MUST be "epo"):
+    OPS caps deep paging at skip=2000, so a query whose total exceeds ~2000
+    cannot be pulled in one continuation chain. When total > 2000:
+      1. Call patent_bulk(source="epo", keyword=.., date_from=.., date_to=..,
+         slice_plan=True) — this count-probes only (ZERO records, ZERO absorb)
+         and returns a slice plan: {slices:[{date_from,date_to,total}...],
+         sum_check, probe_calls}. Each slice's total < 2000.
+      2. For each slice, harvest normally: patent_bulk(source="epo",
+         date_from=slice.date_from, date_to=slice.date_to, keyword=..) and
+         resume in-slice via the returned next_skip until exhausted.
+    slice_plan is EPO-only: gpss+slice_plan → INVALID_PARAMS (GPSS expSkip has no
+    skip wall, so no slicing is needed). No date range + total>2000 →
+    DATE_RANGE_REQUIRED; slice leaf-sum drift >5% → SLICE_INEFFECTIVE.
+    For non-slice_plan EPO calls whose total exceeds 2000 and is not yet
+    exhausted, the envelope carries a `slice_hint` (advisory, non-blocking).
+
+    Args:
+        source: REQUIRED — "gpss" or "epo". No default; anything else →
+            INVALID_PARAMS, zero backend calls.
+        ipc/cpc/uspc: classification axes (uspc gpss-only; EPO ignores uspc).
+        keyword: free-text boolean; gpss+keyword → harvest, gpss+no-keyword →
+            axis export, epo → CQL. To pull a whole gpss axis, leave keyword empty.
+        keyword_field: GPSS field (TI/AB/CL...); EPO ignores it.
+        applicant/inventor_country: AX / IY (inventor_country gpss-only).
+        databases: GPSS patDB list (gpss-only; EPO ignores it).
+        date_from/date_to: publication-date bounds (ISO or YYYYMMDD).
+        num: target rows (auto-paginated). Default 100 (safe for EPO's one-page /
+            timeout budget); for gpss you can raise it (~2000) to land a big slice.
+        skip: starting offset; pass the returned `next_skip` to continue.
+        slice_plan: EPO-only planning mode. True → count-probe the population and
+            return a date-slice plan (zero records / zero absorb) so a >2000
+            query can be harvested slice-by-slice. gpss+slice_plan →
+            INVALID_PARAMS.
+
+    Returns {success, records[], source, provenance[], gaps[], total, next_skip,
+    exhausted, patentdb_absorb, error_code?}. error_code is INVALID_PARAMS
+    (bad/missing source or axis) / GPSS_NOT_CONFIGURED / GPSS_ERROR /
+    EPO_NOT_CONFIGURED / EPO_ERROR.
+    """
+    spec = _sd.normalize_query(
+        ipc=ipc, cpc=cpc, uspc=uspc, keyword=keyword, keyword_field=keyword_field,
+        applicant=applicant, inventor_country=inventor_country,
+        databases=databases, date_from=date_from, date_to=date_to,
+        num=num, skip=skip,
+    )
+    if slice_plan:
+        # Planning-only: EPO-only, count-probe + slice plan, ZERO records/absorb.
+        if source != "epo":
+            return {
+                "success": False, "error_code": "INVALID_PARAMS",
+                "message": ("slice_plan 僅適用 source='epo';GPSS expSkip 自動分頁"
+                            "無 skip wall,不需切片"),
+            }
+        return await _sd.epo_slice_plan(spec, epo_client=epo_client)
+    if source == "epo":
+        # EPO per-page absorb: land each page NOW so a client-side timeout on the
+        # biblio fan-out keeps whatever already landed (COALESCE upsert is
+        # resume-safe). Mirrors the retired epo_bulk_harvest wrapper.
+        absorbed = {"imported": 0, "updated": 0, "skipped": 0}
+
+        def _absorb_page(page_records: List[Dict[str, Any]]) -> None:
+            res = _pdb.import_records(page_records, acquisition_cost="low")
+            for k in absorbed:
+                absorbed[k] += int(res.get(k, 0) or 0)
+
+        envelope = await _sd.bulk(
+            spec, source, gpss_client=gpss_client, epo_client=epo_client,
+            absorb_cb=_absorb_page)
+        if envelope.get("source") == "epo":
+            envelope["patentdb_absorb"] = absorbed
+        # Advisory (non-blocking): a >wall population can't be fully pulled in one
+        # continuation chain (OPS skip wall); hint the slice_plan workflow.
+        _total = envelope.get("total")
+        if (envelope.get("success") and isinstance(_total, int)
+                and _total > _sd._EPO_SKIP_WALL and not envelope.get("exhausted")):
+            envelope["slice_hint"] = (
+                "total exceeds OPS skip wall; use slice_plan=true")
+        return envelope
+
+    # gpss (or invalid source → INVALID_PARAMS from _sd.bulk, zero backend calls).
+    envelope = await _sd.bulk(
+        spec, source, gpss_client=gpss_client, epo_client=epo_client)
+    # GPSS collect-then-absorb at the end (mirrors the retired gpss wrappers).
+    if envelope.get("success") and envelope.get("records"):
+        try:
+            absorb = _pdb.import_records(envelope["records"], acquisition_cost="low")
+            envelope["patentdb_absorb"] = absorb
+        except Exception as e:  # noqa: BLE001 — absorb must never break harvest
+            logger.warning(f"patentdb absorb failed for patent_bulk: {e}")
+            envelope["patentdb_absorb"] = {"error": "absorb_failed", "detail": str(e)}
+    return envelope
+
+
+# ── retired bulk tools → TOOL_RENAMED redirect (plans/patentmcp_bulk-entry-
+# unification DD-5). One release cycle of typed redirects so stale skill
+# projections / playbooks get a correction pointing at patent_bulk. Zero
+# backend calls; signatures preserved so old callers still bind.
+
+def _bulk_renamed(source: str, note_extra: str = "") -> Dict[str, Any]:
+    return {
+        "success": False,
+        "error_code": "TOOL_RENAMED",
+        "use": "patent_bulk",
+        "note": (
+            "This bulk tool was unified into patent_bulk. Re-issue via "
+            f"patent_bulk with source='{source}': carry every original argument "
+            "over unchanged (ipc/cpc/uspc/keyword/keyword_field/applicant/"
+            "inventor_country/databases/date_from/date_to/num/skip) and add "
+            f"source='{source}'." + (f" {note_extra}" if note_extra else "")
+        ),
+    }
+
+
+@mcp.tool()
 async def patent_bulk_export(
     ipc: Optional[str] = None,
     cpc: Optional[str] = None,
@@ -2803,51 +2972,49 @@ async def patent_bulk_export(
     num: int = 2000,
     skip: int = 0,
 ) -> Dict[str, Any]:
-    """Classification-axis BULK EXPORT — exhaustively pull a whole classification
-    axis's bibliography from TIPO GPSS in one call (plans/patentmcp_classification-
-    bulk-export). This is the complement of patent_search: patent_search finds the
-    few MOST RELEVANT hits (keyword AND-narrowing, num≈30, scraper tail); this
-    pulls the WHOLE axis (pure classification, large expQty, auto-pagination).
+    """[RENAMED -> patent_bulk] Returns a TOOL_RENAMED redirect envelope; does
+    NOT run a search. Call patent_bulk(source='gpss', ...) with no keyword for a
+    classification-axis export."""
+    return _bulk_renamed("gpss")
 
-    Semantics (distinct from patent_search on purpose):
-      • PURE classification axis — requires at least one of ipc/cpc/uspc; keyword
-        is intentionally NOT accepted (no AND-narrowing that would over-constrain
-        the axis and cause false zero-hits).
-      • Large expQty — `num` up to 5000, paginated via expSkip until the axis is
-        exhausted or num is reached; full expFld is forced (title/applicant/
-        abstract/CPC/claims all populated — no half-empty rows).
-      • GPSS-only, NO scraper fallback — an official miss is a TRUE zero
-        (records=[], provenance reason=zero_hits); never returns SCRAPING_REQUIRED
-        and never calls the Google Patents scraper.
-      • Landed into patentdb (COALESCE upsert) so only COMPLETE rows enter; safe
-        to re-run to backfill previously half-empty rows without clobbering.
 
-    Args:
-        ipc/cpc/uspc: classification axis (at least one required).
-        databases: GPSS patDB list (USA,USB,CNA,CNB,TWA,TWB…); defaults US+CN.
-        date_from/date_to: optional publication-date bounds, YYYYMMDD.
-        num: target row count (auto-paginated), hard-capped at 5000.
-        skip: starting expSkip offset (resume/continue a large pull).
+@mcp.tool()
+async def patent_bulk_harvest(
+    ipc: Optional[str] = None,
+    cpc: Optional[str] = None,
+    uspc: Optional[str] = None,
+    keyword: Optional[str] = None,
+    keyword_field: str = "TI/AB",
+    inventor_country: Optional[str] = None,
+    applicant: Optional[str] = None,
+    databases: Optional[List[str]] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    num: int = 2000,
+    skip: int = 0,
+) -> Dict[str, Any]:
+    """[RENAMED -> patent_bulk] Returns a TOOL_RENAMED redirect envelope; does
+    NOT run a search. Call patent_bulk(source='gpss', keyword=...) for a
+    keyword harvest."""
+    return _bulk_renamed("gpss")
 
-    Returns {success, records[], source="gpss", provenance[], gaps[], total,
-    error_code?}. error_code is INVALID_PARAMS (no axis) / GPSS_NOT_CONFIGURED /
-    GPSS_ERROR.
-    """
-    spec = _sd.normalize_query(
-        ipc=ipc, cpc=cpc, uspc=uspc, databases=databases,
-        date_from=date_from, date_to=date_to, num=num, skip=skip,
-    )
-    envelope = await _sd.bulk_export(spec, gpss_client=gpss_client)
-    # patentdb absorb (same side-effect contract as patent_search): forced-full
-    # expFld guarantees complete rows; COALESCE upsert backfills, never clobbers.
-    if envelope.get("success") and envelope.get("records"):
-        try:
-            absorb = _pdb.import_records(envelope["records"], acquisition_cost="low")
-            envelope["patentdb_absorb"] = absorb
-        except Exception as e:  # noqa: BLE001 — absorb must never break export
-            logger.warning(f"patentdb absorb failed for patent_bulk_export: {e}")
-            envelope["patentdb_absorb"] = {"error": "absorb_failed", "detail": str(e)}
-    return envelope
+
+@mcp.tool()
+async def epo_bulk_harvest(
+    ipc: Optional[str] = None,
+    cpc: Optional[str] = None,
+    keyword: Optional[str] = None,
+    keyword_field: str = "TI/AB",
+    applicant: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    num: int = 100,
+    skip: int = 0,
+) -> Dict[str, Any]:
+    """[RENAMED -> patent_bulk] Returns a TOOL_RENAMED redirect envelope; does
+    NOT run a search. Call patent_bulk(source='epo', ...) for the EPO harvest
+    (keyword_field/uspc/databases/inventor_country are ignored by EPO)."""
+    return _bulk_renamed("epo")
 
 
 # =====================================================================

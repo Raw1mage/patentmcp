@@ -1,0 +1,86 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A1",
+    "StepType": "initial",
+    "StepAction": "接收 patent_bulk 呼叫,驗證 source 與檢索軸",
+    "LinkInputType": [],
+    "LinkInputNumber": [],
+    "LinkOutputNumber": [1, 2, 6],
+    "LinkOutputType": "track",
+    "Condition": ["source=gpss 且軸合法", "source=epo 且軸合法", "source 缺失/非法或無硬軸"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "GPSS 拉取:keyword 缺→分類軸 export;keyword 給→收割;expSkip 迴圈至窮盡或 num",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [3],
+    "LinkOutputType": "track",
+    "Condition": ["拉取完成或 BackendError"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "EPO 頁迴圈:search 一頁→逐件 biblio→absorb callback 立即落地→skip 前進",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [2, 4],
+    "LinkOutputType": "track",
+    "Condition": ["未達 num/total/skip wall → 續下一頁", "達 num 或 total 或 skip wall 2000 或 BackendError"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A4",
+    "StepType": "normal",
+    "StepAction": "GPSS 收尾 absorb(COALESCE upsert)並補算 next_skip/exhausted",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [5],
+    "LinkOutputType": "track",
+    "Condition": ["envelope 組裝完成"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A4",
+    "StepType": "normal",
+    "StepAction": "EPO envelope 組裝:next_skip=已推進 offset、exhausted=total 達成或 skip wall、patentdb_absorb=跨頁累計",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [2],
+    "LinkOutputNumber": [5],
+    "LinkOutputType": "track",
+    "Condition": ["envelope 組裝完成"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 5,
+    "ModuleRef": "A4",
+    "StepType": "normal",
+    "StepAction": "回傳統一 envelope 給 MCP 呼叫者",
+    "LinkInputType": ["track", "track"],
+    "LinkInputNumber": [3, 4],
+    "LinkOutputNumber": [],
+    "LinkOutputType": "track",
+    "Condition": [],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 6,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "fail-fast 回 INVALID_PARAMS(零後端呼叫)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [],
+    "LinkOutputType": "track",
+    "Condition": [],
+    "SubGrafcet": []
+  }
+]

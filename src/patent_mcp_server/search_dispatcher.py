@@ -17,6 +17,7 @@ import asyncio
 import logging
 import re
 import time
+from datetime import date, timedelta
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -108,10 +109,35 @@ def normalize_query(**kwargs: Any) -> QuerySpec:
     spec.num = max(1, int(spec.num or 30))
     spec.skip = max(0, int(spec.skip or 0))
     spec.allow_scraping = bool(spec.allow_scraping)
+    # date normalization: GPSS ID / EPO pd / gpatents all expect bare YYYYMMDD.
+    # Callers naturally pass ISO 2023-01-01; an un-stripped hyphen makes GPSS
+    # return zero_hits and silently falls the ladder through to EPO's global
+    # index (wrong-jurisdiction pollution). Normalize once, at the single entry.
+    spec.date_from = _normalize_date(spec.date_from)
+    spec.date_to = _normalize_date(spec.date_to)
     if spec.databases:
         spec.databases = [str(d).strip() for d in spec.databases if str(d).strip()]
         spec.databases = spec.databases or None
     return spec
+
+
+# GPSS-exclusive database prefixes: these jurisdictions are only served by the
+# TIPO GPSS backend. EPO's global index does NOT honor a `databases` filter, so
+# when a caller scopes strictly to these, an EPO fallthrough would return
+# out-of-jurisdiction hits (e.g. a PL/EP case) — worse than an honest miss.
+_GPSS_ONLY_COUNTRIES = frozenset({"CN", "TW"})
+
+
+def _normalize_date(v: Optional[str]) -> Optional[str]:
+    """Coerce a date bound to bare YYYYMMDD (strip -, /, whitespace).
+
+    Accepts '2023-01-01', '2023/01/01', '20230101'. Returns None for empty /
+    unparseable input rather than passing a malformed token to the backends.
+    """
+    if not v:
+        return None
+    digits = re.sub(r"\D", "", str(v))
+    return digits or None
 
 
 # ── provenance helpers ──────────────────────────────────────────────
@@ -199,6 +225,8 @@ async def _run_gpss(spec: QuerySpec, gpss_client: Any) -> Tuple[List[Dict[str, A
 
 BULK_EXPORT_MAX = 5000          # num hard ceiling (DD-2, TIPO quota guard)
 _BULK_PAGE = 200                # per-page expQty (stable value; paginate to reach num)
+_BULK_PAGE_RETRIES = 3          # per-page transient-error retries before giving up (no source fallback)
+_BULK_PAGE_BACKOFF_BASE = 2.0   # exp-backoff base seconds: 2s / 4s / 8s
 _BULK_FIELDS = "PN,AN,ID,AD,PR,TI,AB,CL,IC,CS,UC,PA,IN"  # forced full fields (DD-3)
 
 
@@ -307,27 +335,196 @@ async def bulk_export(spec: QuerySpec, *, gpss_client: Any) -> Dict[str, Any]:
                      list(SOURCE_GAPS.get("gpss", [])), total)
 
 
-async def _run_epo(spec: QuerySpec, epo_client: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[str]]:
-    parts: List[str] = []
+# ── keyword-aware bulk harvest ──────────────────────────────────────
+# Distinct from bulk_export: this DELIBERATELY keeps the keyword + field-level
+# `not (...)` narrowing (bulk_export drops it per DD-4). Use when a research
+# harvest's relevance hinges on a keyword recall-set + NOT exclusion (e.g. the
+# anomaly-noncontact prior-art first-formula: 3-axis OR AND detection AND
+# not(industrial-scene words)) that a pure classification axis cannot express.
+# Same server-side auto-pagination as bulk_export → no dialog turn-budget burn.
+# GPSS-only, official miss is a true zero, NEVER falls back to the scraper.
+
+async def _bulk_pull_gpss_kw(
+    spec: QuerySpec, gpss_client: Any,
+) -> Tuple[List[Dict[str, Any]], Optional[int], List[Dict[str, Any]]]:
+    """Auto-paginate a keyword-AND-classification GPSS query to exhaustion or num.
+
+    Identical pagination contract to _bulk_pull_gpss, but the keyword condition
+    IS added (the whole point). date is normalized upstream (normalize_query),
+    so ID is bare YYYYMMDD here. An empty first page is a true zero (caller must
+    NOT fall back). Returns (records, total, per-page provenance).
+    """
+    from patent_mcp_server.gpss.client import GPSSCondition
+
+    conditions: List[Any] = []
     if spec.cpc:
-        parts.append(f"cpc={spec.cpc}")
+        conditions.append(GPSSCondition("CS", spec.cpc))
     if spec.ipc:
-        parts.append(f"ic={spec.ipc}")
+        conditions.append(GPSSCondition("IC", spec.ipc))
+    if spec.uspc:
+        conditions.append(GPSSCondition("UC", spec.uspc))
     if spec.keyword:
-        kw = spec.keyword
-        parts.append(f'txt="{kw}"' if " " in kw else f"txt={kw}")
+        conditions.append(GPSSCondition(spec.keyword_field or "TI/AB", spec.keyword))
+    if spec.inventor_country:
+        conditions.append(GPSSCondition("IY", spec.inventor_country))
     if spec.applicant:
-        pa = spec.applicant
-        parts.append(f'pa="{pa}"' if " " in pa else f"pa={pa}")
-    if spec.pub_number:
-        parts.append(f"pn={spec.pub_number}")
-    if spec.date_from and spec.date_to:
-        parts.append(f'pd within "{spec.date_from} {spec.date_to}"')
-    elif spec.date_from:
-        parts.append(f"pd >= {spec.date_from}")
-    elif spec.date_to:
-        parts.append(f"pd <= {spec.date_to}")
-    cql = " and ".join(parts)
+        conditions.append(GPSSCondition("AX", spec.applicant))
+    if spec.date_from or spec.date_to:
+        conditions.append(GPSSCondition("ID", f"{spec.date_from or ''}:{spec.date_to or ''}"))
+
+    target = min(spec.num, BULK_EXPORT_MAX)
+    records: List[Dict[str, Any]] = []
+    prov: List[Dict[str, Any]] = []
+    skip = spec.skip
+    total: Optional[int] = None
+    while len(records) < target:
+        cur = min(_BULK_PAGE, target - len(records))
+        # Per-page transient-error retry with exponential backoff. GPSS
+        # intermittently returns non-JSON (rate-limit / transient) for a page
+        # whose data is otherwise fetchable (verified: patent_search on the same
+        # skip succeeds). Retry the SAME page up to _BULK_PAGE_RETRIES times
+        # before giving up, so one transient hiccup no longer truncates the
+        # whole harvest. Still GPSS-only, still true-zero semantics — no source
+        # fallback is introduced.
+        res: Dict[str, Any] = {}
+        elapsed = 0
+        page_ok = False
+        for attempt in range(_BULK_PAGE_RETRIES + 1):
+            t0 = time.monotonic()
+            res = await gpss_client.search(
+                conditions=conditions, databases=spec.databases,
+                fields=_BULK_FIELDS, num=cur, skip=skip, fmt="json",
+            )
+            elapsed = int((time.monotonic() - t0) * 1000)
+            if res.get("success"):
+                page_ok = True
+                break
+            # An official zero-hit is NOT a transient error — do not retry.
+            if res.get("status") == "success":
+                break
+            if attempt < _BULK_PAGE_RETRIES:
+                backoff = _BULK_PAGE_BACKOFF_BASE * (2 ** attempt)
+                logger.warning(
+                    "bulk_harvest transient error at skip=%d (attempt %d/%d): %s — retrying in %.1fs",
+                    skip, attempt + 1, _BULK_PAGE_RETRIES, res.get("error") or res.get("message"), backoff,
+                )
+                _raw = res.get("raw")
+                prov.append(_entry("gpss", "retry",
+                                   f"skip={skip} attempt={attempt + 1}/{_BULK_PAGE_RETRIES} "
+                                   f"{_error_reason(Exception(str(res.get('error') or res.get('message'))))}"
+                                   + (f" | raw[:200]={_raw[:200]!r}" if _raw else ""),
+                                   elapsed_ms=elapsed))
+                await asyncio.sleep(backoff)
+        if not page_ok:
+            if res.get("status") == "success":
+                prov.append(_entry("gpss", "miss", "zero_hits", elapsed_ms=elapsed))
+                if not records:
+                    return [], _to_int(res.get("total")) or 0, prov
+                break
+            if records:
+                _raw = res.get("raw")
+                prov.append(_entry("gpss", "error",
+                                   f"skip={skip} exhausted {_BULK_PAGE_RETRIES} retries: "
+                                   f"{_error_reason(Exception(str(res.get('error') or res.get('message'))))}"
+                                   + (f" | raw[:300]={_raw[:300]!r}" if _raw else ""),
+                                   elapsed_ms=elapsed))
+                logger.warning("bulk_harvest pagination failed at skip=%d after %d retries: %s",
+                               skip, _BULK_PAGE_RETRIES, res.get("error") or res.get("message"))
+                break
+            raise BackendError(str(res.get("error") or res.get("message") or "GPSS bulk harvest failed"))
+        page = _st.gpss_to_records(res)
+        total = _to_int(res.get("total"))
+        if not page:
+            prov.append(_entry("gpss", "miss" if not records else "hit",
+                               "axis_exhausted", elapsed_ms=elapsed))
+            break
+        prov.append(_entry("gpss", "hit", f"page skip={skip} n={len(page)}",
+                           elapsed_ms=elapsed))
+        records.extend(page)
+        skip += len(page)
+        if total is not None and skip >= total:
+            break
+        await asyncio.sleep(1.0)
+    return records[:target], total, prov
+
+
+async def bulk_harvest(spec: QuerySpec, *, gpss_client: Any) -> Dict[str, Any]:
+    """Keyword-aware bulk harvest entry (mirrors bulk_export envelope).
+
+    Requires at least one hard axis (keyword OR a classification axis). GPSS-only:
+    an official miss is a true zero and NEVER falls back to the scraper. Unlike
+    bulk_export, the keyword + field-level not(...) narrowing is preserved.
+    """
+    if not (spec.keyword or spec.ipc or spec.cpc or spec.uspc):
+        return _envelope(
+            False, [], None, [], [], None, error_code="INVALID_PARAMS",
+            message="批次收割需至少一個檢索軸 (keyword/ipc/cpc/uspc)",
+        )
+    if not gpss_client.configured():
+        return _envelope(
+            False, [], None,
+            [_entry("gpss", "skipped", "not_configured")], [], None,
+            error_code="GPSS_NOT_CONFIGURED",
+            message="批次收割僅走 TIPO GPSS 官方端點，需設 GPSS_USER_CODE",
+        )
+    try:
+        records, total, prov = await _bulk_pull_gpss_kw(spec, gpss_client)
+    except BackendError as e:
+        return _envelope(
+            False, [], None, [_entry("gpss", "error", _error_reason(e))],
+            [], None, error_code="GPSS_ERROR", message=str(e),
+        )
+    if not records:
+        return _envelope(
+            True, [], "gpss", prov, list(SOURCE_GAPS.get("gpss", [])), total or 0,
+        )
+    return _envelope(True, records, "gpss", prov,
+                     list(SOURCE_GAPS.get("gpss", [])), total)
+
+
+def _keyword_to_cql(keyword: str, field: str = "txt") -> str:
+    """Translate a GPSS-style boolean keyword expression into EPO CQL.
+
+    GPSS keyword syntax mixes bare terms, quoted phrases, parentheses and the
+    boolean operators AND / OR / NOT. EPO OPS CQL expresses the same thing but
+    each search TERM must carry its own field prefix, e.g.
+        (radar OR mmwave) AND (fall OR "vital sign")
+    becomes
+        (txt=radar or txt=mmwave) and (txt=fall or txt="vital sign")
+
+    The previous implementation wrapped the whole string in a single
+    ``txt="..."`` phrase field, which produced invalid CQL whenever a boolean
+    operator was present (EPO returned parse error). This tokenizer keeps
+    phrase-internal spaces quoted while turning operator spaces into real CQL
+    boolean joins.
+    """
+    if not keyword:
+        return ""
+    # Tokenize: quoted phrases, parens, and bare runs (which may glue to parens).
+    raw = re.findall(r'"[^"]*"|\(|\)|[^()\s]+', keyword)
+    ops = {"and", "or", "not"}
+    out: List[str] = []
+    for tok in raw:
+        low = tok.lower()
+        if tok in ("(", ")"):
+            out.append(tok)
+        elif low in ops:
+            out.append(low)
+        elif tok.startswith('"') and tok.endswith('"'):
+            # quoted phrase -> keep the quotes as a CQL phrase term
+            inner = tok[1:-1].strip()
+            if inner:
+                out.append(f'{field}="{inner}"')
+        else:
+            out.append(f"{field}={tok}")
+    # Join: no space before ')' or after '(' keeps CQL tidy; simple join is valid.
+    cql = " ".join(out)
+    cql = cql.replace("( ", "(").replace(" )", ")")
+    return cql
+
+
+async def _run_epo(spec: QuerySpec, epo_client: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[str]]:
+    cql = _epo_build_cql(spec)
 
     n = min(spec.num, 100)
     res = await epo_client.search(cql, range_=f"{spec.skip + 1}-{spec.skip + n}")
@@ -348,6 +545,404 @@ async def _run_epo(spec: QuerySpec, epo_client: Any) -> Tuple[List[Dict[str, Any
             b = {}
         records.append(_st.epo_biblio_to_record(pub, b if b.get("success") else {}))
     return records, total, note
+
+
+# ── EPO server-side bulk harvest (mirrors GPSS bulk_harvest) ────────
+# EPO OPS caps a single search page at 100 refs and skip at ~2000; each ref
+# needs a second-stage biblio under the 15/min throttle. A dialog-driven full
+# harvest therefore burns many manual num/skip round-trips (and each num=2000
+# call times out on the biblio fan-out). This loop paginates + fetches biblio
+# server-side so one call lands a whole date slice, capped at the OPS skip wall.
+_EPO_SEARCH_PAGE = 100          # OPS per-search-page ref ceiling
+_EPO_SKIP_WALL = 2000           # OPS deep-paging wall (skip>=2000 -> HTTP 400)
+_EPO_PAGE_RETRIES = 2           # transient (429/500) retries per page
+_EPO_PAGE_BACKOFF_BASE = 4.0    # OPS throttle-friendly backoff: 4s / 8s
+_EPO_BIBLIO_SLEEP = 0.2         # inter-biblio spacing (stay under 15/min bursts)
+
+
+def _epo_build_cql(spec: QuerySpec) -> str:
+    """Build the EPO CQL string from a QuerySpec (shared by _run_epo + harvest)."""
+    parts: List[str] = []
+    if spec.cpc:
+        parts.append(f"cpc={spec.cpc}")
+    if spec.ipc:
+        parts.append(f"ic={spec.ipc}")
+    if spec.keyword:
+        cql_kw = _keyword_to_cql(spec.keyword)
+        if cql_kw:
+            parts.append(cql_kw)
+    if spec.applicant:
+        pa = spec.applicant
+        parts.append(f'pa="{pa}"' if " " in pa else f"pa={pa}")
+    if spec.pub_number:
+        parts.append(f"pn={spec.pub_number}")
+    if spec.date_from and spec.date_to:
+        parts.append(f'pd within "{spec.date_from} {spec.date_to}"')
+    elif spec.date_from:
+        parts.append(f"pd >= {spec.date_from}")
+    elif spec.date_to:
+        parts.append(f"pd <= {spec.date_to}")
+    return " and ".join(parts)
+
+
+async def _bulk_pull_epo(
+    spec: QuerySpec, epo_client: Any,
+    absorb_cb: Optional[Any] = None,
+) -> Tuple[List[Dict[str, Any]], Optional[int], List[Dict[str, Any]], int]:
+    """Auto-paginate an EPO CQL query, fetching biblio for every ref, until the
+    target num, the total, or the OPS skip wall (~2000) is reached.
+
+    Returns (records, total, per-page provenance, next_skip). A per-page
+    transient error is retried with backoff; a hard failure stops the harvest
+    but keeps whatever landed (no source fallback — EPO-only, honest partial).
+
+    absorb_cb: optional callable(records_page) invoked AFTER each page's biblio
+    fan-out completes, so rows land in patentdb incrementally — a client-side
+    timeout on the biblio fan-out (hundreds of seconds for a full slice) no
+    longer discards everything. `next_skip` lets the caller resume the pull.
+    """
+    cql = _epo_build_cql(spec)
+    if not cql:
+        raise BackendError("EPO bulk harvest needs at least one axis")
+
+    target = min(spec.num, _EPO_SKIP_WALL)
+    records: List[Dict[str, Any]] = []
+    prov: List[Dict[str, Any]] = []
+    skip = spec.skip
+    total: Optional[int] = None
+    while len(records) < target and skip < _EPO_SKIP_WALL:
+        cur = min(_EPO_SEARCH_PAGE, target - len(records), _EPO_SKIP_WALL - skip)
+        res: Dict[str, Any] = {}
+        page_ok = False
+        elapsed = 0
+        for attempt in range(_EPO_PAGE_RETRIES + 1):
+            t0 = time.monotonic()
+            res = await epo_client.search(cql, range_=f"{skip + 1}-{skip + cur}")
+            elapsed = int((time.monotonic() - t0) * 1000)
+            if res.get("success"):
+                page_ok = True
+                break
+            if attempt < _EPO_PAGE_RETRIES:
+                backoff = _EPO_PAGE_BACKOFF_BASE * (2 ** attempt)
+                logger.warning(
+                    "epo bulk_harvest transient error at skip=%d (attempt %d/%d): %s — retrying in %.1fs",
+                    skip, attempt + 1, _EPO_PAGE_RETRIES, res.get("error"), backoff,
+                )
+                prov.append(_entry("epo", "retry",
+                                   f"skip={skip} attempt={attempt + 1}/{_EPO_PAGE_RETRIES} "
+                                   f"{res.get('error')}", elapsed_ms=elapsed))
+                await asyncio.sleep(backoff)
+        if not page_ok:
+            if records:
+                prov.append(_entry("epo", "error",
+                                   f"skip={skip} exhausted {_EPO_PAGE_RETRIES} retries: {res.get('error')}",
+                                   elapsed_ms=elapsed))
+                logger.warning("epo bulk_harvest pagination failed at skip=%d: %s",
+                               skip, res.get("error"))
+                break
+            raise BackendError(str(res.get("error") or "EPO bulk harvest failed"))
+        pubs = res.get("results") or []
+        total = _to_int(res.get("total"))
+        if not pubs:
+            prov.append(_entry("epo", "miss" if not records else "hit",
+                               "axis_exhausted", elapsed_ms=elapsed))
+            break
+        prov.append(_entry("epo", "hit", f"page skip={skip} n={len(pubs)}",
+                           elapsed_ms=elapsed))
+        page_records: List[Dict[str, Any]] = []
+        for pub in pubs:
+            try:
+                b = await epo_client.biblio(pub)
+            except Exception as e:  # noqa: BLE001 — one biblio miss must not kill the page
+                logger.warning("EPO biblio failed for %s: %s", pub, e)
+                b = {}
+            page_records.append(_st.epo_biblio_to_record(pub, b if b.get("success") else {}))
+            await asyncio.sleep(_EPO_BIBLIO_SLEEP)
+        # Land this page NOW — a later client timeout won't discard it.
+        if absorb_cb is not None and page_records:
+            try:
+                absorb_cb(page_records)
+            except Exception as e:  # noqa: BLE001 — absorb must never break the pull
+                logger.warning("EPO bulk_harvest per-page absorb failed: %s", e)
+        records.extend(page_records)
+        skip += len(pubs)
+        if total is not None and skip >= total:
+            break
+    return records[:target], total, prov, skip
+
+
+async def epo_bulk_harvest(
+    spec: QuerySpec, *, epo_client: Any, absorb_cb: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """EPO server-side bulk harvest entry (mirrors gpss bulk_harvest envelope).
+
+    Requires at least one hard axis. EPO-only: a miss is a true zero, NEVER a
+    scraper fallback. Paginates + fetches biblio server-side up to num / total /
+    the OPS skip wall (~2000). absorb_cb lands each page incrementally so a
+    client-side timeout on the biblio fan-out keeps whatever already landed;
+    the envelope carries `next_skip` for resuming. The MCP wrapper defaults num
+    to one page (100) so a single call stays under the client timeout.
+    """
+    if not (spec.keyword or spec.ipc or spec.cpc or spec.uspc or spec.applicant):
+        return _envelope(
+            False, [], None, [], [], None, error_code="INVALID_PARAMS",
+            message="批次收割需至少一個檢索軸 (keyword/ipc/cpc/uspc/applicant)",
+        )
+    if not epo_client.configured():
+        return _envelope(
+            False, [], None,
+            [_entry("epo", "skipped", "not_configured")], [], None,
+            error_code="EPO_NOT_CONFIGURED",
+            message="EPO 批次收割需設 EPO_CONSUMER_KEY/SECRET",
+        )
+    try:
+        records, total, prov, next_skip = await _bulk_pull_epo(
+            spec, epo_client, absorb_cb=absorb_cb)
+    except BackendError as e:
+        return _envelope(
+            False, [], None, [_entry("epo", "error", _error_reason(e))],
+            [], None, error_code="EPO_ERROR", message=str(e),
+        )
+    env = _envelope(True, records, "epo", prov,
+                    list(SOURCE_GAPS.get("epo", [])),
+                    total if records else (total or 0))
+    env["next_skip"] = next_skip
+    env["exhausted"] = bool(total is not None and next_skip >= total) or (
+        next_skip >= _EPO_SKIP_WALL)
+    return env
+
+
+# ── EPO auto date-slicing (DD-8/DD-9, issue_20260710) ───────────────
+# OPS caps deep paging at skip=2000 (HTTP 400 beyond). A query whose total
+# exceeds the wall CANNOT be pulled in one continuation chain — it must be split
+# by publication-date into slices each < wall, then each slice pulled on its own
+# (in-slice next_skip continuation). This planner ONLY count-probes (num=1, zero
+# biblio fan-out) and returns a slice plan; it NEVER pulls records. The caller
+# harvests each slice via patent_bulk(source="epo", date_from=.., date_to=..).
+_EPO_SLICE_DEPTH_CAP = 6        # year→half→quarter→month→half-month→week (DD-9)
+_EPO_SLICE_PROBE_CAP = 32       # total count-probe search calls (DD-9)
+_EPO_SLICE_SUM_TOL = 0.05       # leaf-sum vs parent-total drift tolerance (5%)
+
+
+def _parse_ymd(v: str) -> date:
+    """Parse a bare YYYYMMDD token into a date (normalize_query already stripped
+    separators, so this sees 8 digits)."""
+    return date(int(v[0:4]), int(v[4:6]), int(v[6:8]))
+
+
+def _fmt_ymd(d: date) -> str:
+    return f"{d.year:04d}{d.month:02d}{d.day:02d}"
+
+
+async def _epo_probe_total(
+    spec: QuerySpec, epo_client: Any,
+    date_from: Optional[str], date_to: Optional[str],
+    prov: List[Dict[str, Any]],
+) -> int:
+    """Count-probe one date window: a num=1 OPS search returning only `total`
+    (zero biblio fan-out). Appends a provenance entry; raises BackendError on a
+    hard search failure (fail-fast, no fallback)."""
+    probe_spec = QuerySpec(
+        cpc=spec.cpc, ipc=spec.ipc, uspc=spec.uspc,
+        keyword=spec.keyword, keyword_field=spec.keyword_field,
+        applicant=spec.applicant, pub_number=spec.pub_number,
+        date_from=date_from, date_to=date_to,
+    )
+    cql = _epo_build_cql(probe_spec)
+    if not cql:
+        raise BackendError("EPO slice_plan needs at least one axis")
+    t0 = time.monotonic()
+    res = await epo_client.search(cql, range_="1-1")
+    elapsed = int((time.monotonic() - t0) * 1000)
+    if not res.get("success"):
+        prov.append(_entry("epo", "error",
+                           f"probe {date_from}..{date_to}: {res.get('error')}",
+                           elapsed_ms=elapsed))
+        raise BackendError(str(res.get("error") or "EPO slice probe failed"))
+    total = _to_int(res.get("total")) or 0
+    prov.append(_entry("epo", "hit",
+                       f"probe {date_from or '*'}..{date_to or '*'} total={total}",
+                       elapsed_ms=elapsed))
+    return total
+
+
+async def epo_slice_plan(
+    spec: QuerySpec, *, epo_client: Any,
+) -> Dict[str, Any]:
+    """Plan EPO publication-date slices so each slice's total stays under the OPS
+    skip wall (DD-8/DD-9). Count-probe only — ZERO records pulled.
+
+    Contract:
+      • probe母數: num=1 search on spec's CQL → total (no biblio fan-out).
+      • total ≤ _EPO_SKIP_WALL → single slice (original date range or none).
+      • total > wall and no date range (date_from/date_to both absent) →
+        error_code=DATE_RANGE_REQUIRED (never guess a full-history span, 天條).
+      • total > wall with a date range → recursively BISECT the date interval on
+        mutually-exclusive cut points (left to=D, right from=D+1 day) until each
+        leaf total < wall. YYYYMMDD arithmetic via datetime.date.
+      • caps: recursion depth _EPO_SLICE_DEPTH_CAP, total probe calls
+        _EPO_SLICE_PROBE_CAP. A leaf still > wall at the cap is marked
+        truncated=True (caller may hand-split it); recursion stops there.
+      • sum_check: Σ leaf totals vs parent total; drift > 5% →
+        error_code=SLICE_INEFFECTIVE (date not honored / phantom slice).
+
+    Returns {success, total, slices:[{date_from,date_to,total,truncated?}],
+    sum_check:{sum,parent_total,ok}, probe_calls, provenance[], error_code?,
+    message?}. EPO-only, no fallback; every failure is typed fail-fast.
+    """
+    if not epo_client.configured():
+        return {
+            "success": False, "error_code": "EPO_NOT_CONFIGURED",
+            "message": "EPO slice_plan 需設 EPO_CONSUMER_KEY/SECRET",
+            "provenance": [_entry("epo", "skipped", "not_configured")],
+        }
+    if not (spec.keyword or spec.ipc or spec.cpc or spec.uspc or spec.applicant):
+        return {
+            "success": False, "error_code": "INVALID_PARAMS",
+            "message": "slice_plan 需至少一個檢索軸 (keyword/ipc/cpc/uspc/applicant)",
+            "provenance": [],
+        }
+
+    prov: List[Dict[str, Any]] = []
+    counter = {"probes": 0}
+
+    async def _probe(df: Optional[str], dt: Optional[str]) -> int:
+        counter["probes"] += 1
+        return await _epo_probe_total(spec, epo_client, df, dt, prov)
+
+    try:
+        parent_total = await _probe(spec.date_from, spec.date_to)
+    except BackendError as e:
+        return {
+            "success": False, "error_code": "EPO_ERROR",
+            "message": str(e), "provenance": prov,
+            "probe_calls": counter["probes"],
+        }
+
+    # ≤ wall → single slice (whatever date range the caller gave, or none).
+    if parent_total <= _EPO_SKIP_WALL:
+        slices = [{"date_from": spec.date_from, "date_to": spec.date_to,
+                   "total": parent_total}]
+        return {
+            "success": True, "total": parent_total, "slices": slices,
+            "sum_check": {"sum": parent_total, "parent_total": parent_total,
+                          "ok": True},
+            "probe_calls": counter["probes"], "provenance": prov,
+        }
+
+    # > wall but no date range → fail-fast, never guess a full-history span.
+    if not (spec.date_from and spec.date_to):
+        return {
+            "success": False, "error_code": "DATE_RANGE_REQUIRED",
+            "message": (f"total={parent_total} 超過 OPS skip wall "
+                        f"({_EPO_SKIP_WALL}) 但缺 date 範圍;"
+                        "請提供 date_from 且 date_to 以啟動 date 切片"),
+            "total": parent_total, "provenance": prov,
+            "probe_calls": counter["probes"],
+        }
+
+    # > wall with a date range → recursive bisection on mutually-exclusive cuts.
+    leaves: List[Dict[str, Any]] = []
+
+    async def _split(df: str, dt: str, total: int, depth: int) -> None:
+        # leaf terminates when: under wall, OR depth/probe cap reached, OR the
+        # window collapsed to a single day (can't bisect further).
+        d_from = _parse_ymd(df)
+        d_to = _parse_ymd(dt)
+        if (total <= _EPO_SKIP_WALL or depth >= _EPO_SLICE_DEPTH_CAP
+                or d_from >= d_to
+                or counter["probes"] >= _EPO_SLICE_PROBE_CAP):
+            leaf: Dict[str, Any] = {"date_from": df, "date_to": dt,
+                                    "total": total}
+            if total > _EPO_SKIP_WALL:
+                leaf["truncated"] = True
+            leaves.append(leaf)
+            return
+        # mutually-exclusive cut: left [df, mid], right [mid+1day, dt]
+        mid = d_from + (d_to - d_from) // 2
+        left_from, left_to = df, _fmt_ymd(mid)
+        right_from, right_to = _fmt_ymd(mid + timedelta(days=1)), dt
+        # budget guard: each half needs a probe; stop if the pair would blow cap.
+        if counter["probes"] + 2 > _EPO_SLICE_PROBE_CAP:
+            leaf = {"date_from": df, "date_to": dt, "total": total,
+                    "truncated": True}
+            leaves.append(leaf)
+            return
+        left_total = await _probe(left_from, left_to)
+        right_total = await _probe(right_from, right_to)
+        await _split(left_from, left_to, left_total, depth + 1)
+        await _split(right_from, right_to, right_total, depth + 1)
+
+    try:
+        await _split(spec.date_from, spec.date_to, parent_total, 0)
+    except BackendError as e:
+        return {
+            "success": False, "error_code": "EPO_ERROR",
+            "message": str(e), "provenance": prov,
+            "probe_calls": counter["probes"],
+        }
+
+    leaf_sum = sum(int(s["total"]) for s in leaves)
+    drift_ok = (parent_total == 0) or (
+        abs(leaf_sum - parent_total) <= _EPO_SLICE_SUM_TOL * parent_total)
+    sum_check = {"sum": leaf_sum, "parent_total": parent_total, "ok": drift_ok}
+    if not drift_ok:
+        return {
+            "success": False, "error_code": "SLICE_INEFFECTIVE",
+            "message": (f"leaf-sum {leaf_sum} 與母數 {parent_total} 差異 "
+                        f"> {int(_EPO_SLICE_SUM_TOL * 100)}%;date 切片在該 query "
+                        "未生效(假切),拒交殘缺切片計畫"),
+            "total": parent_total, "slices": leaves, "sum_check": sum_check,
+            "probe_calls": counter["probes"], "provenance": prov,
+        }
+    return {
+        "success": True, "total": parent_total, "slices": leaves,
+        "sum_check": sum_check, "probe_calls": counter["probes"],
+        "provenance": prov,
+    }
+
+
+async def bulk(
+    spec: QuerySpec, source: str, *,
+    gpss_client: Any, epo_client: Any, absorb_cb: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Unified bulk-harvest router (plans/patentmcp_bulk-entry-unification).
+
+    `source` is REQUIRED and explicit — {"gpss", "epo"}. Anything else (or a
+    missing value) is INVALID_PARAMS with ZERO backend calls: no implicit source
+    default, no cross-source fallback (DD-1, the fail-fast天條).
+
+    Routing (DD-2):
+      • source="gpss" + no keyword → bulk_export (classification-axis full pull)
+      • source="gpss" + keyword    → bulk_harvest (keyword収割)
+      • source="epo"               → epo_bulk_harvest (absorb_cb passed through)
+
+    The dispatcher-layer functions are reused UNCHANGED (DD-7); this router only
+    dispatches and, for GPSS, back-fills the `next_skip`/`exhausted` continuation
+    fields so the envelope is a superset uniform across both sources (DD-3). EPO
+    already carries them from epo_bulk_harvest.
+    """
+    if source not in ("gpss", "epo"):
+        return _envelope(
+            False, [], None, [], [], None, error_code="INVALID_PARAMS",
+            message="bulk 需顯式指定 source ('gpss' 或 'epo'),無預設值、無跨源 fallback",
+        )
+    if source == "epo":
+        return await epo_bulk_harvest(spec, epo_client=epo_client, absorb_cb=absorb_cb)
+    # source == "gpss": internal two-way by keyword presence (DD-2)
+    if spec.keyword:
+        env = await bulk_harvest(spec, gpss_client=gpss_client)
+    else:
+        env = await bulk_export(spec, gpss_client=gpss_client)
+    # DD-3: back-fill EPO-style continuation fields at the ROUTER layer only
+    # (bulk_export/bulk_harvest bodies untouched, DD-7). next_skip is the absolute
+    # cursor after this page-set; exhausted when total is known and reached.
+    if env.get("success"):
+        total = env.get("total")
+        next_skip = spec.skip + len(env.get("records") or [])
+        env["next_skip"] = next_skip
+        env["exhausted"] = bool(total is not None and next_skip >= total)
+    return env
 
 
 async def _run_ppubs(spec: QuerySpec, ppubs_client: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[str]]:
@@ -466,6 +1061,15 @@ async def dispatch_search(
         if name == "ppubs" and spec.databases and not any(
                 str(d).upper().startswith("US") for d in spec.databases):
             provenance.append(_entry(name, "skipped", "us_only_source"))
+            continue
+        # EPO out-of-jurisdiction guard: EPO's global index ignores the GPSS
+        # `databases` filter, so when the caller scoped strictly to GPSS-only
+        # jurisdictions (CN/TW), an EPO fallthrough returns wrong-jurisdiction
+        # hits (a PL/EP case masquerading as a CN result) and a polluted total.
+        # An honest zero_hits is correct here — never a silent cross-source rescue.
+        if name == "epo" and spec.databases and all(
+                str(d)[:2].upper() in _GPSS_ONLY_COUNTRIES for d in spec.databases):
+            provenance.append(_entry(name, "skipped", "out_of_jurisdiction"))
             continue
         t0 = time.monotonic()
         try:

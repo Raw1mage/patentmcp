@@ -1,0 +1,44 @@
+{
+  "diagram_title": "patent_bulk 統一窮盡批次入口",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "驗證與路由 bulk 請求",
+      "description": "驗證 source∈{gpss,epo} 與該源必要檢索軸;normalize_query 產生 QuerySpec;依 source(GPSS 再依 keyword 有無)路由到對應 pull 路徑",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "GPSS 窮盡拉取",
+      "description": "keyword 缺→分類軸 export(強制全欄 expFld);keyword 給→keyword 收割;expSkip 自動分頁至 num/total 窮盡",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "EPO 收割與 per-page 落地",
+      "description": "keyword 經 _keyword_to_cql 轉布林 CQL;分頁 search+逐件 biblio fan-out;每頁完成即 absorb callback 落地 patentdb",
+      "decomposition": null
+    },
+    {
+      "id": "A4",
+      "title": "組裝統一 envelope",
+      "description": "records/provenance/gaps/total + next_skip/exhausted 續撈語義 + patentdb_absorb 稽核計數",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    { "id": "AR1", "source": "EXTERNAL", "target": "A1:input", "type": "input", "label": "bulk 請求(source, 檢索軸, date, num, skip)" },
+    { "id": "AR2", "source": "EXTERNAL", "target": "A1:control", "type": "control", "label": "no-fallback 天條 / INVALID_PARAMS fail-fast" },
+    { "id": "AR3", "source": "A1:output", "target": "A2:input", "type": "output", "label": "QuerySpec (source=gpss)" },
+    { "id": "AR4", "source": "A1:output", "target": "A3:input", "type": "output", "label": "QuerySpec (source=epo)" },
+    { "id": "AR5", "source": "EXTERNAL", "target": "A2:control", "type": "control", "label": "GPSS 時段額度 / expSkip 分頁" },
+    { "id": "AR6", "source": "EXTERNAL", "target": "A3:control", "type": "control", "label": "OPS 15/min 節流 / skip wall 2000" },
+    { "id": "AR7", "source": "EXTERNAL", "target": "A2:mechanism", "type": "mechanism", "label": "GPSS client" },
+    { "id": "AR8", "source": "EXTERNAL", "target": "A3:mechanism", "type": "mechanism", "label": "EPO OPS client + absorb callback" },
+    { "id": "AR9", "source": "A2:output", "target": "A4:input", "type": "output", "label": "records+total(收尾 absorb)" },
+    { "id": "AR10", "source": "A3:output", "target": "A4:input", "type": "output", "label": "records+total+next_skip(已逐頁落地)" },
+    { "id": "AR11", "source": "A4:output", "target": "EXTERNAL", "type": "output", "label": "統一 envelope(success, records, provenance, next_skip, exhausted, patentdb_absorb)" },
+    { "id": "AR12", "source": "EXTERNAL", "target": "A4:mechanism", "type": "mechanism", "label": "patentdb COALESCE upsert" }
+  ]
+}

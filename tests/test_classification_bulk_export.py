@@ -134,11 +134,12 @@ class MissNoScraper(unittest.TestCase):
         self.assertFalse(any(p.get("scraping") for p in prov))
 
     def test_tool_level_no_scraping_key(self):
-        # full tool path: patent_bulk_export has no allow_scraping arg at all
+        # full tool path: patent_bulk(source='gpss') has no allow_scraping arg at
+        # all (patent_bulk_export is now a TOOL_RENAMED stub, DD-5).
         orig = P.gpss_client
         P.gpss_client = PagingGPSS(corpus=[])  # type: ignore
         try:
-            out = asyncio.run(P.patent_bulk_export(ipc="NOSUCH/00"))
+            out = asyncio.run(P.patent_bulk(source="gpss", ipc="NOSUCH/00"))
         finally:
             P.gpss_client = orig  # type: ignore
         self.assertTrue(out["success"])
@@ -188,7 +189,7 @@ class ToolWiring(unittest.TestCase):
         P.gpss_client = PagingGPSS(corpus=["CN1", "CN2", "CN3"])  # type: ignore
         P._pdb.import_records = fake_import  # type: ignore
         try:
-            out = asyncio.run(P.patent_bulk_export(ipc="G16H40/67", num=3))
+            out = asyncio.run(P.patent_bulk(source="gpss", ipc="G16H40/67", num=3))
         finally:
             P.gpss_client = orig_gpss  # type: ignore
             P._pdb.import_records = orig_pdb_import  # type: ignore
