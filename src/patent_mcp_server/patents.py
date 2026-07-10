@@ -2687,6 +2687,124 @@ async def epo_family(publication_number: str) -> Dict[str, Any]:
     return await epo_client.family(publication_number)
 
 
+@mcp.tool()
+async def patent_family_backfill(
+    pubnos: Optional[List[str]] = None,
+    from_pool_missing: bool = False,
+    cursor: int = 0,
+    max_calls: int = 20,
+    overwrite: bool = False,
+) -> Dict[str, Any]:
+    """Batch-backfill official INPADOC family_id into patentdb via EPO OPS.
+
+    epo_family is single-number; this orchestrates it over a list, throttles to
+    EPO OPS 15/min, and upserts family_id back into patentdb.sqlite. Bounded by
+    max_calls per invocation (MCP-timeout-safe) — loop with the returned
+    next_cursor until exhausted=true.
+
+    Args:
+        pubnos: explicit publication numbers to backfill. Ignored if
+            from_pool_missing=true.
+        from_pool_missing: if true, ignore `pubnos` and pull the patentdb rows
+            whose family_id is still NULL/empty (ordered by pubno for a stable
+            cursor). Use this to sweep the whole DB.
+        cursor: 0-based offset into the target list; pass the returned
+            next_cursor to resume. Only meaningful with from_pool_missing.
+        max_calls: max EPO family calls this invocation (default 20 ≈ <2min at
+            15/min, stays inside MCP transport timeout).
+        overwrite: re-fetch family_id even if already present.
+
+    Returns:
+        {success, done, filled, failed, skipped, calls_made, next_cursor,
+         exhausted, errors[]} — pubno-granular outcome. exhausted=true means the
+         whole target set is processed; done=calls_made hit max_calls (more
+         remain, resume at next_cursor).
+    """
+    import asyncio
+
+    if not epo_client.configured():
+        return {"success": False, "error": "EPO_NOT_CONFIGURED",
+                "detail": "EPO_CONSUMER_KEY/SECRET not set"}
+
+    # ── build the target list ──────────────────────────────────────
+    if from_pool_missing:
+        conn = _pdb._connect()
+        try:
+            if overwrite:
+                rows = conn.execute(
+                    "SELECT pubno FROM patents ORDER BY pubno"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT pubno FROM patents "
+                    "WHERE family_id IS NULL OR TRIM(family_id)='' ORDER BY pubno"
+                ).fetchall()
+            targets = [r["pubno"] for r in rows]
+        finally:
+            conn.close()
+    else:
+        targets = [p.strip() for p in (pubnos or []) if p and p.strip()]
+
+    if not targets:
+        return {"success": True, "done": 0, "filled": 0, "failed": 0,
+                "skipped": 0, "calls_made": 0, "next_cursor": cursor,
+                "exhausted": True, "errors": [],
+                "note": "no targets (empty list or all backfilled)"}
+
+    total = len(targets)
+    start = max(0, cursor)
+    filled = failed = skipped = calls_made = 0
+    errors: List[Dict[str, Any]] = []
+    i = start
+
+    while i < total and calls_made < max_calls:
+        pub = targets[i]
+        # skip already-filled when not overwriting (explicit pubnos path)
+        if not overwrite and not from_pool_missing:
+            existing = _pdb.query(publication_number=pub)
+            if existing.get("found"):
+                fid = (existing.get("patent") or {}).get("family_id")
+                if fid and str(fid).strip():
+                    skipped += 1
+                    i += 1
+                    continue
+
+        try:
+            res = await epo_client.family(pub)
+            calls_made += 1
+            if res.get("success") and res.get("family_id"):
+                _pdb.put(pub, fields={"family_id": str(res["family_id"])},
+                         overwrite=overwrite)
+                filled += 1
+            else:
+                failed += 1
+                errors.append({"pubno": pub,
+                               "error": res.get("error") or "no_family_id"})
+        except Exception as e:  # noqa: BLE001
+            calls_made += 1
+            failed += 1
+            errors.append({"pubno": pub, "error": str(e)})
+
+        i += 1
+        # throttle: EPO OPS 15/min → ~4s/call, only when more calls follow
+        if i < total and calls_made < max_calls:
+            await asyncio.sleep(4.2)
+
+    exhausted = i >= total
+    return {
+        "success": True,
+        "done": calls_made,
+        "filled": filled,
+        "failed": failed,
+        "skipped": skipped,
+        "calls_made": calls_made,
+        "next_cursor": i,
+        "exhausted": exhausted,
+        "total_targets": total,
+        "errors": errors[:50],
+    }
+
+
 @mcp.tool(annotations=_RO)
 async def epo_biblio(publication_number: str) -> Dict[str, Any]:
     """Get official bibliographic data + abstract for a publication via EPO OPS.

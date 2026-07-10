@@ -173,6 +173,12 @@ class EPOClient:
         members = fam.get("ops:family-member", [])
         if isinstance(members, dict):
             members = [members]
+        # EPO OPS carries @family-id on the family-member node, NOT on the
+        # ops:patent-family container. Read it from the first member (all
+        # INPADOC members of one invention share the same family-id).
+        family_id = fam.get("@family-id")
+        if not family_id and members:
+            family_id = members[0].get("@family-id")
         seen, out = set(), []
         for m in members:
             dids = m.get("publication-reference", {}).get("document-id", [])
@@ -184,7 +190,7 @@ class EPOClient:
                     if cc and num and key not in seen:
                         seen.add(key)
                         out.append(f"{cc}{num}{kind}")
-        return {"success": True, "pub": pub, "family_id": fam.get("@family-id"),
+        return {"success": True, "pub": pub, "family_id": family_id,
                 "count": len(out), "members": out}
 
     # ── biblio (+ abstract) ─────────────────────────────────────────
