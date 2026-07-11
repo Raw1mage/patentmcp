@@ -39,4 +39,4 @@
 - 標出疑點交人類複核;**AI 不做最終裁決**。
 
 ## 8. 交付
-- 說明書以 markdown 起草 → docxmcp 組裝成 docx(或 stage_file 落地)→ 回 token+download_url handle。人類可讀文件是交付契約。
+- 說明書以 markdown 起草(src 落專案 `output/`)→ docxmcp 組裝成 docx → 依 `../SKILL.md`「交付物落點與版本管理契約」落**專案根目錄**,檔名帶版號(如 `<案名>_說明書_v1.docx`);改版時舊版移根層 `.history/`,src 改版備份走 `output/.history/`。人類可讀文件是交付契約。

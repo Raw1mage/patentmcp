@@ -1,6 +1,6 @@
 # Flow: Prior-Art Landscape Search(三地前案地圖檢索)
 
-把一個技術主題,變成 **(1) 一份可稽核的專利池 Excel** + **(2) 一份含逐字 Claim 1 與檢索方法章的技術洞察報告 DOCX**,全程落在一個**固化工作資料夾**內(中間產物 + 交付物分層留存,可復現、可交接)。
+把一個技術主題,變成 **(1) 一份可稽核的專利池 Excel** + **(2) 一份含逐字 Claim 1 與檢索方法章的技術洞察報告 DOCX**。中間產物全程落在一個**固化工作資料夾**內(可復現、可交接);最終交付物依 **`../SKILL.md`「交付物落點與版本管理契約」**提升到專案根目錄、帶版號後綴,改版舊版移根層 `.history/`。
 
 > 這是 `screening.md`「landscape」子情境的**重型交付版**。輕量查新(出一張 scored CSV)仍走 `screening.md`;要正式 Excel 池 + 技術洞察報告 DOCX 走本 flow。
 
@@ -10,7 +10,7 @@
 
 每個檢索任務建立一個工作資料夾,結構固定。`04_report/` 直接採 docxmcp 文字文件 package 慣例(`manifest.json` + `body.md` + `media/`),使其能無痛餵進 docxmcp Mode A assemble。
 
-> **落點(MUST)**:工作資料夾根 `priorart_<topic>/` **一律建在專案的 `output/` 底下**(即 `output/priorart_<topic>/`),**不得**散落在專案根目錄(cwd 根)。理由:`priorart_<topic>/` 整包是任務的「中間產物 + 衍生交付物」(原始檢索 JSON、候選池、素材圖、報告 package、最終 DOCX/XLSX),全部屬於產出物範疇;專案根目錄只保留使用者輸入面(`input/`)、最終呈交給使用者的成品,以及計畫治理檔(`plans/`)。把工作資料夾落在根層會污染交付目錄根、混淆「輸入 vs 產出」邊界。若專案無 `output/` 則先建立。
+> **落點(MUST)**:工作資料夾根 `priorart_<topic>/` **一律建在專案的 `output/` 底下**(即 `output/priorart_<topic>/`),**不得**散落在專案根目錄(cwd 根)。理由:`priorart_<topic>/` 整包是任務的**中間產物 src**(原始檢索 JSON、候選池、素材圖、報告 package、xlsx 建表源);專案根目錄只保留使用者輸入面(`input/`)、**最終交付物(帶版號,見 `../SKILL.md` 交付契約)**、計畫治理檔(`plans/`)與 `.history/`。把工作資料夾落在根層會污染交付目錄根、混淆「輸入 vs 產出」邊界。若專案無 `output/` 則先建立。重建/大改整包 src 前,舊版先移 `output/.history/priorart_<topic>_v<N>/`。
 
 ```
 output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 output/ 下)
@@ -32,9 +32,19 @@ output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 
 │   ├── manifest.json                ← {"format":"docx","title":...,"body":"body.md","media_dir":"media"}
 │   ├── body.md                      ← 報告全文(完整 #/##/### 階層,含 §1 檢索方法復現章)
 │   └── media/                       ← 報告引用的圖檔(從 03_assets/figures 複製,引用寫 media/xxx.png)
-└── 99_deliverables/                 ← 最終交付物
-    ├── <topic>_專利池.xlsx
-    └── <topic>_技術洞察報告.docx
+└── (無 99_deliverables/ —— 最終交付物不留在工作資料夾內,見下方交付落點)
+```
+
+**最終交付物落點(舊 `99_deliverables/` 慣例已廢除,2026-07-11)**:
+
+```
+<專案根>/
+├── <topic>_專利池_v1.xlsx              ← 最終交付物:根目錄 + 版號後綴
+├── <topic>_技術洞察報告_v1.docx
+├── .history/                            ← 改版時舊版交付物移入此處
+└── output/
+    ├── priorart_<topic>/                ← 中間產物 src(上方樹)
+    └── .history/                        ← src package 改版備份
 ```
 
 **為何 04_report 要對齊 docxmcp**:docxmcp `decompose` 產出的文字文件 package 就是 `manifest.json` + `body.md`(或 `chapters/*.md`)+ `media/` + `outline.md` + `content_list.json`。報告 package 採同結構 → tar 上傳即可直接 `assemble`,且日後若要反向 `decompose` 修訂也同構。詳見 `../reference/priorsearch/docx-assembly.md`。
@@ -211,10 +221,11 @@ output/priorart_<topic>/             ← 工作資料夾根(一案一夾,落在 
    - **US 案次選**:`uspto_patents(method="ppubs_get_full_document", publication_number="US...")`。
 6. **代表圖(圖檔影像)**：優先呼叫 `gpss_download_representative_figure` (TW 案優先，見 §5 與 `../reference/priorsearch/pdf-figure-extraction.md`) 取得絕對圖檔網址並完成下載。
 
-### D. 交付物產出 → `99_deliverables/`
+### D. 交付物產出 → 專案根目錄(帶版號;舊 `99_deliverables/` 已廢除)
 > **交付前最終強制閘**：再跑一次 `search_audit(matrix_log_path="01_search/matrix-log.jsonl", campaign_path="00_campaign.md")`,**verdict 必須 PASS**。這道閘與下方 docx probe `ok=True` 並列——任一不過,不得宣稱交付完成。檢索強度未達標的報告是不合格品,不是「先交再補」。
-7. **Excel 專利池**(`xlsx` skill / openpyxl):書目主表(格式化/autofilter/凍結首列/三地色票)+ 統計分頁(國別/情境/IPC/年份)。產出後 **LibreOffice recalc** 驗證零錯誤。
-8. **技術洞察報告 DOCX**(docxmcp **Mode A**,組 package 於 `04_report/`):流程見 `../reference/priorsearch/docx-assembly.md`,**probe 驗證 `ok=True` 才算交付**。報告章節見 §4。
+7. **Excel 專利池**(`xlsx` skill / openpyxl):書目主表(格式化/autofilter/凍結首列/三地色票)+ 統計分頁(國別/情境/IPC/年份)。產出後 **LibreOffice recalc** 驗證零錯誤。落點:**`<專案根>/<topic>_專利池_v<N>.xlsx`**。
+8. **技術洞察報告 DOCX**(docxmcp **Mode A**,組 package 於 `04_report/`):流程見 `../reference/priorsearch/docx-assembly.md`,**probe 驗證 `ok=True` 才算交付**。報告章節見 §4。落點:**`<專案根>/<topic>_技術洞察報告_v<N>.docx`**。
+9. **版本與改版**(依 `../SKILL.md` 交付契約):首版 `v1`;改版時先把根目錄舊版移入 `<專案根>/.history/`,再落 `v<N+1>` 新版;對應 src(`04_report/` 等)若重建,舊版移 `output/.history/`。交付前跑 SKILL.md 契約§5 完工自檢。
 
 ## 4. 報告章節(§1 為使用者強制要求)
 

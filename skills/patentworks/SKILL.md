@@ -181,7 +181,7 @@ disclosure(交底書)→ screening(查新)→ analysis(分析)→ drafting(起�
 >
 > **與 global/local 池區隔的關係(使用者天條 2026-07-10):** global patentdb「盡量吸」(跨專案中央書目庫,所有輪次所有軸的 records 都進);local 池「需要分析才從 global 撈出來建」(= `pool_membership.jsonl` 界定哪些 pubno 屬本案 + provenance)。精雕迴圈的①在 global 層滾大,②③④⑤在 local 層精雕。**評分/標記是 by-project 產物,留 local 池,不污染 global 庫。**
 
-1. **交付物是人類可讀的成品**(screening = scored CSV;drafting = 說明書文件),一律經 patentmcp `stage_file` / docxmcp token+blob handle 交付,bytes 不過 context。
+1. **交付物是人類可讀的成品**(screening = scored 表;drafting = 說明書文件),一律經 patentmcp `stage_file` / docxmcp token+blob handle 交付,bytes 不過 context。**落點、格式、版號、改版備份一律依下方「交付物落點與版本管理契約」**。
 2. **法域意識**:檢索預設 US/CN(TW 低價值);起草須先定目標法域,載入 `reference/drafting/common.md` + 對應法域檔。
 3. **法遵以 skill 知識處理,不做工具**:合規/法條要點寫在 `reference/drafting/{common,tw,cn,us,ep}.md`,起草時逐條自檢。
 4. **AI 做預篩/起草草稿 + 解釋,人類複核裁決**(專利有法律份量)。
@@ -229,14 +229,47 @@ disclosure(交底書)→ screening(查新)→ analysis(分析)→ drafting(起�
 
 人類從業流程與 AI 對應見 `../patent-practitioner-workflow.md`。
 
+## 交付物落點與版本管理契約(Deliverable Contract,全 flow 適用)
+
+> **使用者天條(2026-07-11,覆蓋各 flow 既有落點慣例)**:交付物與中間產物的落點、格式、版本管理一律依本節。screening / priorsearch / analysis / disclosure / drafting 全部適用;flow 檔與本節矛盾時以本節為準。
+
+**1. 最終交付物 → 專案根目錄,人類可讀格式,帶版號後綴**
+
+- 格式限 **`docx / pdf / png / xlsx / pptx` 等人類直接開啟的成品格式**。agent 工作表(CSV / JSON / JSONL / md)是中間產物,**不得**當最終交付物呈交——要交表格就轉 xlsx,要交報告就組 docx/pdf。
+- 一律落**專案根目錄(cwd 根)**,不埋在 `output/` 或工作資料夾深處。
+- 檔名一律帶版號後綴:**`<主題>_<類型>_v<N>.<ext>`**(如 `長照聲音偵測_技術洞察報告_v1.docx`、`長照聲音偵測_專利池_v1.xlsx`)。首版即 `v1`,不允許無版號交付物。
+
+**2. 改版 → 舊版移入根層 `.history/`**
+
+- 交付物出新版時:先把根目錄的舊版**移入專案根的 `.history/`**(無則建立),再把版號 +1 的新版放根目錄。
+- 根目錄任何時刻只保留每個交付物的**最新一版**;全部歷史版本在 `.history/` 可追溯。**禁止**直接覆蓋或刪除舊版。
+
+**3. 中間產物 src → `output/`,改版走 `output/.history/`**
+
+- 交付物的**中間產物 / src 源檔**(檢索 raw JSON、matrix-log、candidates.csv、shortlist.json、統計圖 PNG 源、docxmcp Mode A report package、xlsx 建表源…)一律落 `output/`(固化工作資料夾如 `output/priorart_<topic>/`)。
+- src 改版同樣備份:重建 / 大改一個 src package 前,先把舊版移入 **`output/.history/<名稱>_v<N>/`**,再改。
+- **版本可追溯性**:根目錄 `..._v2.docx` 必須能從 `output/` 內對應 v2 的 src 復現;src 與交付物版號要對得上。
+
+**4. 專案根目錄衛生**
+
+- 根目錄只允許:使用者輸入(`input/`)、**最新版交付物(帶版號)**、治理檔(`plans/`、`specs/`)、`.history/`、`output/`。
+- 中間產物散落根目錄 = 違規;交付物埋在 `output/` 深處未提升到根 = 交付未完成。
+
+**5. 完工自檢(交付前必跑)**
+
+1. 根目錄每個交付物都是 `docx/pdf/png/xlsx/pptx` 等成品格式且帶 `_v<N>` 版號?
+2. 若為改版:舊版已移入 `.history/`,根目錄無同名多版並存?
+3. `output/` 內有對應版號的 src,可復現交付物?
+4. 無 CSV/JSON/md 被當最終交付物呈交?
+
 ## 專利工作池資料樹規範 (Data Tree Specification)
 
-> **單一真相在 `flows/priorsearch.md §0`。** 正式 landscape/前案地圖任務的固化工作資料夾結構(`priorart_<topic>/` 的 `00_campaign.md` / `01_search/`(含 `matrix-log.jsonl` schema) / `02_pool/`(含 candidates.csv 欄位格式) / `03_assets/`(含 5 張統計圖命名) / `04_report/`(docxmcp Mode A package) / `99_deliverables/`)一律以該檔為準,本檔不再平行定義第二套目錄,以免漂移。
+> **單一真相在 `flows/priorsearch.md §0`。** 正式 landscape/前案地圖任務的固化工作資料夾結構(`priorart_<topic>/` 的 `00_campaign.md` / `01_search/`(含 `matrix-log.jsonl` schema) / `02_pool/`(含 candidates.csv 欄位格式) / `03_assets/`(含 5 張統計圖命名) / `04_report/`(docxmcp Mode A package))一律以該檔為準,本檔不再平行定義第二套目錄,以免漂移。最終交付物不在工作資料夾內(舊 `99_deliverables/` 已廢除)——落點依上方「交付物落點與版本管理契約」。
 
 要點摘錄(細節見 priorsearch.md §0):
 
 - **工作資料夾根落 `output/`(MUST)**:整包 `priorart_<topic>/` 一律建在專案的 `output/priorart_<topic>/`,**不得**散落專案根目錄(cwd 根)。它整包屬「中間產物 + 衍生交付物」,專案根只留 `input/`(使用者輸入)、最終呈交成品與 `plans/`(治理)。細節與理由見 priorsearch.md §0「落點」。
-- **交付物 vs 中間產物物理隔離**:交付物(`<topic>_專利池.xlsx` + `<topic>_技術洞察報告.docx`)落 `99_deliverables/`;檢索中間產物分層落 `01_search/`(原始 JSON + `matrix-log.jsonl`)、`02_pool/`(candidates.csv + shortlist.json)、`03_assets/`(figures + patents)。
+- **交付物 vs 中間產物物理隔離**:最終交付物(`<topic>_專利池_v<N>.xlsx` + `<topic>_技術洞察報告_v<N>.docx`)依上方交付契約**落專案根目錄、帶版號,改版舊版移 `.history/`**;檢索中間產物分層落 `01_search/`(原始 JSON + `matrix-log.jsonl`)、`02_pool/`(candidates.csv + shortlist.json)、`03_assets/`(figures + patents)、`04_report/`(docx src package)。工作資料夾內**不再設 `99_deliverables/`**(舊慣例已廢除)。
 - **檢索矩陣紀錄是 `01_search/matrix-log.jsonl`**(每行一筆結構化查詢),既是復現核心,也是 `search_audit` 機檢檢索強度的唯一資料源。
 - **candidates.csv 欄位 / 5 張 HSL 統計圖命名**:見 priorsearch.md §0。
 - **04_report 對齊 docxmcp**:`manifest.json` + `body.md` + `media/`,可直接 `assemble`。

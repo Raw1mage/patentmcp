@@ -2,7 +2,7 @@
 
 > 本文記錄專利從業人員（專利工程師／檢索分析師／專利師）進行專利檢索與判讀的**實際人類流程**，作為本 repo 各 AI skill 的設計依據。先忠實描述人類怎麼做，最後一節說明 AI 該怎麼「對應而非照抄」。
 
-> **⚠️ 輸出不變式（硬性契約，無例外）**：不論 AI 內部如何處理（fan-out、可拋棄 worker、handle 化…），**任何 patent search 的最終交付物一律是 Agent 友善、人類看得懂的 CSV 表格**——這是所有檢索類型共通的產業慣例。AI 的內部方法自由，**輸出契約固定**。表須保留可稽核的原始欄位（PN/TI/AB/相關 CL/申請人/日期/CPC）並排 AI 加值欄（相關性判定＋理由＋命中要件），以 CSV 經 blob handle 交付。
+> **⚠️ 輸出不變式（硬性契約，無例外）**：不論 AI 內部如何處理（fan-out、可拋棄 worker、handle 化…），**任何 patent search 的最終交付物一律是 Agent 友善、人類看得懂的 CSV 表格**——這是所有檢索類型共通的產業慣例。AI 的內部方法自由，**輸出契約固定**。表須保留可稽核的原始欄位（PN/TI/AB/相關 CL/申請人/日期/CPC）並排 AI 加值欄（相關性判定＋理由＋命中要件），以 CSV 經 blob handle 交付。**注(2026-07-11 交付契約更新)**:CSV 是 agent 工作面與中間產物(落專案 `output/`);呈交給使用者的**最終交付物**依 `patentworks` SKILL.md「交付物落點與版本管理契約」轉成 xlsx 等成品格式、帶版號落專案根目錄,改版舊版移 `.history/`。
 
 ---
 
@@ -133,7 +133,7 @@ patent_search(CPC+關鍵詞;來源梯內建,GPSS 首選) → 命中數
   ├─ >300 → 回「太發散 + 建議收斂方式」,不繼續分析
   └─ ≤300 → 組去重 CSV(PatNo/Title/Abstract/Claim1/family_id/members) → blob
             → agent 爬 CSV 逐格消化,寫回 蒸餾 + 判定 + 命中要件
-            → 交付同一張 enriched CSV
+            → enriched CSV(中間產物,落 output/)→ 轉 xlsx 帶版號落專案根交付
 ```
 
 > 來源注記:`patent_search` 走 GPSS 級時一次呼叫即回 PatNo/Title/Abstract/Claims(`expFld`),最適合裝配此表;Claim1 由 claims.claim[0] 切首項(偶為前言,真 claim1 在 [1])。**GPSS 不提供 INPADOC 家族 → 以 `epo_family` 補(已驗證,正確合併 US/CN/TW)**。
@@ -142,7 +142,7 @@ patent_search(CPC+關鍵詞;來源梯內建,GPSS 首選) → 命中數
 
 - **MCP tool**(patentmcp,皆已上線):`patent_search`(**單一檢索入口**,來源梯內建:GPSS 首選→EPO→PPUBS→gated 爬蟲,一次回全欄+provenance)、`gpss_download_representative_figure`(GPSS代表圖下載)、`epo_family/biblio`(官方家族/摘要)、`gpatents_get/download_*`(單號取文+圖,最後手段)、`build_screening_table`(search→去重→CSV→handle)、`stage_file`(任意檔→handle)。舊 `gpss_search`/`epo_search`/`gpatents_search`/`ppubs_search_*` 已下架,一律改用 `patent_search`。
 - **skill**(`patentworks`,已建):router + flows(disclosure/screening/drafting)+ 法域 reference,編排「search → 逐筆消化 → 評分 CSV」。
-- **CSV / docxmcp**:結果落地成 CSV / 報告,經 token+blob handle 交付。
+- **CSV / docxmcp**:結果落地成 CSV / 報告 src(落專案 `output/`);最終交付物(xlsx/docx/pdf 等)依 patentworks SKILL.md 交付契約帶版號落專案根目錄。
 - 資料來源優先序:GPSS(首選)> EPO(家族/摘要/CQL,零限速)> Google Patents(語義+圖,需節流)> BigQuery(僅便宜 metadata)。
 
 ---

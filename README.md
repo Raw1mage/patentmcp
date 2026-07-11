@@ -43,7 +43,7 @@ disclosure(交底書)→ screening(查新)→ drafting(起草說明書)
 
 ## 設計原則
 
-- **輸出不變式**:任何檢索的最終交付物一律是 Agent 友善、人類可讀的 CSV 表格,經 token+blob handle 交付。
+- **輸出不變式**:任何檢索的工作面一律是 Agent 友善、人類可讀的 CSV 表格(中間產物,落專案 `output/`);**最終交付物**依 `skills/patentworks/SKILL.md`「交付物落點與版本管理契約」——docx/pdf/png/xlsx/pptx 等成品格式、帶版號後綴(`_v<N>`)落專案根目錄,改版舊版移根層 `.history/`,src 改版備份走 `output/.history/`。
 - **AI 預篩/起草草稿 + 解釋,人類複核裁決**(專利有法律份量)。
 - **大道至簡**:不重造 docxmcp / drawmiat / OpenCMS 已能服務的子系統。
 

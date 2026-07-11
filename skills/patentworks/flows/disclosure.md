@@ -11,7 +11,7 @@
 5. **成文**:組成交底書——發明名稱 / 技術領域 / 背景與痛點 / 技術方案(含圖)/ 有益效果 / 具體實施例與參數 / **擬保護的創新點清單**。Mermaid/工程圖交 **drawmiat**;文件組裝交 **docxmcp**。
 6. **脱敏**:依 `../reference/disclosure/deidentification.md` 移除客戶名/商業機密/可識別資訊——**交外部代理人前必做**。
 7. **自檢**:邏輯一致、公式/參數正確、每個專利點都對應到方案與效果、術語一致(見 drafting common.md §15)。
-8. **交付**:技術交底書 md → docxmcp 組 docx → `stage_file` / token handle。
+8. **交付**:技術交底書 md(src 落專案 `output/`)→ docxmcp 組 docx → 依 `../SKILL.md`「交付物落點與版本管理契約」落**專案根目錄**,檔名帶版號(如 `<案名>_技術交底書_v1.docx`);改版舊版移根層 `.history/`,src 備份走 `output/.history/`。
 
 ## 銜接
 `disclosure → screening → drafting`。交底書即 drafting flow 步驟 1(揭露擷取)的輸入;專利點清單即 drafting「擬保護創新點」與 claims 的種子。
