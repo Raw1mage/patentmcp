@@ -20,6 +20,13 @@ output/
 .specbase/*.sqlite
 .specbase/*.sqlite-shm
 .specbase/*.sqlite-wal
+# patentdb: local accumulating cross-project patent cache (data, not source;
+# auto-created by patentdb_store.py, grows unbounded). Committing it bloats git
+# and — until the /file/status cap — its 48MB body crashed the webapp. Keep it
+# on disk, out of version control (same policy as .specbase/*.sqlite above).
+patentdb/*.sqlite
+patentdb/*.sqlite-shm
+patentdb/*.sqlite-wal
 build/
 dist/
 wheels/
@@ -40,3 +47,6 @@ toolrowai-credentials.json
 
 # Test exports
 test_export*.json
+# patentdb data copies for container bind-mount visibility (project data, not source)
+patentdb/*.jsonl
+patentdb/*.json

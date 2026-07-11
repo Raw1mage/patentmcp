@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "state": "designed",
+  "profile": [
+    "research"
+  ],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-08T19:29:07.661Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "proposed",
+      "at": "2026-07-08T19:30:34.369Z",
+      "by": "pkcs12",
+      "mode": "sync",
+      "reason": "研究型檢索 campaign,deliverable 是報告+資料池"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-08T19:32:51.037Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "方法論固化完成:proposal+design+tasks"
+    }
+  ]
+}

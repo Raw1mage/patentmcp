@@ -11,8 +11,11 @@ API shape (from TIPO "GPSS API 服務說明文件" v1.4):
 Auth: a single userCode (API 驗證碼) issued by TIPO after approval.
 """
 
+import json
+import json
 import logging
 import os
+import re
 import urllib.parse
 from typing import Any, Dict, List, Optional
 
@@ -21,6 +24,43 @@ import httpx
 logger = logging.getLogger(__name__)
 
 GPSS_API_URL = "https://tiponet.tipo.gov.tw/gpss1/gpsskmc/gpss_api"
+
+# GPSS emits JSON whose patent text fields (TI/AB/CL) occasionally contain a
+# LITERAL backslash that GPSS failed to escape — e.g. a claim reading
+# "毫米波\太赫兹" uses '\' as a '/' separator. In JSON a backslash must be
+# followed by one of " \ / b f n r t u; '\太' is an *illegal escape* that
+# BOTH json.loads(strict=True) AND json.loads(strict=False) reject (strict=False
+# only tolerates raw control chars, not illegal escapes). This only surfaces on
+# pages that carry full-text fields (a PN-only query never trips it), which is
+# why deep bulk-harvest pages fail while a light patent_search of the same skip
+# succeeds. Sanitize by doubling any backslash that is NOT a valid JSON escape
+# introducer, then re-parse. Verified: recovers a 1.3MB body (7 stray '\' → 200
+# records) that both strict modes rejected.
+_ILLEGAL_JSON_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu])')
+
+
+def _parse_gpss_json(text: str) -> Optional[Dict[str, Any]]:
+    """Parse a GPSS JSON body, tolerating GPSS's two known malformations.
+
+    Returns the parsed dict, or None if unrecoverable. Single source of truth:
+    every caller (patent_search / bulk_harvest / bulk_export) parses here.
+    """
+    # 1) strict — the common, clean case.
+    try:
+        return json.loads(text)
+    except Exception:  # noqa: BLE001
+        pass
+    # 2) strict=False — tolerate raw control characters inside string values.
+    try:
+        return json.loads(text, strict=False)
+    except Exception:  # noqa: BLE001
+        pass
+    # 3) sanitize illegal backslash escapes, then re-parse (still strict=False
+    #    so a co-occurring control char doesn't re-break it).
+    try:
+        return json.loads(_ILLEGAL_JSON_ESCAPE.sub(r'\\\\', text), strict=False)
+    except Exception:  # noqa: BLE001
+        return None
 
 # Database codes (patDB). Priority jurisdictions are US/CN; TW is low value.
 DB_US = ["USA", "USB"]   # US 公開 / 公告
@@ -52,7 +92,19 @@ class GPSSClient:
 
     def __init__(self, user_code: Optional[str] = None, timeout: float = 40.0):
         self.user_code = user_code or os.getenv("GPSS_USER_CODE")
-        self._client = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
+        # GPSS sits behind Cloudflare (resp headers carry cf-ray). In a
+        # long-lived MCP-server process the single client's pool holds
+        # keep-alive connections that Cloudflare silently drops after an idle
+        # window; reusing such a half-dead connection on a deep-pagination page
+        # returns a truncated/malformed body -> resp.json() parse failed. Only
+        # the resident process reproduces it (a fresh short-lived client / curl
+        # never does). Disable keep-alive reuse so every request opens a fresh
+        # connection. GPSS pagination is stateless (no Set-Cookie), so nothing
+        # is lost by not reusing the connection.
+        self._client = httpx.AsyncClient(
+            timeout=timeout, follow_redirects=True,
+            limits=httpx.Limits(max_keepalive_connections=0),
+        )
 
     def configured(self) -> bool:
         return bool(self.user_code)
@@ -132,9 +184,12 @@ class GPSSClient:
 
         text = resp.text
         if fmt == "json":
-            try:
-                data = resp.json()
-            except Exception:  # noqa: BLE001
+            data = _parse_gpss_json(text)
+            if data is None:
+                logger.error(
+                    "GPSS JSON unrecoverable after control-char + illegal-escape "
+                    "sanitize (len=%d, skip=%s)", len(text), skip,
+                )
                 return {"success": False, "error": "Expected JSON but parse failed", "raw": text[:500]}
             
             if not isinstance(data, dict):

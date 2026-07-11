@@ -26,3 +26,9 @@
 - [x] 5.1 republish skill 到 XDG projection，diff 確認同步
 - [x] 5.2 event_record 收尾（決策/驗證/architecture sync）
 - [x] 5.3 plan_advance 至 verified
+
+## 6. DD-7 amend (boolean_combos TAC 範式修正 2026-07-09)
+- [x] 6.1 RCA: boolean_combos proxy 扁平單值 axis.boolean 誤壓 TAC compound query → 誤 FAIL
+- [x] 6.2 修 _lib/search_audit.py: _query_boolean_shapes 從 axis 結構還原 AND+OR 型態; 純 SINGLE 仍計 0
+- [x] 6.3 同步 server-side twin src/patent_mcp_server/search_audit.py (兩檔 IDENTICAL)
+- [x] 6.4 單元測試 TAC->{AND,OR}/SINGLE->{}/OR-bulk->{OR} PASS; audit 重跑 verdict=PASS

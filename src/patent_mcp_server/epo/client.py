@@ -29,10 +29,17 @@ def to_docdb(pub: str) -> Optional[str]:
     e.g. US11213256B2 / US-11213256-B2 -> US.11213256.B2; TW-I684433-B -> TW.I684433.B
     """
     p = re.sub(r"[\s\-]", "", pub).upper()
-    m = re.match(r"^([A-Z]{2})([0-9A-Z]+?)([A-Z][0-9]?)$", p)
+    # kind code is OPTIONAL: many pool pubnos (CN121811579, TW202238300, EP42)
+    # carry no kind suffix. OPS accepts docdb 'CC.NUMBER' without a kind for
+    # family lookup, so a missing kind must NOT fail the parse (else CN+TW —
+    # ~83% of the backfill target set — silently drops out).
+    m = re.match(r"^([A-Z]{2})([0-9A-Z]+?)([A-Z][0-9]?)?$", p)
     if not m:
         return None
-    return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+    cc, num, kind = m.group(1), m.group(2), m.group(3)
+    if kind:
+        return f"{cc}.{num}.{kind}"
+    return f"{cc}.{num}"
 
 
 def _txt(node: Any) -> str:

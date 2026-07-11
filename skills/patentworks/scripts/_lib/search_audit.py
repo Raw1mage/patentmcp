@@ -186,14 +186,57 @@ def compute_coverage(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _query_boolean_shapes(axis: Dict[str, Any]) -> Set[str]:
+    """The distinct boolean shapes PRESENT WITHIN one query's axis.
+
+    A single TAC query `(class OR-union) AND (kw-groupA OR ...) AND (kw-groupB OR ...)`
+    is a COMPOUND query that uses AND *and* OR at once — the rigor gate's intent
+    (priorsearch.md §2 "刻意變換布林型態 AND 限縮 / OR 擴同義") is that AND+OR-in-one-query
+    is exactly the multi-shape breadth it wants, not a single 'AND' dragnet. The flat
+    scalar `boolean` field (DD-1) cannot express that, so DD-7 derives the shapes
+    structurally from the axis:
+      - >=2 class_codes  → an OR-union over classifications  → 'OR' present
+      - >=2 keywords     → an OR-group over synonyms          → 'OR' present
+      - the declared boolean (AND to join clauses)            → 'AND' present
+    'SINGLE' (a lone single-word dragnet, one class, one keyword) contributes no
+    non-trivial shape — the anti-laziness signal is preserved.
+    """
+    shapes: Set[str] = set()
+    declared = (axis.get("boolean") or "").strip().upper()
+    class_codes = [c for c in (axis.get("class_codes") or []) if isinstance(c, str) and c.strip()]
+    keywords = [k for k in (axis.get("keywords") or []) if isinstance(k, str) and k.strip()]
+
+    # explicit '+' compound form (e.g. "AND+OR") — split and take each
+    if "+" in declared:
+        for part in declared.split("+"):
+            p = part.strip()
+            if p and p != "SINGLE":
+                shapes.add(p)
+
+    # an OR-union over >=2 classification anchors is an OR shape
+    if len(class_codes) >= 2:
+        shapes.add("OR")
+    # an OR-group over >=2 keyword synonyms is an OR shape
+    if len(keywords) >= 2:
+        shapes.add("OR")
+    # the declared clause-joining operator (AND/OR), when it joins >=2 axis clauses
+    if declared in ("AND", "OR"):
+        n_clauses = (1 if class_codes else 0) + len(keywords)
+        if declared == "AND" and n_clauses >= 2:
+            shapes.add("AND")
+        elif declared == "OR":
+            shapes.add("OR")
+    return shapes
+
+
 def _boolean_combo_count(records: List[Dict[str, Any]]) -> int:
-    """Distinct non-trivial boolean shapes. A search that is entirely SINGLE
-    (single-word dragnet) scores 0 boolean combos — the anti-laziness signal."""
+    """Distinct non-trivial boolean shapes across the whole matrix-log. A search
+    that is entirely SINGLE (single-word dragnet) scores 0 — the anti-laziness
+    signal. A structured TAC search (class OR-union AND keyword OR-groups) scores
+    2 because each query genuinely spans AND+OR (DD-7)."""
     shapes: Set[str] = set()
     for r in records:
-        b = ((r.get("axis") or {}).get("boolean") or "").strip().upper()
-        if b and b != "SINGLE":
-            shapes.add(b)
+        shapes |= _query_boolean_shapes(r.get("axis") or {})
     return len(shapes)
 
 

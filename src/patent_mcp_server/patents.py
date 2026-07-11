@@ -2692,15 +2692,18 @@ async def patent_family_backfill(
     pubnos: Optional[List[str]] = None,
     from_pool_missing: bool = False,
     cursor: int = 0,
-    max_calls: int = 20,
+    max_calls: Optional[int] = None,
+    time_budget_sec: float = 0,
     overwrite: bool = False,
 ) -> Dict[str, Any]:
-    """Batch-backfill official INPADOC family_id into patentdb via EPO OPS.
+    """Backfill official INPADOC family_id into patentdb via EPO OPS — RUNS TO
+    COMPLETION in a single call by default.
 
     epo_family is single-number; this orchestrates it over a list, throttles to
-    EPO OPS 15/min, and upserts family_id back into patentdb.sqlite. Bounded by
-    max_calls per invocation (MCP-timeout-safe) — loop with the returned
-    next_cursor until exhausted=true.
+    EPO OPS 15/min, applies family-coverage (one call stamps the whole INPADOC
+    family), and upserts family_id back into patentdb.sqlite. The batch loop is
+    INTERNAL: one invocation sweeps the ENTIRE target set (exhausted=true) with
+    no per-batch MCP round-trips. Only cap the run if you must:
 
     Args:
         pubnos: explicit publication numbers to backfill. Ignored if
@@ -2709,22 +2712,48 @@ async def patent_family_backfill(
             whose family_id is still NULL/empty (ordered by pubno for a stable
             cursor). Use this to sweep the whole DB.
         cursor: 0-based offset into the target list; pass the returned
-            next_cursor to resume. Only meaningful with from_pool_missing.
-        max_calls: max EPO family calls this invocation (default 20 ≈ <2min at
-            15/min, stays inside MCP transport timeout).
+            next_cursor to resume a partial run. Normally 0 (runs to the end).
+        max_calls: OPTIONAL hard cap on EPO family calls this invocation.
+            Default None = no cap (run to completion). Set only to bound cost.
+        time_budget_sec: OPTIONAL wall-clock budget in seconds. Default 0 =
+            unbounded (run to completion). If set >0, the loop stops when the
+            elapsed time would exceed it and returns next_cursor for a resume;
+            use this if a caller's transport imposes a hard timeout. With the
+            internal loop + coverage, a full sweep is normally a single call.
         overwrite: re-fetch family_id even if already present.
 
     Returns:
-        {success, done, filled, failed, skipped, calls_made, next_cursor,
-         exhausted, errors[]} — pubno-granular outcome. exhausted=true means the
-         whole target set is processed; done=calls_made hit max_calls (more
-         remain, resume at next_cursor).
+        {success, filled, family_covered, failed, skipped, calls_made,
+         next_cursor, exhausted, total_targets, errors[]} — pubno-granular
+         outcome. exhausted=true means the whole target set is processed. If a
+         cap stopped the run early, exhausted=false — resume at next_cursor
+         (rare; only when max_calls/time_budget_sec was set).
     """
     import asyncio
+    import re as _re
+    import time as _time
 
     if not epo_client.configured():
         return {"success": False, "error": "EPO_NOT_CONFIGURED",
                 "detail": "EPO_CONSUMER_KEY/SECRET not set"}
+
+    def _fam_key(pn: str) -> str:
+        """Kind-stripped country+number key for family-coverage matching.
+
+        patentdb.canonical_pubno does NOT reliably strip kind codes with a
+        digit suffix (US9993166B1 -> ...B1, US9993166A -> ...), so members
+        returned by epo_family (which carry kind) would silently miss against
+        patentdb keys. This helper strips a trailing kind code (letter +
+        optional digits) after the numeric body so US9993166B1, US9993166A2
+        and US9993166 all collapse to the same key.
+        """
+        s = _re.sub(r"[\s/\-,\.]+", "", (pn or "")).upper()
+        m = _re.match(r"^([A-Z]{2})?(.+?)([A-Z]\d*)?$", s)
+        if not m:
+            return s
+        cc = m.group(1) or ""
+        body = m.group(2) or ""
+        return f"{cc}{body}"
 
     # ── build the target list ──────────────────────────────────────
     if from_pool_missing:
@@ -2753,12 +2782,46 @@ async def patent_family_backfill(
 
     total = len(targets)
     start = max(0, cursor)
-    filled = failed = skipped = calls_made = 0
+    filled = failed = skipped = calls_made = family_covered = 0
     errors: List[Dict[str, Any]] = []
-    i = start
+    _t0 = _time.monotonic()
+    _budget = time_budget_sec if time_budget_sec and time_budget_sec > 0 else None
+    _cap = max_calls if (max_calls is not None and max_calls > 0) else None
 
-    while i < total and calls_made < max_calls:
+    def _stop() -> Optional[str]:
+        # returns a reason string if the run should halt early, else None
+        if _cap is not None and calls_made >= _cap:
+            return "max_calls"
+        if _budget is not None and (_time.monotonic() - _t0) >= _budget:
+            return "time_budget"
+        return None
+
+    # ── family-coverage cache ──────────────────────────────────────
+    # epo_family is single-number but ONE call returns the WHOLE INPADOC
+    # family (e.g. US9993166B1 → 151 members). So we query one member, then
+    # stamp the same family_id onto EVERY in-pool member in one shot — the
+    # API-call count collapses from |targets| to (#distinct families).
+    # `covered`: normalized-pubno → family_id already stamped this run.
+    # Keyed by canonical_pubno (country+number, kind-stripped) because
+    # family() returns members WITH kind codes (US9993166B1) while patentdb
+    # pubno keys are kind-stripped — a raw string compare would silently miss.
+    covered: Dict[str, str] = {}
+    target_keys = {_fam_key(p): p for p in targets}
+    i = start
+    stop_reason: Optional[str] = None
+
+    while i < total:
+        # cap check BEFORE spending an API call (coverage/skip steps are free
+        # and continue regardless — they cost no EPO call)
         pub = targets[i]
+        pub_key = _fam_key(pub)
+
+        # already stamped by an earlier family in this run — zero API cost
+        if pub_key in covered:
+            family_covered += 1
+            i += 1
+            continue
+
         # skip already-filled when not overwriting (explicit pubnos path)
         if not overwrite and not from_pool_missing:
             existing = _pdb.query(publication_number=pub)
@@ -2769,13 +2832,38 @@ async def patent_family_backfill(
                     i += 1
                     continue
 
+        # this row needs a real EPO call — honor the cap HERE (before spending)
+        stop_reason = _stop()
+        if stop_reason:
+            break
+
         try:
             res = await epo_client.family(pub)
             calls_made += 1
-            if res.get("success") and res.get("family_id"):
-                _pdb.put(pub, fields={"family_id": str(res["family_id"])},
-                         overwrite=overwrite)
+            fid = res.get("family_id")
+            if res.get("success") and fid:
+                fid_s = str(fid)
+                # ── family coverage: stamp EVERY in-pool member at once ──
+                members = res.get("members") or [pub]
+                stamped_this_family = 0
+                for m in members:
+                    m_key = _fam_key(m)
+                    if m_key in covered:
+                        continue
+                    # only stamp members that are actually in our target set,
+                    # OR the queried pub itself (always stamp the seed)
+                    orig = target_keys.get(m_key)
+                    if orig is None and m_key != pub_key:
+                        continue
+                    write_pub = orig if orig is not None else m
+                    _pdb.put(write_pub, fields={"family_id": fid_s},
+                             overwrite=overwrite)
+                    covered[m_key] = fid_s
+                    stamped_this_family += 1
+                # the seed counts as a real fill; extra members are coverage
                 filled += 1
+                if stamped_this_family > 1:
+                    family_covered += stamped_this_family - 1
             else:
                 failed += 1
                 errors.append({"pubno": pub,
@@ -2786,23 +2874,221 @@ async def patent_family_backfill(
             errors.append({"pubno": pub, "error": str(e)})
 
         i += 1
-        # throttle: EPO OPS 15/min → ~4s/call, only when more calls follow
-        if i < total and calls_made < max_calls:
+        # throttle: EPO OPS 15/min → ~4s/call, only when another real call may
+        # follow. Skip the sleep if the next stop check would halt us anyway.
+        if i < total and _stop() is None:
             await asyncio.sleep(4.2)
 
     exhausted = i >= total
     return {
         "success": True,
-        "done": calls_made,
         "filled": filled,
+        "family_covered": family_covered,
         "failed": failed,
         "skipped": skipped,
         "calls_made": calls_made,
         "next_cursor": i,
         "exhausted": exhausted,
+        "stopped_early": stop_reason,
         "total_targets": total,
         "errors": errors[:50],
     }
+
+
+@mcp.tool(annotations=_RO)
+async def patent_family_backfill_status(
+    pool_file: Optional[str] = "/patentdb/pool_membership.jsonl",
+) -> Dict[str, Any]:
+    """Progress snapshot of the INPADOC family_id backfill — read-only.
+
+    Counts filled vs missing family_id rows and distinct families in patentdb.
+    If pool_file (a pool_membership.jsonl visible inside the container, e.g.
+    under /patentdb/) exists, also reports pool-level coverage: how many pool
+    pubnos hit the DB and how many of those already carry a family_id.
+
+    Use this to watch a long-running backfill without touching the DB.
+
+    Returns:
+        {success, total_rows, family_filled, family_missing, pct,
+         distinct_families, pool?: {pool_uniq, hit_db, family_filled}}
+    """
+    import json as _json
+    import os as _os
+
+    conn = _pdb._connect()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM patents").fetchone()[0]
+        filled = conn.execute(
+            "SELECT COUNT(*) FROM patents "
+            "WHERE family_id IS NOT NULL AND TRIM(family_id)<>''"
+        ).fetchone()[0]
+        fams = conn.execute(
+            "SELECT COUNT(DISTINCT family_id) FROM patents "
+            "WHERE family_id IS NOT NULL AND TRIM(family_id)<>''"
+        ).fetchone()[0]
+        out: Dict[str, Any] = {
+            "success": True,
+            "total_rows": total,
+            "family_filled": filled,
+            "family_missing": total - filled,
+            "distinct_families": fams,
+            "pct": round(filled * 100.0 / total, 1) if total else 0.0,
+        }
+        if pool_file and _os.path.exists(pool_file):
+            pubs: List[str] = []
+            with open(pool_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        pubs.append(_json.loads(line)["pubno"])
+                    except Exception:  # noqa: BLE001
+                        continue
+            uniq = list(dict.fromkeys(pubs))
+            hit = pool_filled = 0
+            for j in range(0, len(uniq), 500):
+                chunk = uniq[j:j + 500]
+                q = ",".join("?" * len(chunk))
+                r = conn.execute(
+                    "SELECT COUNT(*), SUM(CASE WHEN family_id IS NOT NULL "
+                    "AND TRIM(family_id)<>'' THEN 1 ELSE 0 END) "
+                    f"FROM patents WHERE pubno IN ({q})",
+                    chunk,
+                ).fetchone()
+                hit += r[0] or 0
+                pool_filled += r[1] or 0
+            out["pool"] = {
+                "pool_uniq": len(uniq),
+                "hit_db": hit,
+                "family_filled": pool_filled,
+            }
+        return out
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+async def patent_family_dedup(
+    pool_file: str = "/patentdb/pool_membership.jsonl",
+    out_file: str = "/patentdb/b_layer_representatives.json",
+) -> Dict[str, Any]:
+    """Family-level dedup + representative selection over a search pool
+    (B-layer core-set selection).
+
+    Joins pool pubnos (from a pool_membership.jsonl) against patentdb, groups
+    rows by INPADOC family_id (rows without family_id form singleton groups),
+    and picks ONE representative per group by content completeness:
+
+        score = len(claim1)*2 + len(abstract) + len(cpc) + len(ipc)
+                + 500 if publication_date else 0
+                + 500 if priority_date else 0
+        tiebreak: earliest publication_date, then pubno lexicographic.
+
+    Pure read on patentdb; writes the full representative list as JSON to
+    out_file (put it under /patentdb/ so the host sees it via the bind mount).
+    Idempotent — re-run any time; results improve as family backfill fills in.
+
+    Args:
+        pool_file: pool_membership.jsonl path visible inside the container.
+        out_file: where to write the full JSON result.
+
+    Returns:
+        {success, summary:{pool_uniq_pubno, hit_db, miss_db, total_groups,
+         family_groups, single_groups, multi_member_family_groups,
+         collapsed_by_family_dedup, b_layer_representatives}, out_file}
+    """
+    import json as _json
+    import os as _os
+    from collections import defaultdict as _dd
+
+    if not _os.path.exists(pool_file):
+        return {"success": False, "error": "POOL_FILE_NOT_FOUND",
+                "detail": pool_file}
+
+    pool: List[str] = []
+    with open(pool_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pool.append(_json.loads(line)["pubno"])
+            except Exception:  # noqa: BLE001
+                continue
+    pool_uniq = list(dict.fromkeys(pool))
+    if not pool_uniq:
+        return {"success": False, "error": "POOL_EMPTY", "detail": pool_file}
+
+    def _score(r: Any) -> int:
+        content = (len(r["claim1"] or "") * 2 + len(r["abstract"] or "")
+                   + len(r["cpc_codes"] or "") + len(r["ipc_codes"] or ""))
+        biblio = ((500 if r["publication_date"] else 0)
+                  + (500 if r["priority_date"] else 0))
+        return content + biblio
+
+    conn = _pdb._connect()
+    try:
+        rows: List[Any] = []
+        for j in range(0, len(pool_uniq), 500):
+            chunk = pool_uniq[j:j + 500]
+            q = ",".join("?" * len(chunk))
+            rows.extend(conn.execute(
+                "SELECT pubno, country, kind, family_id, title_orig, "
+                "abstract, claim1, cpc_codes, ipc_codes, publication_date, "
+                f"priority_date FROM patents WHERE pubno IN ({q})",
+                chunk,
+            ).fetchall())
+    finally:
+        conn.close()
+
+    hit = len(rows)
+    groups: Dict[str, List[Any]] = _dd(list)
+    for r in rows:
+        fid = r["family_id"]
+        key = (f"FAM:{fid}" if fid and str(fid).strip()
+               else f"SINGLE:{r['pubno']}")
+        groups[key].append(r)
+
+    reps: List[Dict[str, Any]] = []
+    multi = 0
+    for key, members in groups.items():
+        members_sorted = sorted(members, key=lambda r: (
+            -_score(r),
+            r["publication_date"] or "99999999",
+            r["pubno"],
+        ))
+        rep = members_sorted[0]
+        if key.startswith("FAM:") and len(members) > 1:
+            multi += 1
+        reps.append({
+            "rep_pubno": rep["pubno"],
+            "family_id": (str(rep["family_id"]).strip()
+                          if rep["family_id"] else None),
+            "group_key": key,
+            "group_size": len(members),
+            "country": rep["country"],
+            "rep_score": _score(rep),
+            "member_pubnos": [m["pubno"] for m in members_sorted],
+            "collapsed": len(members) - 1,
+        })
+    reps.sort(key=lambda x: (-x["group_size"], x["group_key"]))
+
+    summary = {
+        "pool_uniq_pubno": len(pool_uniq),
+        "hit_db": hit,
+        "miss_db": len(pool_uniq) - hit,
+        "total_groups": len(groups),
+        "family_groups": sum(1 for k in groups if k.startswith("FAM:")),
+        "single_groups": sum(1 for k in groups if k.startswith("SINGLE:")),
+        "multi_member_family_groups": multi,
+        "collapsed_by_family_dedup": sum(r["collapsed"] for r in reps),
+        "b_layer_representatives": len(reps),
+    }
+    with open(out_file, "w", encoding="utf-8") as f:
+        _json.dump({"summary": summary, "representatives": reps}, f,
+                   ensure_ascii=False, indent=2)
+    return {"success": True, "summary": summary, "out_file": out_file}
 
 
 @mcp.tool(annotations=_RO)

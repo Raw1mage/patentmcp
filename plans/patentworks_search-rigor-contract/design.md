@@ -82,6 +82,7 @@ priorsearch flow 的檢索強度從來只靠散文約束，無任何機檢閘。
 
 - **DD-6｜fig2 命名修正連帶處理**
   SKILL.md §4 圖表命名 `fig2_scenario.png` 註解已是「相關性分佈（取代原情境分佈）」，但檔名仍 scenario，造成語意漂移。統一後在資料樹規範註明 `fig2` 用途為相關性分佈，檔名維持 `fig2_relevance.png`（新案用），舊 `fig2_scenario.png` 標為 legacy alias。
+- **DD-7**: DD-7: boolean_combos proxy 與 TAC 範式衝突修正。_lib/search_audit.py 的 axis.boolean 欄位是扁平單值('AND'|'OR'|'SINGLE'),把一條 (IPC OR組)AND(影像 OR組)AND(事件 OR組) 的 TAC compound query 壓成單一 'AND',導致 _boolean_combo_count 只見一種 shape → 誤判 min_boolean_combos<2 FAIL。但 priorsearch.md:186 spec 本意是『單條 query 內 AND 限縮+OR 擴同義並用即算多布林型態』。修正:_boolean_combo_count 識別 compound shape——boolean 值含 '+' 或 axis 同時有 class OR聯集 與 keyword OR組時,計為 AND+OR 兩種型態。既擋純 SINGLE 海撈,又正確識別 TAC 嚴謹性。屬 owning spec amend(bug fix within existing requirements)。
 
 ## Risks / Trade-offs
 
