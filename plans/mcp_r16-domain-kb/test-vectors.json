@@ -1,0 +1,68 @@
+[
+  {
+    "id": "TV-1",
+    "description": "FTS happy path: existing distilled object reachable in-band",
+    "input": { "tool": "patentmcp_kb_query", "args": { "q": "GPSS API" } },
+    "expected": { "matchMode": "fts", "hits_contains_id": "concept.gpss.api_specification", "success": true }
+  },
+  {
+    "id": "TV-2",
+    "description": "short CJK tokens degrade to LIKE scan, self-described",
+    "input": { "tool": "patentmcp_kb_query", "args": { "q": "檢索" } },
+    "expected": { "matchMode": "like-scan", "success": true, "all_scores_zero": true }
+  },
+  {
+    "id": "TV-2b",
+    "description": "mixed tokens -> hybrid",
+    "input": { "tool": "patentmcp_kb_query", "args": { "q": "GPSS 圖" } },
+    "expected": { "matchMode": "hybrid", "success": true }
+  },
+  {
+    "id": "TV-3",
+    "description": "KB file missing -> typed fail-fast envelope with remedy",
+    "input": { "tool": "patentmcp_kb_query", "args": { "q": "anything" }, "env": { "PATENTS_KB_DB": "/nonexistent/kb.sqlite" } },
+    "expected": { "success": false, "error_code": "KB_UNAVAILABLE", "has_remedy": true }
+  },
+  {
+    "id": "TV-3b",
+    "description": "env unset -> KB_UNAVAILABLE (no path guessing)",
+    "input": { "tool": "patentmcp_kb_query", "args": { "q": "anything" }, "env": { "PATENTS_KB_DB": null } },
+    "expected": { "success": false, "error_code": "KB_UNAVAILABLE" }
+  },
+  {
+    "id": "TV-4",
+    "description": "kb_get returns full body + provenance grading",
+    "input": { "tool": "patentmcp_kb_get", "args": { "id": "concept.gpss.api_specification" } },
+    "expected": { "has_fields": ["body_md", "confidence", "source_weight", "provenance"], "success": true }
+  },
+  {
+    "id": "TV-4b",
+    "description": "unknown id -> KB_OBJECT_NOT_FOUND with consider affordance",
+    "input": { "tool": "patentmcp_kb_get", "args": { "id": "no.such.object" } },
+    "expected": { "success": false, "error_code": "KB_OBJECT_NOT_FOUND", "message_contains": "consider: patentmcp_kb_query" }
+  },
+  {
+    "id": "TV-5",
+    "description": "read-only enforced: write attempt on serving connection fails",
+    "input": { "internal": "execute INSERT on the kb connection" },
+    "expected": { "raises": "sqlite readonly/query_only error" }
+  },
+  {
+    "id": "TV-6",
+    "description": "one KB two doors: same query, same id set via gate.ts and MCP tool",
+    "input": { "query": "GPSS", "doors": ["gate.ts ragbase_query", "patentmcp_kb_query"] },
+    "expected": { "same_object_id_set": true }
+  },
+  {
+    "id": "TV-7",
+    "description": "empty query rejected",
+    "input": { "tool": "patentmcp_kb_query", "args": { "q": "  " } },
+    "expected": { "success": false, "error_code": "KB_BAD_QUERY" }
+  },
+  {
+    "id": "TV-8",
+    "description": "type filter + limit respected",
+    "input": { "tool": "patentmcp_kb_query", "args": { "q": "patent", "type": "concept", "limit": 3 } },
+    "expected": { "hits_max": 3, "all_type": "concept" }
+  }
+]

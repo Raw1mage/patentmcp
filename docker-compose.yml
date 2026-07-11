@@ -62,6 +62,14 @@ services:
       # pins the in-container path; without this pair the container wrote an
       # orphan /patentdb that silently vanished on rebuild.
       - "./patentdb:/patentdb"
+      # R16 domain-KB (mcp-integration-standard): the repo ragbase store
+      # served read-only in-band via patentmcp_kb_query/kb_get. Directory is
+      # mounted rw ONLY because sqlite WAL side files (-shm/-wal) need a
+      # writable dir; read-only is enforced at the connection layer
+      # (URI mode=ro + PRAGMA query_only=ON) and the MCP surface exposes
+      # zero KB-write tools. Same store as host-side gate.ts ragbase_query
+      # (one KB, two doors — R16.7).
+      - "./.specbase:/var/lib/patentmcp/kb"
       # Token store on a named volume so handles survive --force-recreate.
       # R14.5 (mcp-integration-standard): this volume + the DAV face wired into
       # build_app IS the per-host WebDAV working-cache provisioning. patentmcp's
@@ -81,6 +89,8 @@ services:
       PATENTS_TOKEN_SIZE_CAP_BYTES: "1073741824"
       # Global patentdb root — MUST match the ./patentdb bind mount above.
       PATENTS_DB_ROOT: "/patentdb"
+      # R16 domain-KB path — MUST match the ./.specbase bind mount above.
+      PATENTS_KB_DB: "/var/lib/patentmcp/kb/ragbase.sqlite"
       # Credentials — values from .env; the key path points at the mount above.
       GOOGLE_APPLICATION_CREDENTIALS: "/secrets/sa-key.json"
       GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT:-}"
@@ -89,6 +99,11 @@ services:
       GPSS_USER_CODE: "${GPSS_USER_CODE:-}"
       EPO_CONSUMER_KEY: "${EPO_CONSUMER_KEY:-}"
       EPO_CONSUMER_SECRET: "${EPO_CONSUMER_SECRET:-}"
+      # GPSS4 web-app member login (advanced-search scraper / folder tools).
+      # Distinct from GPSS_USER_CODE (the REST API userCode): these are the
+      # member-area account credentials the httpx login chain needs.
+      GPSS4_USERNAME: "${GPSS4_USERNAME:-}"
+      GPSS4_PASSWORD: "${GPSS4_PASSWORD:-}"
     restart: unless-stopped
     healthcheck:
       # Readiness = the inward UDS socket exists (docxmcp reference; standard

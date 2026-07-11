@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "state": "verified",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-11T12:11:57.688Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-11T12:20:38.667Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "R16 adopter design complete (DD-1..DD-6, bodesign reference)"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-11T12:20:38.796Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "tasks broken down"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-11T12:20:38.927Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "start implementation"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-11T12:31:40.989Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "12 new tests + 199 suite green + live smoke + TV-6 two-door consistency"
+    }
+  ]
+}

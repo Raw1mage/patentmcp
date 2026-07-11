@@ -1,0 +1,67 @@
+{
+  "schemas": [
+    {
+      "name": "kb_query_request",
+      "kind": "message",
+      "fields": [
+        { "name": "q", "type": "string (required)", "notes": "query text; tokenized by whitespace for FTS planning" },
+        { "name": "type", "type": "string (optional)", "notes": "filter: concept|workflow|failure-mode|source|asset|extract|..." },
+        { "name": "limit", "type": "integer (optional, default 10, max 50)", "notes": "" }
+      ]
+    },
+    {
+      "name": "kb_query_response",
+      "kind": "message",
+      "fields": [
+        { "name": "success", "type": "boolean", "notes": "patentmcp envelope convention" },
+        { "name": "hits", "type": "array<{id,type,title,score,confidence,source_weight}>", "notes": "evidence-graded per R16.3" },
+        { "name": "matchMode", "type": "string enum fts|like-scan|hybrid", "notes": "R16.6 self-describing degradation" },
+        { "name": "total", "type": "integer", "notes": "full match count (pre-limit)" }
+      ]
+    },
+    {
+      "name": "kb_get_response",
+      "kind": "message",
+      "fields": [
+        { "name": "success", "type": "boolean", "notes": "" },
+        { "name": "id", "type": "string", "notes": "dotted slug object id" },
+        { "name": "type", "type": "string", "notes": "" },
+        { "name": "title", "type": "string", "notes": "" },
+        { "name": "body_md", "type": "string", "notes": "full distilled knowledge body" },
+        { "name": "confidence", "type": "string enum verified|partial|inferred|todo", "notes": "R16.3" },
+        { "name": "source_weight", "type": "integer 1..7 | null", "notes": "max over lineage edges; null when ungraded — never fabricated" },
+        { "name": "provenance", "type": "array<{edge_type,derived_from,source_weight}>", "notes": "distilled_from/extracted_from lineage edges" }
+      ]
+    },
+    {
+      "name": "kb_error_envelope",
+      "kind": "message",
+      "fields": [
+        { "name": "success", "type": "false", "notes": "" },
+        { "name": "error_code", "type": "string enum KB_UNAVAILABLE|KB_BAD_QUERY|KB_OBJECT_NOT_FOUND", "notes": "" },
+        { "name": "message", "type": "string", "notes": "human-readable reason" },
+        { "name": "remedy", "type": "string (KB_UNAVAILABLE only)", "notes": "host-side distill path; mount live, no restart" }
+      ]
+    },
+    {
+      "name": "ragbase_objects_table",
+      "kind": "table",
+      "fields": [
+        { "name": "id", "type": "TEXT PK", "notes": "dotted slug" },
+        { "name": "type", "type": "TEXT", "notes": "concept/workflow/failure-mode/source/asset/extract" },
+        { "name": "title", "type": "TEXT", "notes": "FTS-indexed (ragbase_fts trigram)" },
+        { "name": "body_md", "type": "TEXT", "notes": "FTS-indexed" },
+        { "name": "confidence", "type": "TEXT", "notes": "verified|partial|inferred|todo" },
+        { "name": "scope", "type": "TEXT", "notes": "repo | plan:<slug> | domain scope" },
+        { "name": "updated_at", "type": "TEXT/INTEGER", "notes": "recency order for like-scan" }
+      ]
+    },
+    {
+      "name": "container_env",
+      "kind": "config",
+      "fields": [
+        { "name": "PATENTS_KB_DB", "type": "string path", "notes": "/var/lib/patentmcp/kb/ragbase.sqlite; unset => KB_UNAVAILABLE (no path guessing, DD-6)" }
+      ]
+    }
+  ]
+}

@@ -1147,6 +1147,9 @@ async def gpatents_get(
     include_description=True the large full text is instead LANDED in the token
     store and the response carries a download handle (token/rel/download_url),
     NOT the description bytes.
+
+    consider: patentmcp_kb_query — recall known scraping failure modes and
+    retrieval ladders before reaching for this last-resort tool.
     """
     result = await gpatents_client.get_patent(publication_number, include_description)
     if not result.get("success") or not include_description:
@@ -1400,6 +1403,9 @@ async def ppubs_batch_get_claims(publication_numbers: Optional[List[str]] = None
 
     Returns:
         Dictionary containing success, the claims mapping, and the token store handle.
+
+    consider: patentmcp_kb_query — recall per-source claim-retrieval failure
+    modes (e.g. GPSS empty TW biblio) before batch-pulling claims.
     """
     import json
     import asyncio
@@ -3168,6 +3174,9 @@ async def patent_search(
     records use the unified screening record schema (missing fields are
     honestly blank and listed in `gaps`); on failure `error_code` is one of
     INVALID_PARAMS / SCRAPING_REQUIRED / ALL_SOURCES_MISS.
+
+    consider: patentmcp_kb_query — recall distilled search methodology,
+    source-API specs and known failure modes before designing the query.
     """
     spec = _sd.normalize_query(
         cpc=cpc, ipc=ipc, uspc=uspc, keyword=keyword,
@@ -3267,6 +3276,9 @@ async def patent_bulk(
     DATE_RANGE_REQUIRED; slice leaf-sum drift >5% → SLICE_INEFFECTIVE.
     For non-slice_plan EPO calls whose total exceeds 2000 and is not yet
     exhausted, the envelope carries a `slice_hint` (advisory, non-blocking).
+
+    consider: patentmcp_kb_query — recall source quota models, slicing
+    strategies and harvest failure modes before committing to a bulk pull.
 
     Args:
         source: REQUIRED — "gpss" or "epo". No default; anything else →
@@ -3542,6 +3554,239 @@ def patentmcp_init_prompt() -> str:
 
 
 # =====================================================================
+# R16 domain-KB serving (plan mcp_r16-domain-kb)
+# Read-only in-band serving of the repo ragbase KB (.specbase/
+# ragbase.sqlite; host-side producer: specbase producer.ts
+# ragbase_distill). DD-3: the mount is rw (WAL side files need a writable
+# dir) but read-only is enforced at the CONNECTION layer — URI mode=ro +
+# PRAGMA query_only=ON, per-request, zero KB-write tools on the MCP
+# surface. DD-1/DD-4: errors follow patentmcp's dict-envelope convention
+# ({success:false, error_code, ...}) — fail-fast, no path guessing, no
+# empty-hits masquerade. Query semantics mirror specbase gate.ts /
+# bodesign reference impl (DD-2).
+# =====================================================================
+
+_KB_REMEDY = ("KB lives host-side at <repo>/.specbase/ragbase.sqlite; "
+              "distill via specbase producer.ts (ragbase_distill); mount is "
+              "live, no restart needed.")
+# ragbase FTS5 uses the trigram tokenizer (specbase ragbase-schema): only
+# runs of >=3 codepoints are indexed, so a shorter token can NEVER match
+# via FTS (R16.6 — degradation must be self-described, see _kb_match_plan).
+_KB_MIN_TRIGRAM = 3
+
+
+class _KbError(Exception):
+    """Typed KB serving error. `code` is the machine error_code
+    (KB_UNAVAILABLE / KB_BAD_QUERY / KB_OBJECT_NOT_FOUND per
+    plans/mcp_r16-domain-kb/errors.md); str() is the human message."""
+
+    def __init__(self, code: str, message: str, remedy: Optional[str] = None):
+        super().__init__(message)
+        self.code = code
+        self.remedy = remedy
+
+    def envelope(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {"success": False, "error_code": self.code,
+                               "message": str(self)}
+        if self.remedy:
+            out["remedy"] = self.remedy
+        return out
+
+
+def _kb_connect():
+    """Per-request read-only sqlite connection (DD-3/DD-6). Env-located; any
+    unavailability raises KB_UNAVAILABLE with the remedy — never a guessed
+    path, never a silent empty store."""
+    import sqlite3
+    from pathlib import Path
+    db_path = (os.environ.get("PATENTS_KB_DB") or "").strip()
+    if not db_path:
+        raise _KbError("KB_UNAVAILABLE", "PATENTS_KB_DB env is not set", _KB_REMEDY)
+    if not Path(db_path).is_file():
+        raise _KbError("KB_UNAVAILABLE", f"KB sqlite not found at {db_path}", _KB_REMEDY)
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise _KbError("KB_UNAVAILABLE", f"cannot open KB at {db_path}: {exc}", _KB_REMEDY) from exc
+    try:
+        conn.execute("PRAGMA query_only=ON")
+    except sqlite3.Error as exc:
+        conn.close()
+        raise _KbError("KB_UNAVAILABLE", f"cannot open KB at {db_path}: {exc}", _KB_REMEDY) from exc
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _kb_match_plan(q: str) -> Dict[str, Any]:
+    """DD-2: specbase gate.ts query-planning semantics, not reinvented.
+    All tokens >=3 codepoints -> FTS AND ('fts'); all <3 -> LIKE scan
+    ('like-scan', score=0, recency order); mixed -> 'hybrid'."""
+    tokens = [t for t in q.split() if t]
+    fts_tokens = [t for t in tokens if len(t) >= _KB_MIN_TRIGRAM]
+    like_tokens = [t for t in tokens if len(t) < _KB_MIN_TRIGRAM]
+    # per-token quoted phrases: FTS operator-injection guard (a:b stays literal)
+    fts_expr = " AND ".join('"' + t.replace('"', '""') + '"' for t in fts_tokens) or None
+    if not like_tokens:
+        mode = "fts"
+    elif fts_expr is None:
+        mode = "like-scan"
+    else:
+        mode = "hybrid"
+    return {"fts_expr": fts_expr, "like_tokens": like_tokens, "mode": mode}
+
+
+def _kb_like_pattern(token: str) -> str:
+    escaped = "".join("\\" + c if c in ("\\", "%", "_") else c for c in token)
+    return f"%{escaped}%"
+
+
+def _kb_source_weight(conn, obj_id: str):
+    """Max source_weight (1-7) over the object's distilled_from/extracted_from
+    lineage edges (specbase metadata); None when ungraded — never fabricated."""
+    weights = []
+    for r in conn.execute(
+            "SELECT metadata_json FROM ragbase_lineage WHERE source_id = ? "
+            "AND edge_type IN ('distilled_from','extracted_from') "
+            "AND metadata_json != ''", (obj_id,)).fetchall():
+        try:
+            w = json.loads(r["metadata_json"]).get("source_weight")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(w, (int, float)):
+            weights.append(w)
+    return max(weights) if weights else None
+
+
+_KB_LIKE_COND = "(o.title LIKE ? ESCAPE '\\' OR o.body_md LIKE ? ESCAPE '\\')"
+
+
+@mcp.tool(annotations=_GUIDE_ANNOTATIONS)
+async def patentmcp_kb_query(q: str, type: Optional[str] = None,
+                             limit: int = 10) -> Dict[str, Any]:
+    """READ-ONLY, no side effects: query patentmcp's self-shipped patent-practice
+    domain KB (the repo ragbase store — distilled, evidence-graded knowledge:
+    GPSS/EPO API specs, prior-art search methodology, figure-exhaustion ladder,
+    known failure modes, patent-analysis frameworks). Call BEFORE judgment-heavy
+    steps (search-query design, source-ladder interpretation, screening
+    calibration) to recall what is already known — recall-first (R16.5).
+
+    Query semantics (specbase-identical): whitespace tokens >=3 codepoints ->
+    FTS AND (matchMode 'fts'); all <3 (short CJK) -> LIKE scan over title/body,
+    score=0, recency-ordered ('like-scan'); mixed -> 'hybrid'. Payload always
+    carries matchMode so a degraded 0-hit is distinguishable from true
+    no-knowledge. Fail-fast: missing/unmounted KB -> error_code KB_UNAVAILABLE
+    + remedy, never empty hits masquerading as no knowledge.
+
+    Args:
+        q: query text (required, non-empty).
+        type: optional object-type filter (concept|workflow|failure-mode|
+            source|asset|extract).
+        limit: max hits (default 10, cap 50).
+
+    Returns {success, hits:[{id,type,title,score,confidence,source_weight}],
+    matchMode, total}. patentmcp_kb_get(id) returns a hit's full body.
+    """
+    try:
+        q = (q or "").strip()
+        if not q:
+            raise _KbError("KB_BAD_QUERY", "empty query")
+        type_filter = (type or "").strip() or None
+        try:
+            limit_n = int(limit)
+        except (TypeError, ValueError):
+            limit_n = 10
+        limit_n = min(max(limit_n, 1), 50)
+        plan = _kb_match_plan(q)
+        conn = _kb_connect()
+    except _KbError as exc:
+        return exc.envelope()
+    try:
+        where: List[str] = []
+        params: List[Any] = []
+        if plan["mode"] == "like-scan":
+            base_from = "FROM ragbase_objects o"
+            select_score = "0 AS score"
+            order = "o.updated_at DESC"
+        else:
+            base_from = ("FROM ragbase_fts JOIN ragbase_objects o "
+                         "ON o.rowid = ragbase_fts.rowid")
+            select_score = "bm25(ragbase_fts) AS score"
+            order = "bm25(ragbase_fts)"
+            where.append("ragbase_fts MATCH ?")
+            params.append(plan["fts_expr"])
+        for t in plan["like_tokens"]:
+            where.append(_KB_LIKE_COND)
+            p = _kb_like_pattern(t)
+            params.extend([p, p])
+        if type_filter:
+            where.append("o.type = ?")
+            params.append(type_filter)
+        where_sql = " AND ".join(where) or "1=1"
+        total = conn.execute(
+            f"SELECT count(*) {base_from} WHERE {where_sql}", params).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT o.id, o.type, o.title, o.confidence, {select_score} "
+            f"{base_from} WHERE {where_sql} ORDER BY {order} LIMIT ?",
+            [*params, limit_n]).fetchall()
+        hits = [{"id": r["id"], "type": r["type"], "title": r["title"],
+                 "score": r["score"], "confidence": r["confidence"],
+                 "source_weight": _kb_source_weight(conn, r["id"])} for r in rows]
+        return {"success": True, "query": q, "matchMode": plan["mode"],
+                "hits": hits, "total": total, "limit": limit_n}
+    finally:
+        conn.close()
+
+
+@mcp.tool(annotations=_GUIDE_ANNOTATIONS)
+async def patentmcp_kb_get(id: str) -> Dict[str, Any]:
+    """READ-ONLY, no side effects: fetch ONE domain-KB object's full distilled
+    body (body_md) plus evidence grading (confidence, source_weight) and
+    provenance (its distilled_from/extracted_from lineage edges with per-edge
+    source_weight). Unknown id -> error_code KB_OBJECT_NOT_FOUND (consider:
+    patentmcp_kb_query to find the right id)."""
+    try:
+        obj_id = (id or "").strip()
+        if not obj_id:
+            raise _KbError("KB_BAD_QUERY", "id is required")
+        conn = _kb_connect()
+    except _KbError as exc:
+        return exc.envelope()
+    try:
+        row = conn.execute(
+            "SELECT id, type, title, batch_id, locator, confidence, "
+            "extraction_status, body_md, metadata_json, captured_at, "
+            "updated_at, scope FROM ragbase_objects WHERE id = ?",
+            (obj_id,)).fetchone()
+        if row is None:
+            return _KbError(
+                "KB_OBJECT_NOT_FOUND",
+                f"{obj_id} not found. consider: patentmcp_kb_query").envelope()
+        provenance = []
+        for r in conn.execute(
+                "SELECT target_id, edge_type, metadata_json FROM ragbase_lineage "
+                "WHERE source_id = ? AND edge_type IN "
+                "('distilled_from','extracted_from')", (obj_id,)).fetchall():
+            weight = None
+            if r["metadata_json"]:
+                try:
+                    w = json.loads(r["metadata_json"]).get("source_weight")
+                    if isinstance(w, (int, float)):
+                        weight = w
+                except (ValueError, AttributeError):
+                    pass
+            provenance.append({"edge_type": r["edge_type"],
+                               "derived_from": r["target_id"],
+                               "source_weight": weight})
+        out: Dict[str, Any] = {k: row[k] for k in row.keys()}
+        out["success"] = True
+        out["source_weight"] = _kb_source_weight(conn, obj_id)
+        out["provenance"] = provenance
+        return out
+    finally:
+        conn.close()
+
+
+# =====================================================================
 # Cleanup Handler
 # =====================================================================
 
@@ -3665,6 +3910,9 @@ async def pool_fetch(publication_numbers: List[str]) -> Dict[str, Any]:
     payload is {"records": [...], "gaps": [...]} — records is the same schema the
     old chart pipeline consumed (pub/country/year/assignee/cpc/cpc_group/title/
     abstract/claim1).
+
+    consider: patentmcp_kb_query — recall pool-analysis methodology (TF matrix,
+    IPC multilevel, lifecycle S-curve) before shaping the pool.
     """
     import json as _json
     import re
@@ -4341,6 +4589,219 @@ async def patentdb_import_csv(csv_path: str) -> Dict[str, Any]:
             ),
         },
     }
+
+
+# =====================================================================
+# GPSS4 member-area 標記清單 (project-folder) tools
+# /plans/patentmcp_gpss4-folder-tools DD-2..DD-5 (verified 2026-07-11)
+# Session-based web-app auth (TTS* cookies, md5-lookup CAPTCHA login, SSO
+# meta-refresh). Distinct from patent_search (the REST search ladder).
+# =====================================================================
+
+
+@mcp.tool()
+async def gpss4_folder_list() -> Dict[str, Any]:
+    """List the patents currently in the GPSS4 member 標記清單 (mark list).
+
+    Logs into the TIPO GPSS4 web app (GPSS4_USERNAME / GPSS4_PASSWORD from env)
+    and returns the marked patents. The mark list is GPSS4's project-folder
+    surface. Read-only.
+
+    NOTE: GPSS4 renders the mark list synchronously in the add-to-marks response;
+    a standalone list fetch via the expired-slot home link returns an empty shell
+    (DD-5 trap). If no marks exist yet, returns an empty list.
+    """
+    from patent_mcp_server.gpss4.folder import GPSS4Folder, GPSS4FolderError
+
+    f = GPSS4Folder()
+    try:
+        # A same-session marked-list read: mark-list content is produced by the
+        # add-to-marks response; with no pending selection this surfaces the
+        # current list. We expose it via a no-op search+list on the member area.
+        ml = await f.current_marks()
+        return {"success": True, **ml.to_dict()}
+    except GPSS4FolderError as e:
+        return {"success": False, "error_code": "GPSS4_FOLDER", "error": str(e)}
+    finally:
+        await f.close()
+
+
+@mcp.tool()
+async def gpss4_folder_mark(number: str, axis: str = "pub") -> Dict[str, Any]:
+    """Add a patent to the GPSS4 member 標記清單 by number.
+
+    axis='pub' searches by 公開/公告號 (@PN); axis='apply' by 申請號 (@AN).
+    Runs the full 3-step sequence (number search -> clickselect -> add to marks)
+    and returns the resulting mark list. WRITE operation (modifies the member
+    account's marks).
+    """
+    from patent_mcp_server.gpss4.folder import GPSS4Folder, GPSS4FolderError
+
+    f = GPSS4Folder()
+    try:
+        ml = await f.mark_patent(number, axis=axis)
+        return {"success": True, "marked": number, **ml.to_dict()}
+    except GPSS4FolderError as e:
+        return {"success": False, "error_code": "GPSS4_FOLDER", "error": str(e)}
+    finally:
+        await f.close()
+
+
+@mcp.tool(annotations=_RO)
+async def gpss4_folder_search(number: str, axis: str = "pub") -> Dict[str, Any]:
+    """Run a GPSS4 number search (member area) WITHOUT marking. Read-only.
+
+    axis='pub' (@PN, 公開/公告號) or 'apply' (@AN, 申請號). Returns the hit count
+    and the selectable hits (db/rec/curt tuples). Use gpss4_folder_mark to add.
+    """
+    from patent_mcp_server.gpss4.folder import GPSS4Folder, GPSS4FolderError
+
+    f = GPSS4Folder()
+    try:
+        res = await f.search_number(number, axis=axis)
+        return {
+            "success": True,
+            "count": res.count,
+            "hits": [{"db": d, "rec": r, "curt": c} for d, r, c in res.hits],
+        }
+    except GPSS4FolderError as e:
+        return {"success": False, "error_code": "GPSS4_FOLDER", "error": str(e)}
+    finally:
+        await f.close()
+
+
+# ---------------------------------------------------------------------------
+# GPSS4 member-area 進階檢索 (advanced-search) harvest tool
+# /plans/patentmcp_gpss4-folder-tools DD-7..DD-11 (verified 2026-07-11)
+# Quota-free: drives the logged-in web 進階檢索 (no API daily-download cap),
+# harvests the full result list INCLUDING patent-family grouping.
+# ---------------------------------------------------------------------------
+@mcp.tool(annotations=_RO)
+async def gpss4_advanced_search(
+    query: str,
+    max_pages: int = 200,
+    expand_family: bool = True,
+    delivery: str = "token",
+    owner_identity: str = "",
+    subject_id: str = "",
+    csv_rel: str = "pool.csv",
+    csv_path: str = "",
+) -> Dict[str, Any]:
+    """Harvest the TIPO GPSS4 web 進階檢索 (advanced search) result list into a
+    family-tagged patent pool, delivered via patentmcp's standard file rails.
+
+    Drives the LOGGED-IN web advanced search (GPSS4_USERNAME / GPSS4_PASSWORD
+    from env) as a PURE-HTTPX state machine (no browser), bypassing the
+    official API's daily download quota. Returns every result row with title +
+    abstract, and — crucially — patent-family grouping for trustworthy dedup.
+
+    query:  GPSS advanced-search syntax (field codes, NOT `TI=`):
+            title `(詞)@TI`, abstract `(詞)@AB`, claims `(詞)@CL`,
+            classification `CS=G06F-0003/00`, date `AD=2006:2007`; combine
+            with AND/OR. e.g. `(video)@TI AND CS=H04N-0021/00`.
+    max_pages: HIGH safety cap on pages to paginate (default 200 = ~10k rows;
+            50 rows/page is the 進階檢索 max, no 100/page option). NOT a batch
+            size — harvest walks EVERY page into ONE complete pool. If a result
+            set exceeds max_pages the return carries truncated=true (pool is
+            partial; raise max_pages), never a silent cut.
+    expand_family: click 家族收合 so each row carries its family_group id
+            (the `N.M` family-sequence key). Set False to skip (faster, no
+            per-row family binding, but the summary family_count is still
+            returned).
+
+    File delivery (choose ONE via `delivery`):
+      * "token" (DEFAULT): the pool CSV bytes land in the docxmcp-compatible
+        token store; the response carries a download handle
+        {token, rel, download_url, sha256} — fetch via /files/{token}/blob/{rel},
+        exactly like every other patentmcp artifact tool. No path needed.
+      * "cache": land the CSV into the caller's WebDAV deliverable-cache for the
+        given subject. Requires owner_identity + subject_id (the cache is
+        provisioned idempotently if absent). The CSV appears at
+        <mount>/`csv_rel` over the mounted WebDAV tree; export later with
+        cache_export. owner_identity is NEVER inferred (天條 §11).
+      * "none": JSON only — every patent row still carries family_group +
+        is_family_representative; no file is written.
+    csv_rel: filename inside the token dir / cache (default "pool.csv").
+    csv_path: LEGACY escape hatch — an absolute container path to also write
+            the CSV to (back-compat; prefer token/cache delivery).
+
+    Family dedup (NON-DESTRUCTIVE): every row is kept and tagged with
+    is_family_representative — True for the family member with the EARLIEST
+    apply_date (ties broken by pat_no), False for the rest. To get a
+    one-per-family deduped list, filter patents on is_family_representative.
+
+    Returns {success, total, family_count, representative_count,
+             summary_family_count, pages_fetched, total_pages, patents[],
+             + delivery handle}:
+      * delivery="token" -> token, rel, download_url, bytes, sha256
+      * delivery="cache" -> cache_token, subject_id, mount_path, csv_rel,
+                            credential? (first provision only)
+      * csv_path echoed back when the legacy path was also written.
+      * family_count = ACTUAL distinct family groups parsed post-collapse
+        (authoritative for dedup); equals representative_count.
+      * summary_family_count = the pre-collapse estimate the page prints.
+      * GPSS gives 簡易專利家族 grouping, NOT INPADOC family-ID strings.
+    """
+    import csv as _csv
+    import io as _io
+    from patent_mcp_server.gpss4.adv_search import harvest, GPSS4AdvSearchError
+
+    def _csv_bytes(result: Dict[str, Any]) -> bytes:
+        """Render the pool as UTF-8-BOM CSV bytes (same cols as write_csv)."""
+        fields = ["seq", "pat_no", "apply_date", "title", "abstract",
+                  "family_group", "is_family_representative"]
+        buf = _io.StringIO()
+        w = _csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        for p in result.get("patents", []):
+            w.writerow(p)
+        return b"\xef\xbb\xbf" + buf.getvalue().encode("utf-8")
+
+    if delivery not in ("token", "cache", "none"):
+        return {"success": False, "error_code": "GPSS4_ADV_BAD_DELIVERY",
+                "error": f"delivery must be token|cache|none, got {delivery!r}"}
+    if delivery == "cache":
+        err = _require_owner(owner_identity)
+        if err:
+            return err
+        if not subject_id or not subject_id.strip():
+            return {"success": False, "error_code": "SUBJECT_REQUIRED",
+                    "detail": "delivery='cache' requires subject_id"}
+
+    try:
+        res = await harvest(
+            query, max_pages=max_pages, expand_family=expand_family,
+        )
+    except GPSS4AdvSearchError as e:
+        return {"success": False, "error_code": "GPSS4_ADV_SEARCH", "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error_code": "GPSS4_ADV_SEARCH_RUNTIME",
+                "error": f"{type(e).__name__}: {e}"}
+
+    out: Dict[str, Any] = {"success": True, **res}
+    data = _csv_bytes(res)
+
+    if delivery == "token":
+        entry = token_store.put_bytes(data, csv_rel)
+        out.update(_handle(entry, csv_rel))
+    elif delivery == "cache":
+        existing = token_store.find_by_subject(owner_identity, subject_id)
+        entry = token_store.provision(subject_id, owner_identity)
+        token_store.write_file(entry.token, csv_rel, data)
+        out["cache_token"] = entry.token
+        out["subject_id"] = subject_id
+        out["mount_path"] = f"{_DAV_MOUNT_PREFIX}/{subject_id}"
+        out["csv_rel"] = csv_rel
+        out["bytes"] = len(data)
+        if existing is None or not getattr(entry, "credential_hash", None):
+            secret = _secrets.token_urlsafe(24)
+            token_store.set_credential(entry.token, secret)
+            out["credential"] = secret
+
+    if csv_path:  # legacy escape hatch, additive
+        from patent_mcp_server.gpss4.adv_search import write_csv
+        out["csv_path"] = write_csv(res, csv_path)
+    return out
 
 
 def main():

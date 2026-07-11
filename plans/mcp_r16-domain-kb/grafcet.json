@@ -1,0 +1,86 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A3",
+    "StepType": "initial",
+    "StepAction": "Idle: server up, KB connection unopened",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [6],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["kb_query_or_get_called"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "Resolve PATENTS_KB_DB env; open sqlite URI mode=ro + PRAGMA query_only=ON",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [2, 5],
+    "LinkOutputType": "divergence_or",
+    "Condition": ["kb_open_ok", "kb_missing_or_unreadable"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "Plan query: all tokens >=3 codepoints -> FTS AND; all <3 -> LIKE scan; mixed -> hybrid",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [3],
+    "LinkOutputType": "track",
+    "Condition": ["query_planned"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "Execute against ragbase objects; collect hits with confidence + source_weight",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [2],
+    "LinkOutputNumber": [4],
+    "LinkOutputType": "track",
+    "Condition": ["rows_collected"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "Return payload {hits, matchMode, total} (R16.6 self-describing degradation); close request",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [3],
+    "LinkOutputNumber": [0],
+    "LinkOutputType": "track",
+    "Condition": ["response_sent"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 5,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "Fail fast: typed envelope success=false error_code=KB_UNAVAILABLE + remedy field (host-side distill path); never silent empty hits",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [0],
+    "LinkOutputType": "track",
+    "Condition": ["error_sent"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 6,
+    "ModuleRef": "A4",
+    "StepType": "normal",
+    "StepAction": "Deploy-time: mount .specbase into container, set PATENTS_KB_DB, add instructions signpost + SKILL.md recall-first + consider: affordances",
+    "LinkInputType": [],
+    "LinkInputNumber": [],
+    "LinkOutputNumber": [0],
+    "LinkOutputType": "track",
+    "Condition": ["container_started_with_kb_mount"],
+    "SubGrafcet": []
+  }
+]

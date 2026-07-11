@@ -1,0 +1,47 @@
+{
+  "diagram_title": "patentmcp R16 domain-KB in-band serving",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "Serve KB Query",
+      "description": "MCP tool patentmcp_kb_query: plan query per token length (FTS >=3 codepoints / LIKE scan <3 / hybrid), execute against ragbase objects, return hits with matchMode + confidence + source_weight",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "Serve KB Get",
+      "description": "MCP tool patentmcp_kb_get: fetch one knowledge object full body_md + provenance (source, confidence, weight) by id",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "Guard Read-Only Access",
+      "description": "Open sqlite via URI mode=ro + PRAGMA query_only=ON over the bind-mounted .specbase dir; fail fast KB_UNAVAILABLE envelope with remedy field when PATENTS_KB_DB missing/unreadable",
+      "decomposition": null
+    },
+    {
+      "id": "A4",
+      "title": "Signpost Recall-First",
+      "description": "Announce KB in mcp.json instructions, add recall-first discipline to patentworks SKILL.md (R15 doctrine source), and append 'consider: patentmcp_kb_query' affordance to judgment-heavy tool descriptions",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    { "id": "AR1", "source": "EXTERNAL", "target": "A1:input", "label": "agent query string q (+type/limit)", "type": "input" },
+    { "id": "AR2", "source": "EXTERNAL", "target": "A1:control", "label": "R16.2 deterministic serving (no LLM) + R16.6 matchMode disclosure", "type": "control" },
+    { "id": "AR3", "source": "A3:output", "target": "A1:mechanism", "label": "read-only sqlite connection", "type": "mechanism" },
+    { "id": "AR4", "source": "A1:output", "target": "EXTERNAL", "label": "hits[] + matchMode + total (evidence-graded)", "type": "output" },
+    { "id": "AR5", "source": "EXTERNAL", "target": "A2:input", "label": "object id", "type": "input" },
+    { "id": "AR6", "source": "EXTERNAL", "target": "A2:control", "label": "R16.3 evidence-graded content (provenance mandatory)", "type": "control" },
+    { "id": "AR7", "source": "A3:output", "target": "A2:mechanism", "label": "read-only sqlite connection", "type": "mechanism" },
+    { "id": "AR8", "source": "A2:output", "target": "EXTERNAL", "label": "body_md + provenance", "type": "output" },
+    { "id": "AR9", "source": "EXTERNAL", "target": "A3:input", "label": "bind-mounted .specbase/ragbase.sqlite (same store as host gate.ts, R16.7)", "type": "input" },
+    { "id": "AR10", "source": "EXTERNAL", "target": "A3:control", "label": "R16.4 read-only serving + tiancode-1 fail-fast (KB_UNAVAILABLE)", "type": "control" },
+    { "id": "AR11", "source": "EXTERNAL", "target": "A3:mechanism", "label": "PATENTS_KB_DB env + sqlite3 stdlib (container pure-python)", "type": "mechanism" },
+    { "id": "AR12", "source": "EXTERNAL", "target": "A4:input", "label": "manifest instructions + SKILL.md + judgment-heavy tool descriptions", "type": "input" },
+    { "id": "AR13", "source": "EXTERNAL", "target": "A4:control", "label": "R16.5 recall-first signpost (delivered context)", "type": "control" },
+    { "id": "AR14", "source": "EXTERNAL", "target": "A4:mechanism", "label": "mcp.json edit + SKILL.md edit + tool description edits", "type": "mechanism" },
+    { "id": "AR15", "source": "A4:output", "target": "EXTERNAL", "label": "cold-start agent discovers KB before patent-search judgment", "type": "output" }
+  ]
+}

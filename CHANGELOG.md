@@ -2,6 +2,12 @@
 
 本檔為 patentmcp 的變更紀錄(繁體中文)。早於 2026-07-06 的歷史見 git log 與 `specs/` 各 plan 套件。
 
+## 2026-07-11
+
+### Added
+
+- **R16 domain-KB self-shipping(plan `mcp_r16-domain-kb`,依 `opencode/specs/mcp-integration-standard` §R16)**:新增 `patentmcp_kb_query(q, type?, limit?)` + `patentmcp_kb_get(id)` 兩個 read-only MCP tool,in-band 查詢 repo 的 ragbase 專利實務知識庫(`.specbase/ragbase.sqlite`,21 筆 evidence-graded 物件)。查詢語義比照 specbase / bodesign reference impl(全 token ≥3 碼點→FTS AND、全 <3→LIKE scan、混合→hybrid,payload 帶 `matchMode` 自述降級);唯讀由連線層強制(URI `mode=ro` + `PRAGMA query_only=ON`,目錄 rw 掛載僅為 WAL side files);KB 缺失回 `{success:false, error_code:"KB_UNAVAILABLE", remedy}` fail-fast。compose 新增 `./.specbase:/var/lib/patentmcp/kb` 掛載 + `PATENTS_KB_DB` env;mcp.json 0.5.0 + R16.5 recall-first signpost;patentworks SKILL.md 增 recall-first 紀律(R15 guide 同步生效);5 個判斷密集工具(patent_search / patent_bulk / pool_fetch / gpatents_get / ppubs_batch_get_claims)description 加 `consider: patentmcp_kb_query`。tool surface 36→38。驗證:`tests/test_kb_tools.py` 12 tests + 全套 199 passed;live MCP rail smoke(kb_query "GPSS" fts 7 hits、kb_get 全文+provenance);TV-6 兩門一致性(gate.ts ragbase_query 與 in-band 同 query 同 id 集合,diff 為空)。
+
 ## 2026-07-06
 
 ### Added

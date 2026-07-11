@@ -27,6 +27,8 @@ description: 專利全流程工作站。四種任務:(A) 把發明材料/idea �
 > - **patentmcp 自己的 cache 工具**:`cache_provision(subject_id, owner_identity)` 拿 `mount_path` + 一次性憑證 → rclone/davfs2 掛載後投料/取件走 mount(byte 不過 context)→ `cache_export(subject_id, target, owner_identity)` 顯式落地 → `cache_close`(dirty 未 export → `WORKSPACE_CLOSE_DIRTY` 擋下)。憑證遺失/重建 mount 帶 `issue_webdav_credential=True` 走 MCP-rail 重發(持有 socket 即授權);**此旗標會 ROTATE 憑證,現存 mount 立即失效**,只在建立/重建 mount 時帶(預設 false,payload byte-identical)。憑證絕不寫進報告/log。
 > - **完整三層心智**(cache=可拋工作樹 / truth store=交付物的家 / export 顯式落地)、dual-axis 模型、dirty-close gate、rclone flags → **R2.0 + R14**,不要憑記憶重建。
 
+> **Recall-first(R16 domain KB)**:patentmcp 自帶已蒸餾的專利實務知識庫(repo ragbase store,evidence-graded:GPSS/EPO API 規格、檢索方法論、代表圖窮舉梯、已知 failure modes、專利分析框架)。**判斷密集步驟前先查 KB**——設計檢索式、判讀來源梯、校準 screening 尺度之前,先 `patentmcp_kb_query(q)` 回憶已知知識,`patentmcp_kb_get(id)` 取全文。查詢降級自述(payload 帶 `matchMode`:fts / like-scan / hybrid;短 CJK token 走 like-scan);KB 缺失回 `KB_UNAVAILABLE` + remedy,不回假空結果。KB 唯讀 serving;寫入(蒸餾)只走 host-side specbase `producer.ts ragbase_distill`。
+
 專利從 idea 到申請的全流程。依需求選一個 flow,**先讀對應 flow 檔再執行**。
 
 ## 完整管線
