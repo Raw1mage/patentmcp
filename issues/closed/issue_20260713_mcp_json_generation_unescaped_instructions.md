@@ -1,6 +1,6 @@
 # issue: mcp.json 生成流程把多行 instructions 直接內嵌造成 invalid JSON，gateway 拒連
 
-- **狀態**: open
+- **狀態**: closed（即時修復 + 根治驗證閘皆已 commit）
 - **日期**: 2026-07-13
 - **範疇**: patentmcp / MCP manifest
 - **嚴重度**: high（整個 MCP app 對 opencode 不可用，症狀卻偽裝成「服務沒啟用」）
@@ -35,12 +35,18 @@ git 確認：**此損壞在 commit `9050d9d`（feat(r16): patentmcp_kb_query/kb_
 
 ## 待辦（根治，避免復發）
 
-即時修復只是把手拼字串補對；**產生 `mcp.json` 的流程本身仍會再次踩坑**。需修上游生成器：
+**調查結論：沒有生成器。** 搜過全 repo（`*.py`/`*.sh`/`*.ts`），`mcp.json` 不是程式產生的 —— `patents.py`/`patentdb_store.py` 只是讀 `.mcp.json` 找 repo root，`_http_app.py` 只是 landing page 文案。`mcp.json` 是**手寫維護的 manifest**，含那段 instructions 的來源只有它自己。
 
-- [ ] 定位產生 / 更新 `mcp.json` 的腳本或 build step（`9050d9d` 附近）
-- [ ] `instructions` 這種多行文字**一律經 JSON serializer 輸出**（`json.dumps` / `JSON.stringify`），禁止手拼字串直接內嵌換行
-- [ ] 加一道 CI / pre-commit 閘：對 repo 內所有 `mcp.json` 跑 `jq empty` 驗證，非法 JSON 直接 fail
-- [ ] 生成器輸出的 url 統一為無尾斜線 `/mcp`（與 FastMCP 端點對齊）
+因此根治不是「修生成器」，而是「加驗證閘」防止手寫再次弄壞它：
+
+- [x] 確認無生成器（手寫 manifest）→ 「改用 JSON serializer」不適用
+- [x] 新增 `scripts/validate-manifests.sh`：對 `mcp.json`/`.mcp.json` 跑 `jq empty`，非法 JSON 直接 fail；並斷言 `mcp.json` 的 url 無尾斜線
+- [x] 裝 `.git/hooks/pre-commit` 呼叫該腳本 → 非法 manifest 無法被 commit
+- [x] 兩個失敗模式（instructions 內 raw newline、url 尾斜線）皆已實測被擋下
+
+commit: `0d54b06`（即時修復）、`143e330`（驗證閘 + hook）。
+
+> 註：`.git/hooks/` 不隨 repo 版控。若要跨 clone 生效，未來可考慮改用 `core.hooksPath` 指向版控目錄，或接 pre-commit framework / CI。目前 repo 無 CI，先落地本機 hook。
 
 ## 參考
 
