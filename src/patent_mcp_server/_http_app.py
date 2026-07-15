@@ -21,6 +21,7 @@ import html
 import io
 import logging
 import os
+import time
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -258,6 +259,63 @@ def build_app(mcp, store):
 
     # FastMCP builds the app with /mcp mounted and the session-manager lifespan.
     app = mcp.streamable_http_app()
+
+    # --- unified access log (plan observability_tool-friction-log, DD-6/DD-7) ---
+    # W3C-semantics HTTP access log as a pure-ASGI middleware wrapping the whole
+    # app. Every inbound HTTP request lands one category='access' row in the same
+    # observability store as friction events (unified log mechanism). Pure ASGI
+    # (not BaseHTTPMiddleware) so SSE / streaming responses are untouched: we only
+    # peek the response-start status, never buffer the body. Fail-open — the
+    # recorder swallows its own errors, so logging never breaks a request.
+    from patent_mcp_server import friction_log as _obs
+
+    def _access_log_mw(inner_app):
+        async def middleware(scope, receive, send):
+            if scope.get("type") != "http":
+                # lifespan / websocket — pass through untouched.
+                await inner_app(scope, receive, send)
+                return
+            start = time.monotonic()
+            status_holder = {"code": None}
+
+            async def send_wrapper(message):
+                if message.get("type") == "http.response.start":
+                    status_holder["code"] = message.get("status")
+                await send(message)
+
+            try:
+                await inner_app(scope, receive, send_wrapper)
+            finally:
+                try:
+                    headers = {
+                        k.decode("latin-1").lower(): v.decode("latin-1")
+                        for k, v in scope.get("headers", []) or []
+                    }
+                    client = scope.get("client") or None
+                    client_ip = client[0] if client else None
+                    ua = headers.get("user-agent")
+                    raw_path = scope.get("raw_path")
+                    uri = (
+                        raw_path.decode("latin-1") if raw_path
+                        else scope.get("path", "")
+                    )
+                    _obs.record_access(
+                        method=scope.get("method"),
+                        uri=uri,  # cs-uri-stem; query string intentionally dropped (DD-5)
+                        status=status_holder["code"],
+                        duration_ms=int((time.monotonic() - start) * 1000),
+                        client_ip=client_ip,
+                        user_agent=ua,
+                        mcp_client=(ua.split("/")[0] if ua else None),
+                    )
+                except Exception:  # noqa: BLE001 — fail-open; logging never breaks a request
+                    pass
+
+        return middleware
+
+    # NOTE: the middleware is applied at the END of build_app (after all routes
+    # are attached via app.router.routes.extend below) — wrapping here would
+    # replace the Starlette app with a bare ASGI callable that has no .router.
 
     # Gateway path prefix used when rendering absolute-looking links on the page.
     prefix = os.environ.get("PATENTS_GATEWAY_PREFIX", "")
@@ -574,6 +632,11 @@ th{{text-align:left;border-top:1px solid #243040;padding:.4rem .6rem;color:var(-
         Route("/files/{token}/blob/{rel:path}", blob, methods=["GET"]),
         Route(f"/skills/{_SKILL_NAME}.zip", skill_zip, methods=["GET"]),
     ])
+
+    # Wrap the fully-routed Starlette app with the access-log middleware LAST, so
+    # every route (MCP, SSE, DAV, files, skills, landing) is observed while the
+    # Starlette app's own .router stays intact during route attachment above.
+    app = _access_log_mw(app)
     return app
 
 

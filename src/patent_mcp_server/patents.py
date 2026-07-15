@@ -131,6 +131,21 @@ from patent_mcp_server import patentdb_store as _pdb
 from patent_mcp_server.constants import Defaults, GooglePatentsCountries
 from patent_mcp_server.util.errors import ApiError
 
+# ---------------------------------------------------------------------
+# friction-log central choke point (plan observability_tool-friction-log, DD-1).
+# Wrap mcp.tool with friction_tool(mcp): every subsequent @mcp.tool()-decorated
+# tool is transparently wrapped so any uncaught exception is recorded (kind=
+# "exception") to /patentdb/friction.sqlite, then re-raised unchanged. This is
+# a monkeypatch so ALL ~45 tools are covered with zero per-tool edits; the
+# wrapper preserves the wrapped fn's signature via functools.wraps so FastMCP's
+# parameter-schema introspection is unaffected. Fail-open: the recorder never
+# raises, so observability cannot become a failure source (DD-4).
+# ---------------------------------------------------------------------
+from patent_mcp_server import friction_log as _friction
+
+_orig_mcp_tool = mcp.tool  # capture the ORIGINAL bound method before overriding
+mcp.tool = _friction.friction_tool(_orig_mcp_tool)  # type: ignore[assignment]
+
 # Constants
 USPTO_API_BASE = "https://api.uspto.gov"
 
@@ -941,27 +956,22 @@ def _get_db_root():
 def _get_patent_country_and_normalized_no(publication_number: str) -> tuple[str, str]:
     import re
     pat = re.sub(r'\s+', '', publication_number).upper()
-    
-    # Determine country
+
+    # Determine country. A pubno leads with its own 2-letter ISO country code;
+    # match the FULL known set (see patentdb_store._KNOWN_CC) not just
+    # TW/US/EP/WO/CN — otherwise a foreign number (KR.../JP.../CA...) falls
+    # through to the default "US" and later gets a spurious US prefix stacked
+    # on top, minting double-prefix pubnos (RCA DD-31, 2026-07-14).
+    from .patentdb_store import _KNOWN_CC
     country = "US"  # Default fallback
-    if pat.startswith("TW"):
+    matched_cc = False
+    for cc in _KNOWN_CC:
+        if pat.startswith(cc):
+            country, pat, matched_cc = cc, pat[len(cc):], True
+            break
+    if not matched_cc and re.match(r'^[IMD]\d+', pat):
         country = "TW"
-        pat = pat[2:]
-    elif pat.startswith("US"):
-        country = "US"
-        pat = pat[2:]
-    elif pat.startswith("EP"):
-        country = "EP"
-        pat = pat[2:]
-    elif pat.startswith("WO"):
-        country = "WO"
-        pat = pat[2:]
-    elif pat.startswith("CN"):
-        country = "CN"
-        pat = pat[2:]
-    elif re.match(r'^[IMD]\d+', pat):
-        country = "TW"
-    elif re.match(r'^\d{9}$', pat):  # TW application number (9 digits)
+    elif not matched_cc and re.match(r'^\d{9}$', pat):  # TW application number (9 digits)
         country = "TW"
         
     # Normalize patent number
@@ -3202,6 +3212,11 @@ async def patent_search(
         except Exception as e:  # noqa: BLE001 — absorb must never break search
             logger.warning(f"patentdb absorb failed for patent_search: {e}")
             envelope["patentdb_absorb"] = {"error": "absorb_failed", "detail": str(e)}
+            _friction.record_friction(
+                "silent", tool="patent_search", source="patentdb",
+                reason=_friction.normalize_reason(e),
+                detail="patentdb absorb failed (swallowed, search unaffected)",
+            )
     return envelope
 
 
@@ -3858,11 +3873,32 @@ async def patentmcp_batch_download_figures(publication_numbers: List[str]) -> Di
                 continue
 
             try:
-                if pub.upper().startswith("TW"):
-                    res = await session.fetch_representative_figure(pub)
-                else:
-                    # Report-grade: PDF -> FIG.1 page -> high-DPI PNG.
-                    res = await extract_representative_figure(pub)
+                # GPSS-first for EVERY jurisdiction: the GPSS detail page is the
+                # most convenient ready-made source — ONE scrape yields the
+                # full-res G2 representative figure (_000 = FIG.1), no prior PDF
+                # fetch + poppler render needed. _gpss_download_representative_figure_impl
+                # is country-agnostic (US/CN/TW/EP/WO/…) and guards against a
+                # neighbour patent's figure. Only when GPSS misses (recent
+                # publication not yet in the image库, Cloudflare challenge, no
+                # figure on the detail page) do we fall back to the report-grade
+                # PDF pipeline. The shared session's cookie/cf_clearance jar is
+                # reused across all items regardless of jurisdiction.
+                res = await session.fetch_representative_figure(pub)
+                if not (res.get("success") or "download_url" in res):
+                    # GPSS miss → fallback to PDF -> FIG.1 page -> high-DPI PNG.
+                    pdf_res = await extract_representative_figure(pub)
+                    if pdf_res.get("success") or "download_url" in pdf_res:
+                        res = pdf_res
+                    else:
+                        # keep whichever error is more actionable; annotate that
+                        # both source tiers were attempted.
+                        res = {
+                            "success": False,
+                            "error": pdf_res.get("error") or res.get("error"),
+                            "gpss_error": res.get("error"),
+                            "pdf_error": pdf_res.get("error"),
+                            "tried": ["gpss", "pdf_pipeline"],
+                        }
 
                 if res.get("success") or "download_url" in res:
                     downloaded[pub] = res
@@ -4680,7 +4716,7 @@ async def gpss4_folder_search(number: str, axis: str = "pub") -> Dict[str, Any]:
 async def gpss4_advanced_search(
     query: str,
     max_pages: int = 200,
-    expand_family: bool = True,
+    expand_family: bool = False,
     delivery: str = "token",
     owner_identity: str = "",
     subject_id: str = "",
@@ -4688,12 +4724,14 @@ async def gpss4_advanced_search(
     csv_path: str = "",
 ) -> Dict[str, Any]:
     """Harvest the TIPO GPSS4 web 進階檢索 (advanced search) result list into a
-    family-tagged patent pool, delivered via patentmcp's standard file rails.
+    pubno-granularity patent pool, delivered via patentmcp's standard file rails.
 
     Drives the LOGGED-IN web advanced search (GPSS4_USERNAME / GPSS4_PASSWORD
     from env) as a PURE-HTTPX state machine (no browser), bypassing the
-    official API's daily download quota. Returns every result row with title +
-    abstract, and — crucially — patent-family grouping for trustworthy dedup.
+    official API's daily download quota. Returns EVERY result row (title +
+    abstract + pat_no + apply_no) at pubno granularity — no family collapse,
+    no dedup, nothing dropped (DD-14: the離線 family-dedup近似法 was廢棄, and
+    the網站 family-collapse button is不透明 so it is NOT used by default).
 
     query:  GPSS advanced-search syntax (field codes, NOT `TI=`):
             title `(詞)@TI`, abstract `(詞)@AB`, claims `(詞)@CL`,
@@ -4704,10 +4742,10 @@ async def gpss4_advanced_search(
             size — harvest walks EVERY page into ONE complete pool. If a result
             set exceeds max_pages the return carries truncated=true (pool is
             partial; raise max_pages), never a silent cut.
-    expand_family: click 家族收合 so each row carries its family_group id
-            (the `N.M` family-sequence key). Set False to skip (faster, no
-            per-row family binding, but the summary family_count is still
-            returned).
+    expand_family: DEFAULT False (DD-14). Leave it False for pubno-granularity
+            harvesting. Setting True clicks the GPSS網站 家族收合 button before
+            harvesting — DISCOURAGED: that collapse is不透明 (沒有人知道它去重了
+            什麼), so we never dedup by family on the user's behalf.
 
     File delivery (choose ONE via `delivery`):
       * "token" (DEFAULT): the pool CSV bytes land in the docxmcp-compatible
@@ -4719,28 +4757,26 @@ async def gpss4_advanced_search(
         provisioned idempotently if absent). The CSV appears at
         <mount>/`csv_rel` over the mounted WebDAV tree; export later with
         cache_export. owner_identity is NEVER inferred (天條 §11).
-      * "none": JSON only — every patent row still carries family_group +
-        is_family_representative; no file is written.
+      * "none": JSON only — every patent row at pubno granularity; no file is
+        written.
     csv_rel: filename inside the token dir / cache (default "pool.csv").
     csv_path: LEGACY escape hatch — an absolute container path to also write
             the CSV to (back-compat; prefer token/cache delivery).
 
-    Family dedup (NON-DESTRUCTIVE): every row is kept and tagged with
-    is_family_representative — True for the family member with the EARLIEST
-    apply_date (ties broken by pat_no), False for the rest. To get a
-    one-per-family deduped list, filter patents on is_family_representative.
+    NO dedup (DD-14 pubno granularity): every parsed row is kept verbatim as
+    its own pubno record. Nothing is collapsed, grouped, or tagged. Same-
+    application versions (A/B publications) both appear as distinct rows.
 
-    Returns {success, total, family_count, representative_count,
-             summary_family_count, pages_fetched, total_pages, patents[],
-             + delivery handle}:
+    Returns {success, total, hit_count, pages_fetched, total_pages,
+             complete, truncated, patents[], + delivery handle}:
       * delivery="token" -> token, rel, download_url, bytes, sha256
       * delivery="cache" -> cache_token, subject_id, mount_path, csv_rel,
                             credential? (first provision only)
       * csv_path echoed back when the legacy path was also written.
-      * family_count = ACTUAL distinct family groups parsed post-collapse
-        (authoritative for dedup); equals representative_count.
-      * summary_family_count = the pre-collapse estimate the page prints.
-      * GPSS gives 簡易專利家族 grouping, NOT INPADOC family-ID strings.
+      * hit_count = actual number of rows harvested (pubno granularity).
+      * total = the result-count the GPSS page reports for the query.
+      * complete/truncated = whether the max_pages cap cut the walk short
+        (truncated=true means the pool is PARTIAL; never a silent cut).
     """
     import csv as _csv
     import io as _io
@@ -4748,8 +4784,8 @@ async def gpss4_advanced_search(
 
     def _csv_bytes(result: Dict[str, Any]) -> bytes:
         """Render the pool as UTF-8-BOM CSV bytes (same cols as write_csv)."""
-        fields = ["seq", "pat_no", "apply_date", "title", "abstract",
-                  "family_group", "is_family_representative"]
+        fields = ["seq", "pat_no", "apply_no", "apply_date", "title",
+                  "abstract"]
         buf = _io.StringIO()
         w = _csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
         w.writeheader()
@@ -4768,9 +4804,12 @@ async def gpss4_advanced_search(
             return {"success": False, "error_code": "SUBJECT_REQUIRED",
                     "detail": "delivery='cache' requires subject_id"}
 
+    import os as _os
+    _dbg_dump = _os.environ.get("GPSS4_ADV_DUMP_DIR") or None
     try:
         res = await harvest(
             query, max_pages=max_pages, expand_family=expand_family,
+            dump_dir=_dbg_dump,
         )
     except GPSS4AdvSearchError as e:
         return {"success": False, "error_code": "GPSS4_ADV_SEARCH", "error": str(e)}

@@ -118,6 +118,13 @@
 
 ## Debug / Observability Map
 
+- **Unified observability log 邊界(plan `observability_tool-friction-log`, 2026-07-15)**:patentmcp 的**統一**觀測記錄機制——工具層 error、靜默磨擦、HTTP 存取全進**同一 store、同一 record API、同一查詢面**。
+  - **`src/patent_mcp_server/friction_log.py`**(模組名保留相容,語義已升級為 unified):SQLite store 單表 `events`,`category` 欄區分 `friction`(kind=exception|silent)與 `access`(kind=http);共用欄 `ts/category/kind/tool/reason/detail`,friction 專屬 `source/args_summary`,access 專屬 W3C 語義 `method/uri/status/duration_ms/client_ip/user_agent/mcp_client`。統一底層寫入 `record_event(...)`,薄包裝 `record_friction(kind,...)`(向後相容)/ `record_access(...)`。全部 fail-open(任何錯誤只 warn 吞掉,絕不 raise——觀測不得成為故障源)。落點 `/patentdb/observability.sqlite`(寄生現有 `./patentdb` bind-mount,rebuild 存活,WAL)。
+  - **中央 exception choke point(DD-1)**:`patents.py` import 區塊末以 monkeypatch 把 `mcp.tool` 替換為 `friction_tool(_orig_mcp_tool)`——所有 ~48 個 `@mcp.tool()` 工具透明經 wrapper 註冊,未捕捉 exception 記 `category="friction" kind="exception"` 後原樣 re-raise。**必須先捕獲 `_orig_mcp_tool` 原始 bound method**(否則 wrapper 內呼叫已被覆蓋的 `mcp.tool` → 無限遞迴)。`functools.wraps` 保留 signature,FastMCP schema 內省不受影響(實測 `patent_search` 參數 schema 完好、48 工具全註冊)。
+  - **HTTP access log(DD-6/DD-7)**:`_http_app.py` build_app 尾端以**純 ASGI middleware**(`_access_log_mw`)包住已掛完路由的 Starlette app,每個進來的 HTTP 請求落一筆 `category="access"` row(W3C 語義)。**必須在所有 `app.router.routes.extend` 之後才包**(太早包會把 Starlette app 換成無 `.router` 的裸 ASGI callable → build_app 掛路由時 AttributeError)。純 ASGI(非 BaseHTTPMiddleware)故 SSE/streaming 不受影響——只 peek response-start 狀態碼,不 buffer body。實測辨識出來客 `mcp_client: opencode`。
+  - **靜默磨擦顯式埋點(DD-2)**:`logger.warning(...)+continue` 型磨擦(非 exception,無法自動辨識)由呼叫端顯式 `record_friction(kind="silent", ...)`。首批熱點:patent_search 的 patentdb absorb 失敗(`patents.py` ~3198)。可增量補 source ladder miss / EPO throttle / SCRAPING_REQUIRED。
+  - **觀測方式**:無 MCP 查詢工具(使用者決策)——開發時直接讀 `patentdb/observability.sqlite`。範例:磨擦排名 `SELECT kind,tool,source,reason,count(*) FROM events WHERE category='friction' GROUP BY 1,2,3,4`;來客存取 `SELECT datetime(ts,'unixepoch','localtime'),method,uri,status,duration_ms,mcp_client FROM events WHERE category='access' ORDER BY id DESC`。憑證絕不入 log(`_SECRET_KEYS` 剔除 + args 只存短摘要 + URI query 剝除)。
+  - spec package:`plans/observability_tool-friction-log/`。
 - 檢索工具邊界：`src/patent_mcp_server/patents.py` 的 MCP tool docstring 與返回 schema。
 - 統一檢索 dispatcher 邊界(plan `patentmcp_search-dispatcher`, 2026-07):
   - **`src/patent_mcp_server/search_dispatcher.py`**(~400 行):`QuerySpec` dataclass + `normalize_query()`(無檢索軸 → `INVALID_PARAMS` fail-fast,零後端呼叫)、`AXIS_CAPABILITY` 矩陣(各來源支援的查詢軸)、`dispatch_search()` 來源梯:GPSS(官方首選)→ EPO search→biblio 二段(15/min throttle,大 num 截斷記 `biblio_truncated`)→ PPUBS(`uspc` 軸直達、US-only)→ gated gpatents 爬蟲尾級。
