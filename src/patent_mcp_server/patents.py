@@ -3968,9 +3968,19 @@ async def patentmcp_batch_download_figures(publication_numbers: List[str]) -> Di
     """
     import json
     import time
-    import tempfile
-    
-    cooldown_file = os.path.join(tempfile.gettempdir(), "patent_cooldown.json")
+
+    # /tmp 是 world-readable(drwxrwxrwt),cooldown JSON 落這裡違 XDG 資安天條。
+    # 改落 XDG_RUNTIME_DIR(/run/user/<uid>,tmpfs,0700 僅 owner)。未設時
+    # 退 XDG_CACHE_HOME,再退 ~/.cache。一律 mkdir -p 0700。
+    _xdg = (os.environ.get("XDG_RUNTIME_DIR")
+            or os.environ.get("XDG_CACHE_HOME")
+            or os.path.join(os.path.expanduser("~"), ".cache"))
+    _cd_dir = os.path.join(_xdg, "patentmcp")
+    try:
+        os.makedirs(_cd_dir, mode=0o700, exist_ok=True)
+    except Exception:
+        pass
+    cooldown_file = os.path.join(_cd_dir, "patent_cooldown.json")
     cooldown_data = {}
     if os.path.exists(cooldown_file):
         try:
@@ -4027,7 +4037,14 @@ async def patentmcp_batch_download_figures(publication_numbers: List[str]) -> Di
                 if not (res.get("success") or "download_url" in res):
                     # GPSS miss → fallback to PDF -> FIG.1 page -> high-DPI PNG.
                     pdf_res = await extract_representative_figure(pub)
-                    if pdf_res.get("success") or "download_url" in pdf_res:
+                    # R13 landing:extract_representative_figure 現回 TOOL_LANDED
+                    # redirect envelope(deliverable 落 host 本機,非回傳內)。
+                    # 這是成功分流信號,不是失敗 —— 若不視為 landed 就會
+                    # 對所有 GPSS-miss 專利斷鏈。TOOL_LANDED / doc_dir / token
+                    # 任一存在 = 已落地。
+                    _landed = (pdf_res.get("error_code") == "TOOL_LANDED"
+                               or "doc_dir" in pdf_res or "token" in pdf_res)
+                    if pdf_res.get("success") or "download_url" in pdf_res or _landed:
                         res = pdf_res
                     else:
                         # keep whichever error is more actionable; annotate that
@@ -4040,7 +4057,9 @@ async def patentmcp_batch_download_figures(publication_numbers: List[str]) -> Di
                             "tried": ["gpss", "pdf_pipeline"],
                         }
 
-                if res.get("success") or "download_url" in res:
+                if (res.get("success") or "download_url" in res
+                        or res.get("error_code") == "TOOL_LANDED"
+                        or "doc_dir" in res or "token" in res):
                     downloaded[pub] = res
                 else:
                     err_str = str(res.get("error", "")).lower()

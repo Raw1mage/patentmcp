@@ -254,7 +254,73 @@ def record_access(
 
 
 # ---------------------------------------------------------------------
-# 中央 exception 攔截 wrapper(DD-1)。
+# envelope-層磨擦偵測(DD-9,BR_20260715 §0)。
+#
+# 工具並非只用 raise 表達失敗 —— 大量磨擦是「正常 return 一個帶
+# 失敗旗標的 dict」(success:false / error / error_code / *_empty)。
+# 這些不拋 exception,exception 攜截層看不到(BR_20260715 實例:
+# cuboai client 踩 5 磨擦但 log 報 0 friction)。本層在成功回傳路徑
+# 旁路檢查回傳 dict,偵到失敗旗標就記一筆 kind='silent'。
+# 錯誤契約不變 —— 只旁路記錄,不改回傳。
+# ---------------------------------------------------------------------
+
+# 視為「成功」的 error_code 白名單 —— R13 landing redirect 並非磨擦
+# (它是正常的兩平面分流信號,呼叫端該走 landed 腳本)。
+_OK_ERROR_CODES = {"TOOL_LANDED"}
+
+# 帶這些旗標 = 需呼叫端補一步的静默磨擦(非硬失敗,但體驗不順)。
+_ADVISORY_FLAG_KEYS = ("claim1_empty", "biblio_truncated", "scraping_skipped")
+
+
+def detect_envelope_friction(result: Any) -> Optional[Dict[str, str]]:
+    """偵測工具回傳 dict 是否帶「静默磨擦」旗標。
+
+    回傳 None 表示沒磨擦(正常成功);回傳 {reason, detail} 表示偵到磨擦。
+    純函式,絕不 拋錯(fail-open 上層負責包)。
+
+    偵測規則(任一成立):
+      1. success 顯式為 False。
+      2. 帶 error / error_code 且非白名單(TOOL_LANDED)。
+      3. 帶 advisory 旗標(claim1_empty 等)且為 truthy。
+    """
+    if not isinstance(result, dict):
+        return None
+    # 規則 1:顯式 success=False。
+    if result.get("success") is False:
+        code = result.get("error_code") or result.get("error") or "unknown"
+        code = str(code)
+        if code in _OK_ERROR_CODES:
+            return None
+        return {"reason": _reason_from_code(code),
+                "detail": f"success=false: {code[:180]}"}
+    # 規則 2:沒 success 旗但帶 error/error_code(部分工具不回 success)。
+    if "success" not in result:
+        code = result.get("error_code") or result.get("error")
+        if code is not None and str(code) not in _OK_ERROR_CODES:
+            return {"reason": _reason_from_code(str(code)),
+                    "detail": f"error envelope: {str(code)[:180]}"}
+    # 規則 3:advisory 旗標(即使 success=true 也算静默磨擦 —— 需補一步)。
+    for k in _ADVISORY_FLAG_KEYS:
+        if result.get(k):
+            return {"reason": f"advisory:{k}",
+                    "detail": f"envelope flag {k}=truthy (caller needs a follow-up)"}
+    return None
+
+
+def _reason_from_code(code: str) -> str:
+    """error_code/error 字串 → 正規化 reason(優先 http_error:NNN)。"""
+    m = _HTTP_RE.search(code)
+    if m:
+        return f"http_error:{m.group(1)}"
+    # 簡短 error_code(如 SCRAPING_REQUIRED)直接當 reason;長錯訊截斷。
+    token = code.strip().split(":", 1)[0].split(" ", 1)[0]
+    if token and token.isupper() and len(token) <= 40:
+        return f"envelope:{token}"
+    return f"envelope:{code[:60]}"
+
+
+# ---------------------------------------------------------------------
+# 中央 exception 攜截 wrapper(DD-1)+ envelope 磨擦旁路(DD-9)。
 # ---------------------------------------------------------------------
 
 def friction_tool(orig_tool: Callable[..., Any]) -> Callable[..., Any]:
@@ -277,7 +343,7 @@ def friction_tool(orig_tool: Callable[..., Any]) -> Callable[..., Any]:
                 @functools.wraps(fn)
                 async def awrapper(*args: Any, **kwargs: Any):
                     try:
-                        return await fn(*args, **kwargs)
+                        result = await fn(*args, **kwargs)
                     except Exception as exc:  # noqa: BLE001
                         record_friction(
                             "exception",
@@ -287,12 +353,14 @@ def friction_tool(orig_tool: Callable[..., Any]) -> Callable[..., Any]:
                             args_summary=summarize_args(kwargs),
                         )
                         raise
+                    _record_envelope_friction(tool_name, result, kwargs)
+                    return result
                 wrapped = awrapper
             else:
                 @functools.wraps(fn)
                 def swrapper(*args: Any, **kwargs: Any):
                     try:
-                        return fn(*args, **kwargs)
+                        result = fn(*args, **kwargs)
                     except Exception as exc:  # noqa: BLE001
                         record_friction(
                             "exception",
@@ -302,6 +370,8 @@ def friction_tool(orig_tool: Callable[..., Any]) -> Callable[..., Any]:
                             args_summary=summarize_args(kwargs),
                         )
                         raise
+                    _record_envelope_friction(tool_name, result, kwargs)
+                    return result
                 wrapped = swrapper
 
             # 交給**原始** mcp.tool() 完成註冊(schema 內省作用在 wrapped,
@@ -311,3 +381,24 @@ def friction_tool(orig_tool: Callable[..., Any]) -> Callable[..., Any]:
         return register
 
     return decorator
+
+
+def _record_envelope_friction(tool_name: str, result: Any,
+                              kwargs: Dict[str, Any]) -> None:
+    """在工具成功回傳路徑旁路偵測 envelope-層磨擦並記 kind='silent'。
+
+    fail-open:偵測/記錄自身任何錯誤只吐掉,絕不影響工具回傳。
+    """
+    try:
+        friction = detect_envelope_friction(result)
+        if friction is None:
+            return
+        record_friction(
+            "silent",
+            tool=tool_name,
+            reason=friction["reason"],
+            detail=friction["detail"],
+            args_summary=summarize_args(kwargs),
+        )
+    except Exception as e:  # noqa: BLE001 — fail-open(DD-4)
+        logger.warning("observability: envelope-friction detect failed (swallowed): %s", e)
