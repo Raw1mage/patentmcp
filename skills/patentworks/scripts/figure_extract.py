@@ -353,9 +353,11 @@ def _pick_page_by_projection(pdf_path: str, pages_hint: int = 0) -> dict:
             "pages": total, "engine": engine}
 
 
-def _crop_render_png(pdf_path: str, page: int, dpi: int = 200):
+def _crop_render_png(pdf_path: str, page: int, dpi: int = 200,
+                     trim_header: bool = False):
     """Render a page to PNG, auto-cropping surrounding whitespace to the content
-    bounding box. Prefers fitz; falls back to poppler render + Pillow crop."""
+    bounding box. Prefers fitz; falls back to poppler render + Pillow crop.
+    trim_header strips a top header band first (BR_20260712 軍A)."""
     # Try fitz first (poppler-free).
     if _have_fitz():
         try:
@@ -371,7 +373,7 @@ def _crop_render_png(pdf_path: str, page: int, dpi: int = 200):
                 im = Image.frombytes(mode, (pix.width, pix.height), pix.samples)
             finally:
                 doc.close()
-            return _autocrop_to_png(im)
+            return _autocrop_to_png(im, trim_header=trim_header)
         except Exception:
             pass
     # Fallback: poppler render, Pillow crop.
@@ -384,16 +386,66 @@ def _crop_render_png(pdf_path: str, page: int, dpi: int = 200):
         import io
         from PIL import Image
         with Image.open(io.BytesIO(raw)) as im:
-            return _autocrop_to_png(im.copy())
+            return _autocrop_to_png(im.copy(), trim_header=trim_header)
     except Exception:
         return raw
 
 
-def _autocrop_to_png(im) -> bytes:
-    """Trim whitespace to the content bbox and return PNG bytes."""
+def _trim_header_band(im):
+    """BR_20260712 軍A:裁掉專利頁頂的帶狀標題文字（「说明书附图 / 图1 /
+    Sheet N of M / Patent Application Publication / 公開號行」）。
+
+    純像素列投影（免 OCR，與 dual-engine 一致）:頁頂若有一小段密集墨水列
+    （帶狀文字）接著一段明顯空白間隙，就把那段帶狀裁掉。保守:只在
+    帶狀位於頁面頂部 <18% 且其下有 ≥ 帶狀高度的空白間隙時才裁，避免誤削圖面。
+    回傳裁切後的 im（或原 im 若未偵到帶狀）。
+    """
+    import numpy as np
+    try:
+        gray = np.asarray(im.convert("L"))
+    except Exception:
+        return im
+    h = gray.shape[0]
+    if h < 40:
+        return im
+    # 每列墨水比（<200 算深墨，避開淡灰圖線誤判）。
+    row_ink = (gray < 200).mean(axis=1)
+    ink_rows = row_ink > 0.008          # 視為「有文字/墨水」的列
+    # 只看頂部 25% 區域找帶狀。
+    top_zone = int(h * 0.25)
+    # 頂部第一段連續墨水列 = 候選帶狀。
+    r = 0
+    while r < top_zone and not ink_rows[r]:
+        r += 1
+    if r >= top_zone:
+        return im                        # 頂部全空，無帶狀
+    band_start = r
+    while r < h and ink_rows[r]:
+        r += 1
+    band_end = r                         # 帶狀下緣
+    band_h = band_end - band_start
+    # 帶狀必須落在頂部且不能太高（>18% 頁高就不像題帶，可能是圖）。
+    if band_end > h * 0.18 or band_h < 3:
+        return im
+    # 帶狀下方的空白間隙:需 ≥ band_h（確保帶狀與主圖分離）。
+    g = band_end
+    while g < h and not ink_rows[g]:
+        g += 1
+    gap = g - band_end
+    if gap < max(band_h, int(h * 0.01)):
+        return im                        # 無明顯間隙，不確定是帶狀，不裁
+    # 裁掉帶狀 + 其下間隙，保留主圖。
+    return im.crop((0, g, gray.shape[1], h))
+
+
+def _autocrop_to_png(im, trim_header: bool = False) -> bytes:
+    """Trim whitespace to the content bbox and return PNG bytes. When
+    trim_header is set, first strip a top header band (BR_20260712 軍A)."""
     import io
     import numpy as np
     from PIL import Image
+    if trim_header:
+        im = _trim_header_band(im)
     gray = np.asarray(im.convert("L"))
     ink = gray < 250
     if ink.any():
@@ -425,6 +477,14 @@ def main(argv=None) -> int:
     p.add_argument("--repo", default=None,
                    help="repo root for the .src/ landing plane (DD-6a). When "
                         "--out is omitted, the figure lands under <repo>/.src/.")
+    p.add_argument("--trim-header", dest="trim_header",
+                   action="store_true", default=True,
+                   help="strip a top header band (说明书附图 / Sheet N of M / "
+                        "Patent Application Publication / 公開號行) from the "
+                        "rendered figure (BR_20260712 軍A; default on).")
+    p.add_argument("--no-trim-header", dest="trim_header",
+                   action="store_false",
+                   help="disable header-band trimming (keep the full rendered page).")
     args = p.parse_args(argv)
 
     # BR_20260715 #04: poppler is NO LONGER a hard gate. The text-layer locator
@@ -474,7 +534,8 @@ def main(argv=None) -> int:
     # Render: image-projection hits get an auto-cropped render (fitz or
     # poppler+Pillow); text-layer hits keep the original full-page poppler render.
     if loc["method"] == "image_projection":
-        png = _crop_render_png(str(pdf_path), loc["page"], dpi=args.dpi)
+        png = _crop_render_png(str(pdf_path), loc["page"], dpi=args.dpi,
+                               trim_header=args.trim_header)
     else:
         png = _render_page_png(str(pdf_path), loc["page"], dpi=args.dpi)
     if png is None:

@@ -749,7 +749,16 @@ async def uspto_patents(
 
 @mcp.tool(annotations=_RO)
 async def google_get_patent(publication_number: str) -> Dict[str, Any]:
-    """Get full patent details from Google Patents by publication number
+    """[BigQuery-BILLED backend — subject to environment-level BigQuery ban]
+    Get full patent details via Google Patents Public Data on BigQuery.
+
+    ⚠ BACKEND = Google BigQuery Google Patents Public Data (a METERED/BILLED
+    query API), NOT the google.com web page. Every call bills scanned bytes and
+    is subject to any environment-level BigQuery ban. For ordinary patent
+    lookup/verification, PREFER the official free ladder: TIPO GPSS
+    (patent_search / ppubs_batch_get_claims / patent_get_claim1, source:tipo),
+    EPO OPS, USPTO PPUBS. Use this google_* path ONLY when BigQuery is
+    explicitly authorized for the task.
 
     Retrieves complete patent information including title, abstract, dates,
     inventors, assignees, classifications, and more.
@@ -782,7 +791,14 @@ async def google_get_patent(publication_number: str) -> Dict[str, Any]:
 
 @mcp.tool(annotations=_RO)
 async def google_get_patent_claims(publication_number: str) -> Dict[str, Any]:
-    """Get patent claims from Google Patents by publication number
+    """[BigQuery-BILLED backend — subject to environment-level BigQuery ban]
+    Get patent claims via Google Patents Public Data on BigQuery.
+
+    ⚠ BACKEND = Google BigQuery Google Patents Public Data (a METERED/BILLED
+    query API), NOT the google.com web page. For ordinary claims verification,
+    PREFER the official free ladder: TIPO GPSS (ppubs_batch_get_claims /
+    patent_get_claim1, source:tipo), EPO OPS, USPTO PPUBS. Use this google_*
+    path ONLY when BigQuery is explicitly authorized.
 
     Retrieves all claims for the specified patent, including claim numbers
     and full claim text.
@@ -815,7 +831,13 @@ async def google_get_patent_claims(publication_number: str) -> Dict[str, Any]:
 
 @mcp.tool(annotations=_RO)
 async def google_get_patent_description(publication_number: str) -> Dict[str, Any]:
-    """Get patent description from Google Patents by publication number
+    """[BigQuery-BILLED backend — subject to environment-level BigQuery ban]
+    Get patent description via Google Patents Public Data on BigQuery.
+
+    ⚠ BACKEND = Google BigQuery Google Patents Public Data (a METERED/BILLED
+    query API), NOT the google.com web page. For ordinary description lookup,
+    PREFER the official free ladder: TIPO GPSS, EPO OPS, USPTO PPUBS. Use this
+    google_* path ONLY when BigQuery is explicitly authorized.
 
     Retrieves the detailed description section of the patent document.
 

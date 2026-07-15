@@ -1,6 +1,6 @@
 # BR: cuboai client 首次外部連線 5 份使用磨擦回報 — envelope-層失敗 friction log 全漏抓
 
-**嚴重度**：高（含高/中/低 5 子項）　**狀態**：Open（已歸檔，逐項待修）
+**嚴重度**：高（含高/中/低 5 子項）　**狀態**：Closed（§0 核心 friction 假陰性 + 延伸發現兩缺陷 + 子項 04 影像 fallback 已修，2026-07-15；剩 05/01 為低優先 remaining，另見文末）
 **來源**：cuboai client（Windows 11 / Claude Code，`.mcp.json` → `https://cms.thesmart.cc/patentmcp/mcp` streamable-http），首次以外部連線產製「Cubo AI 專利技術精讀報告」（15 件公報、7 技術族群）時回報。原件 `~/GoogleDrive/Projects/cuboai/issues/{01..05}-*.md`。
 **Target**：patentmcp 工具層 + `_http_app.py` gateway/檔案端點 + `figure_extract.py` + friction log 攔截語義
 
@@ -102,7 +102,9 @@
 
 - [x] 02 gateway prefix：`_handle()` 新增 `gateway_download_path`（帶 /patentmcp 前綴）+ `download_url_note`，48 工具 handle 統一產生點；兩處 cherry-pick 改 `{**handle}` 繼承新欄位。**檔案端點 404 已存在**（blob() 本就回 404 JSON；client 撞的 200-HTML 是 cms 頂層 SPA catch-all，不在本 repo）。
 - [x] 03 代表圖非 TW 自動降級：wrapper 層 GPSS miss（no-row/diff-patent/no-figure）→ 非 TW 自動走 `fetch_patent_pdf`（官方優先）+ routed `next_step`（figure_extract.py）；TW miss 與網路錯誤維持 pass-through。批次部分成功→見「延伸發現」，待後續。
-- [ ] 04 figure_extract 影像式後備（中，委派 coding subagent）
-- [ ] 05 patent_search include_claim1（低）
-- [ ] 01 README 連線檢查清單（中，patentmcp 側僅能提供文件）
-- [ ] （後續獨立 plan）friction log 補 envelope 回傳值檢查 → 修 §0 假陰性根因 + 批次工具兩缺陷（R13 斷鏈 + /tmp）
+- [x] 04 figure_extract 影像式後備（已修 2026-07-15）：dual-engine（PyMuPDF fitz 優先／退 pdftoppm+Pillow）落 `figure_extract.py`，無文字層 PDF 改走 90dpi 灰階列投影偵圖面頁；pymupdf>=1.28.0 進 docker image（非 host）→ 容器內 `import fitz` 1.28.0 驗證，fitz 路徑免 poppler（解 Windows `MISSING_DEPENDENCY`）。
+- [ ] 05 patent_search include_claim1（低，remaining）：caller 現以 `ppubs_batch_get_claims` 繞道可行，非阻塞。
+- [ ] 01 README 連線檢查清單（低，remaining）：patentmcp 側僅能提供文件；client 已自行繞過。
+- [x] （friction log）補 envelope 回傳值檢查（已修 2026-07-15，commit 22e9bb7）：`friction_log.py` 新增純函式 `detect_envelope_friction` 在成功回傳路徑旁路偵測（success:false / error_code / advisory 旗標）→ 自動記 kind=silent；TOOL_LANDED 白名單不誤報；fail-open 守 DD-4，不改回傳契約。9 案驗證通過。修了 §0 假陰性根因。
+- [x] （批次工具 R13 斷鏈）已修 2026-07-15：`patents.py:batch_download_figures` GPSS miss fallback 拿到 `extract_representative_figure` 的 TOOL_LANDED redirect 現正確視為 landed（加 TOOL_LANDED/doc_dir/token 判定，兩處）。
+- [x] （批次工具 /tmp）已修 2026-07-15：cooldown 由 `tempfile.gettempdir()`（/tmp world-readable）→ `$XDG_RUNTIME_DIR/patentmcp` 0700。

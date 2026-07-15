@@ -558,6 +558,14 @@ _EPO_SKIP_WALL = 2000           # OPS deep-paging wall (skip>=2000 -> HTTP 400)
 _EPO_PAGE_RETRIES = 2           # transient (429/500) retries per page
 _EPO_PAGE_BACKOFF_BASE = 4.0    # OPS throttle-friendly backoff: 4s / 8s
 _EPO_BIBLIO_SLEEP = 0.2         # inter-biblio spacing (stay under 15/min bursts)
+# MCP-timeout-safe per-call biblio fan-out cap (BR_20260710)。單 call 內 biblio
+# fan-out 受 OPS 15/min 節流:100 refs × ~4s ≈ 7min,遠超 MCP transport ~2min →
+# call 被切、server 迴圈終止、無法靠重發推進(每次從同 skip 重來燒節流額度)。
+# 實測(BR workaround)num≤20 逐頁驅動決定性有效(total 934 全程零逾時)。
+# 把單 call 的 target cap 在 20:單 call ~1.5min 內乾淨返回,靠已存在的
+# next_skip/exhausted 讓 caller 逐頁續跑。caller 顯式帶更大 num 時仍以此 cap
+# 分段,不改 next_skip 續跑語義。
+_EPO_CALL_BIBLIO_CAP = 20
 
 
 def _epo_build_cql(spec: QuerySpec) -> str:
@@ -605,7 +613,10 @@ async def _bulk_pull_epo(
     if not cql:
         raise BackendError("EPO bulk harvest needs at least one axis")
 
-    target = min(spec.num, _EPO_SKIP_WALL)
+    # MCP-timeout-safe:單 call 的 biblio fan-out 量 cap 在 _EPO_CALL_BIBLIO_CAP
+    # (BR_20260710)。caller 帶更大 num 時,靠 next_skip 逐 call 續跑推進,而非
+    # 單 call 內一次拉完撞 transport timeout。
+    target = min(spec.num, _EPO_CALL_BIBLIO_CAP, _EPO_SKIP_WALL)
     records: List[Dict[str, Any]] = []
     prov: List[Dict[str, Any]] = []
     skip = spec.skip
@@ -680,8 +691,14 @@ async def epo_bulk_harvest(
     scraper fallback. Paginates + fetches biblio server-side up to num / total /
     the OPS skip wall (~2000). absorb_cb lands each page incrementally so a
     client-side timeout on the biblio fan-out keeps whatever already landed;
-    the envelope carries `next_skip` for resuming. The MCP wrapper defaults num
-    to one page (100) so a single call stays under the client timeout.
+    the envelope carries `next_skip` for resuming.
+
+    Per-call cap (BR_20260710): each call's biblio fan-out is capped at
+    _EPO_CALL_BIBLIO_CAP (20) refs so one call finishes well under the MCP
+    transport timeout (~2min). A larger `num` is harvested across multiple
+    calls via `next_skip` — the envelope flags `page_capped=true` when this
+    call returned early on the cap (not exhaustion), so the caller knows to
+    resume with next_skip instead of mistaking it for total-complete.
     """
     if not (spec.keyword or spec.ipc or spec.cpc or spec.uspc or spec.applicant):
         return _envelope(
@@ -709,6 +726,11 @@ async def epo_bulk_harvest(
     env["next_skip"] = next_skip
     env["exhausted"] = bool(total is not None and next_skip >= total) or (
         next_skip >= _EPO_SKIP_WALL)
+    # 標記本 call 是否因 per-call cap 提前返回(未 exhausted 但 records 達 cap):
+    # 讓 caller 知道要帶 next_skip 再呼叫一次(而非誤判 total 已撈完)。
+    env["page_capped"] = bool(
+        not env["exhausted"] and len(records) >= _EPO_CALL_BIBLIO_CAP)
+    env["call_biblio_cap"] = _EPO_CALL_BIBLIO_CAP
     return env
 
 
