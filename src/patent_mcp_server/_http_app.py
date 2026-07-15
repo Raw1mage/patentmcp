@@ -82,6 +82,16 @@ STRINGS = {
         "connect_h2": "Connect the MCP server",
         "connect_remote": "Remote client (through the gateway) — Streamable HTTP:",
         "connect_local": "Local client — stdio via <code>uv</code> (<code>.mcp.json</code>):",
+        "handshake_h2": "Tools not showing up? Connection checklist",
+        "handshake_note": "If patentmcp is configured but its tools never appear in your session (tool search returns nothing), your client isn't completing the Streamable-HTTP handshake. Verify:",
+        "handshake_steps": [
+            "Endpoint is the full gateway-prefixed URL: <code>{mcp}</code> (a bare host without the mount prefix hits the SPA, not the MCP server).",
+            "Request header <code>Accept: application/json, text/event-stream</code> is sent (Streamable HTTP requires both).",
+            "You POST <code>initialize</code> FIRST, then read <code>mcp-session-id</code> from the response headers.",
+            "Every later request (<code>notifications/initialized</code>, <code>tools/list</code>, <code>tools/call</code>) carries that <code>mcp-session-id</code> + <code>MCP-Protocol-Version</code>.",
+            "Responses are SSE (<code>event: message</code> + <code>data: {{...}}</code>) — parse the <code>data:</code> lines.",
+        ],
+        "handshake_gotcha": "POSTing tools/list before initialize returns <code>-32600 Missing session ID</code> — that error means the handshake order is wrong, not that the server is down.",
         "endpoints_h2": "Endpoints",
         "ep_mcp": "MCP", "ep_file": "File download", "ep_health": "Health", "ep_skill": "Skill",
         "tools_h2": "Tools",
@@ -97,6 +107,16 @@ STRINGS = {
         "connect_h2": "連接 MCP 伺服器",
         "connect_remote": "遠端 client（經 gateway）— Streamable HTTP：",
         "connect_local": "本機 client — 經 <code>uv</code> 的 stdio（<code>.mcp.json</code>）：",
+        "handshake_h2": "工具沒出現？連線檢查清單",
+        "handshake_note": "若已設定 patentmcp 但工具始終沒出現在 session（工具搜尋查無），代表你的 client 沒完成 Streamable-HTTP 握手。逐項確認：",
+        "handshake_steps": [
+            "端點用完整含 gateway 前綴的 URL：<code>{mcp}</code>（少了掛載前綴的裸 host 會打到 SPA，不是 MCP 伺服器）。",
+            "請求帶 header <code>Accept: application/json, text/event-stream</code>（Streamable HTTP 兩者都要）。",
+            "先 POST <code>initialize</code>，再從回應 header 取 <code>mcp-session-id</code>。",
+            "之後每個請求（<code>notifications/initialized</code>、<code>tools/list</code>、<code>tools/call</code>）都帶上該 <code>mcp-session-id</code> + <code>MCP-Protocol-Version</code>。",
+            "回應是 SSE（<code>event: message</code> + <code>data: {{...}}</code>）——需自行解析 <code>data:</code> 行。",
+        ],
+        "handshake_gotcha": "未先 initialize 就 POST tools/list 會得到 <code>-32600 Missing session ID</code>——這代表握手順序錯，不是伺服器故障。",
         "endpoints_h2": "端點",
         "ep_mcp": "MCP", "ep_file": "檔案下載", "ep_health": "健康檢查", "ep_skill": "Skill",
         "tools_h2": "工具",
@@ -112,6 +132,16 @@ STRINGS = {
         "connect_h2": "连接 MCP 服务器",
         "connect_remote": "远端 client（经 gateway）— Streamable HTTP：",
         "connect_local": "本机 client — 经 <code>uv</code> 的 stdio（<code>.mcp.json</code>）：",
+        "handshake_h2": "工具没出现？连线检查清单",
+        "handshake_note": "若已配置 patentmcp 但工具始终没出现在 session（工具搜索查无），代表你的 client 没完成 Streamable-HTTP 握手。逐项确认：",
+        "handshake_steps": [
+            "端点用完整含 gateway 前缀的 URL：<code>{mcp}</code>（少了挂载前缀的裸 host 会打到 SPA，不是 MCP 服务器）。",
+            "请求带 header <code>Accept: application/json, text/event-stream</code>（Streamable HTTP 两者都要）。",
+            "先 POST <code>initialize</code>，再从响应 header 取 <code>mcp-session-id</code>。",
+            "之后每个请求（<code>notifications/initialized</code>、<code>tools/list</code>、<code>tools/call</code>）都带上该 <code>mcp-session-id</code> + <code>MCP-Protocol-Version</code>。",
+            "响应是 SSE（<code>event: message</code> + <code>data: {{...}}</code>）——需自行解析 <code>data:</code> 行。",
+        ],
+        "handshake_gotcha": "未先 initialize 就 POST tools/list 会得到 <code>-32600 Missing session ID</code>——这代表握手顺序错，不是服务器故障。",
         "endpoints_h2": "端点",
         "ep_mcp": "MCP", "ep_file": "文件下载", "ep_health": "健康检查", "ep_skill": "Skill",
         "tools_h2": "工具",
@@ -217,6 +247,12 @@ def _landing_html(tools, prefix: str, skill_available: bool, locale: str = "en")
 <pre>{http_cfg}</pre>
 <p>{s["connect_local"]}</p>
 <pre>{stdio_cfg}</pre>
+
+<h2>{html.escape(s["handshake_h2"])}</h2>
+<div class=card>
+<p class=muted>{s["handshake_note"]}</p>
+<ol>{"".join(f"<li>{step.format(mcp=mcp_ep)}</li>" for step in s["handshake_steps"])}</ol>
+<p class=muted>{s["handshake_gotcha"]}</p></div>
 
 <h2>{html.escape(s["endpoints_h2"])}</h2>
 <div class=card>

@@ -156,6 +156,10 @@ def _locate_figure_page(pdf_path: str) -> dict:
     return {"page": None, "method": "none", "pages": pages}
 
 
+def _poppler_available() -> bool:
+    return not [b for b in _POPPLER_BINS if shutil.which(b) is None]
+
+
 def _render_page_png(pdf_path: str, page: int, dpi: int = 200):
     with tempfile.TemporaryDirectory() as td:
         prefix = os.path.join(td, "page")
@@ -172,6 +176,238 @@ def _render_page_png(pdf_path: str, page: int, dpi: int = 200):
                 with open(os.path.join(td, fn), "rb") as fh:
                     return fh.read()
     return None
+
+
+# ---------------------------------------------------------------------------
+# BR_20260715 #04 (cuboai): image-projection fallback.
+#
+# The poppler/pdftotext locator above assumes a TEXT LAYER. Patent PDFs fetched
+# via google_citation are frequently image-only scans (get_text() == "" on every
+# page), so the FIG.1 text markers never match and the whole file yields
+# NO_FIGURE_PAGE_BUT_IMAGES_PRESENT — zero figures. This fallback classifies a
+# page as text vs figure purely from its RENDERED PIXELS (no text layer needed):
+#
+#   * render each page grayscale @ ~90dpi
+#   * row projection: a row is "inked" if its dark-pixel fraction > 0.4%
+#   * count contiguous runs of inked rows:
+#       - text page  = many short runs (one per line of type)  -> nruns large
+#       - figure page = few long/sparse runs (a drawing spans rows) -> nruns small
+#   * page is a figure when 0.002 <= dark_ratio <= 0.11 AND nruns <= 16
+#     AND short_runs <= 18
+#   * pick the FIRST page of the LONGEST contiguous run of figure pages
+#     (US drawings lead, CN 說明書附圖 trail — this rule fits both)
+#
+# Rendering uses PyMuPDF (fitz) when available (fully poppler-free — also solves
+# the Windows MISSING_DEPENDENCY complaint); otherwise it degrades to
+# pdftoppm + Pillow (still solves the no-text-layer failure without a new hard
+# dependency, since Pillow/numpy are already present). The classifier itself is
+# engine-agnostic: it consumes a grayscale numpy array.
+# ---------------------------------------------------------------------------
+
+_PROJ_DPI = 90
+_DARK_THRESH = 128          # 8-bit gray < this counts as "ink"
+_ROW_INK_FRAC = 0.004       # a row is "inked" if >0.4% of its pixels are ink
+_FIG_DARK_LO = 0.002
+_FIG_DARK_HI = 0.11
+_FIG_MAX_RUNS = 16
+_FIG_MAX_SHORT_RUNS = 18
+
+
+def _have_fitz() -> bool:
+    try:
+        import fitz  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _have_pillow() -> bool:
+    try:
+        import numpy  # noqa: F401
+        from PIL import Image  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _gray_pages_fitz(pdf_path: str, dpi: int = _PROJ_DPI):
+    """Yield (page_index_1based, grayscale numpy array) via PyMuPDF."""
+    import fitz
+    import numpy as np
+    doc = fitz.open(pdf_path)
+    try:
+        zoom = dpi / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        for i in range(doc.page_count):
+            pix = doc.load_page(i).get_pixmap(matrix=mat, colorspace=fitz.csGRAY,
+                                              alpha=False)
+            arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height,
+                                                                     pix.width)
+            yield i + 1, arr
+    finally:
+        doc.close()
+
+
+def _gray_pages_poppler(pdf_path: str, pages: int, dpi: int = _PROJ_DPI):
+    """Yield (page_index_1based, grayscale numpy array) via pdftoppm + Pillow."""
+    import numpy as np
+    from PIL import Image
+    for p in range(1, pages + 1):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = os.path.join(td, "pg")
+            try:
+                subprocess.run(
+                    ["pdftoppm", "-gray", "-r", str(dpi), "-f", str(p), "-l",
+                     str(p), "-png", pdf_path, prefix],
+                    capture_output=True, text=True, timeout=120, check=True,
+                )
+            except Exception:
+                continue
+            png = next((os.path.join(td, fn) for fn in sorted(os.listdir(td))
+                        if fn.endswith(".png")), None)
+            if png is None:
+                continue
+            with Image.open(png) as im:
+                arr = __import__("numpy").asarray(im.convert("L"))
+            yield p, arr
+
+
+def _page_metrics(arr) -> dict:
+    """Row-projection metrics for one grayscale page array."""
+    import numpy as np
+    h, w = arr.shape[:2]
+    ink = arr < _DARK_THRESH
+    dark_ratio = float(ink.mean()) if h and w else 0.0
+    row_ink = ink.mean(axis=1)                       # ink fraction per row
+    inked = row_ink > _ROW_INK_FRAC
+    # contiguous runs of inked rows
+    runs = []
+    run_len = 0
+    for v in inked:
+        if v:
+            run_len += 1
+        elif run_len:
+            runs.append(run_len)
+            run_len = 0
+    if run_len:
+        runs.append(run_len)
+    nruns = len(runs)
+    short_runs = sum(1 for r in runs if r <= max(2, int(h * 0.02)))
+    return {"dark_ratio": dark_ratio, "nruns": nruns, "short_runs": short_runs}
+
+
+def _is_figure(m: dict) -> bool:
+    return (_FIG_DARK_LO <= m["dark_ratio"] <= _FIG_DARK_HI
+            and m["nruns"] <= _FIG_MAX_RUNS
+            and m["short_runs"] <= _FIG_MAX_SHORT_RUNS)
+
+
+def _pick_page_by_projection(pdf_path: str, pages_hint: int = 0) -> dict:
+    """Image-only figure-page locator. Returns {page, method, pages, engine} —
+    page is None when no figure page is found or no render engine is usable."""
+    use_fitz = _have_fitz()
+    if not use_fitz and not _have_pillow():
+        return {"page": None, "method": "image_projection_no_engine",
+                "pages": pages_hint, "engine": "none"}
+    engine = "fitz" if use_fitz else "poppler+pillow"
+    if use_fitz:
+        pager = _gray_pages_fitz(pdf_path)
+    else:
+        pgs = pages_hint or _pdf_page_count(pdf_path)
+        pager = _gray_pages_poppler(pdf_path, pgs)
+
+    fig_flags = {}   # 1-based page -> bool is_figure
+    total = 0
+    try:
+        for pno, arr in pager:
+            total = max(total, pno)
+            try:
+                fig_flags[pno] = _is_figure(_page_metrics(arr))
+            except Exception:
+                fig_flags[pno] = False
+    except Exception:
+        return {"page": None, "method": "image_projection_render_failed",
+                "pages": pages_hint, "engine": engine}
+
+    if not fig_flags:
+        return {"page": None, "method": "image_projection_render_failed",
+                "pages": pages_hint or total, "engine": engine}
+
+    # longest contiguous run of figure pages; take its first page.
+    best_start, best_len = None, 0
+    cur_start, cur_len = None, 0
+    for p in range(1, total + 1):
+        if fig_flags.get(p):
+            if cur_start is None:
+                cur_start, cur_len = p, 0
+            cur_len += 1
+            if cur_len > best_len:
+                best_start, best_len = cur_start, cur_len
+        else:
+            cur_start, cur_len = None, 0
+
+    if best_start is None:
+        return {"page": None, "method": "image_projection_no_figure_page",
+                "pages": total, "engine": engine}
+    return {"page": best_start, "method": "image_projection",
+            "pages": total, "engine": engine}
+
+
+def _crop_render_png(pdf_path: str, page: int, dpi: int = 200):
+    """Render a page to PNG, auto-cropping surrounding whitespace to the content
+    bounding box. Prefers fitz; falls back to poppler render + Pillow crop."""
+    # Try fitz first (poppler-free).
+    if _have_fitz():
+        try:
+            import fitz
+            import numpy as np
+            from PIL import Image
+            doc = fitz.open(pdf_path)
+            try:
+                zoom = dpi / 72.0
+                pix = doc.load_page(page - 1).get_pixmap(
+                    matrix=fitz.Matrix(zoom, zoom), alpha=False)
+                mode = "RGB" if pix.n >= 3 else "L"
+                im = Image.frombytes(mode, (pix.width, pix.height), pix.samples)
+            finally:
+                doc.close()
+            return _autocrop_to_png(im)
+        except Exception:
+            pass
+    # Fallback: poppler render, Pillow crop.
+    raw = _render_page_png(pdf_path, page, dpi=dpi)
+    if raw is None:
+        return None
+    if not _have_pillow():
+        return raw  # can't crop, but a full-page PNG is still a valid figure
+    try:
+        import io
+        from PIL import Image
+        with Image.open(io.BytesIO(raw)) as im:
+            return _autocrop_to_png(im.copy())
+    except Exception:
+        return raw
+
+
+def _autocrop_to_png(im) -> bytes:
+    """Trim whitespace to the content bbox and return PNG bytes."""
+    import io
+    import numpy as np
+    from PIL import Image
+    gray = np.asarray(im.convert("L"))
+    ink = gray < 250
+    if ink.any():
+        rows = np.where(ink.any(axis=1))[0]
+        cols = np.where(ink.any(axis=0))[0]
+        pad = 8
+        r0 = max(0, int(rows[0]) - pad)
+        r1 = min(gray.shape[0], int(rows[-1]) + pad)
+        c0 = max(0, int(cols[0]) - pad)
+        c1 = min(gray.shape[1], int(cols[-1]) + pad)
+        im = im.crop((c0, r0, c1, r1))
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def main(argv=None) -> int:
@@ -191,34 +427,58 @@ def main(argv=None) -> int:
                         "--out is omitted, the figure lands under <repo>/.src/.")
     args = p.parse_args(argv)
 
-    missing = [b for b in _POPPLER_BINS if shutil.which(b) is None]
-    if missing:
-        raise ScriptError("MISSING_DEPENDENCY",
-                          f"poppler binaries not found: {', '.join(missing)}",
-                          missing=missing,
-                          hint="install poppler-utils on the host")
+    # BR_20260715 #04: poppler is NO LONGER a hard gate. The text-layer locator
+    # needs it, but the image-projection fallback runs on fitz (poppler-free) or
+    # pdftoppm+Pillow. Only fail MISSING_DEPENDENCY when NEITHER path can work.
+    have_poppler = _poppler_available()
+    have_fitz = _have_fitz()
+    if not have_poppler and not have_fitz:
+        missing = [b for b in _POPPLER_BINS if shutil.which(b) is None]
+        raise ScriptError(
+            "MISSING_DEPENDENCY",
+            "no usable render engine: PyMuPDF (fitz) not importable and poppler "
+            f"binaries not found: {', '.join(missing)}",
+            missing=missing,
+            hint="pip install pymupdf  (or install poppler-utils on the host)")
 
     pdf_path = Path(args.pdf)
     if not pdf_path.is_file():
         raise ScriptError("INPUT_NOT_FOUND", f"pdf not found: {pdf_path}")
 
-    loc = _locate_figure_page(str(pdf_path))
+    # Tier 1: text-layer locator (most accurate WHEN a text layer exists).
+    # Requires poppler CLIs; skip cleanly when they're absent.
+    loc = (_locate_figure_page(str(pdf_path)) if have_poppler
+           else {"page": None, "method": "text_layer_skipped_no_poppler",
+                 "pages": 0})
+
+    # Tier 2 (BR_20260715 #04): image-projection fallback. Triggered whenever the
+    # text-layer locator found nothing (no text layer / scanned PDF / no FIG.1).
     if loc["page"] is None:
-        img_count = _pdf_image_count(str(pdf_path))
-        if img_count > 0:
+        proj = _pick_page_by_projection(str(pdf_path), pages_hint=loc.get("pages", 0))
+        if proj["page"] is not None:
+            loc = proj
+
+    if loc["page"] is None:
+        img_count = _pdf_image_count(str(pdf_path)) if have_poppler else -1
+        if img_count != 0:
             raise ScriptError(
                 "NO_FIGURE_PAGE_BUT_IMAGES_PRESENT",
-                "could not locate a FIG.1 page by text, but the PDF has embedded images "
-                "(scanned / no text layer)",
-                image_count=img_count, pages=loc["pages"],
+                "could not locate a representative figure page by text layer OR "
+                "image projection",
+                image_count=img_count, pages=loc["pages"], method=loc["method"],
             )
         raise ScriptError("NO_FIGURE_PAGE",
                           "could not locate a representative figure page",
-                          pages=loc["pages"])
+                          pages=loc["pages"], method=loc["method"])
 
-    png = _render_page_png(str(pdf_path), loc["page"], dpi=args.dpi)
+    # Render: image-projection hits get an auto-cropped render (fitz or
+    # poppler+Pillow); text-layer hits keep the original full-page poppler render.
+    if loc["method"] == "image_projection":
+        png = _crop_render_png(str(pdf_path), loc["page"], dpi=args.dpi)
+    else:
+        png = _render_page_png(str(pdf_path), loc["page"], dpi=args.dpi)
     if png is None:
-        raise ScriptError("RENDER_FAILED", f"pdftoppm failed to render page {loc['page']}")
+        raise ScriptError("RENDER_FAILED", f"failed to render page {loc['page']}")
 
     # Landing plane (DD-6a): explicit --out wins; otherwise land in the unified
     # persistent .src/ dir (NOT system /tmp) so the figure survives restarts and

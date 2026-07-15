@@ -925,16 +925,41 @@ async def _gpatents_search_impl(
 
 
 def _handle(entry, rel: Optional[str] = None) -> Dict[str, Any]:
-    """Shape a token-store entry into a docxmcp-style download handle."""
+    """Shape a token-store entry into a docxmcp-style download handle.
+
+    ``download_url`` stays the backend-root RELATIVE path ``/files/{token}/blob/{rel}``
+    (the conformant UDS-gateway inward path; a direct-TCP IDE resolves it against
+    its own base — see _http_app.serve() NOTE). BR_20260715 (cuboai #02): a client
+    behind the gateway that naively joins download_url onto the bare host misses the
+    ``/patentmcp`` mount point and lands on the SPA catch-all (200 + index.html),
+    silently saving HTML as the file. So when PATENTS_GATEWAY_PREFIX is set we ALSO
+    surface a prefixed ``gateway_download_path`` — the path a gateway-fronted caller
+    should actually GET — WITHOUT mutating download_url (mutating it would re-break
+    the UDS/direct-TCP paths the NOTE warns about).
+    """
     rel = rel or entry.filename
-    return {
+    rel_url = _file_server.download_url(entry.token, rel)
+    handle: Dict[str, Any] = {
         "success": True,
         "token": entry.token,
         "rel": rel,
-        "download_url": _file_server.download_url(entry.token, rel),
+        "download_url": rel_url,
         "bytes": entry.size_bytes,
         "sha256": entry.sha256,
     }
+    gw_prefix = os.environ.get("PATENTS_GATEWAY_PREFIX", "").rstrip("/")
+    # Only annotate when a gateway prefix is configured AND download_url is the
+    # backend-root relative form (absolute FILE_BASE_URL means direct-TCP: the
+    # caller already has a resolvable base, no gateway hop, no prefix needed).
+    if gw_prefix and rel_url.startswith("/"):
+        handle["gateway_download_path"] = gw_prefix + rel_url
+        handle["download_url_note"] = (
+            "Behind the gateway, GET gateway_download_path (it carries the "
+            f"{gw_prefix} mount prefix). Joining the bare download_url onto the "
+            "host root misses the mount and returns the SPA index.html (200/HTML), "
+            "not the file. Verify magic bytes (%PDF / \\x89PNG) after download."
+        )
+    return handle
 
 
 def _get_db_root():
@@ -1449,16 +1474,9 @@ async def ppubs_batch_get_claims(publication_numbers: Optional[List[str]] = None
     data = json.dumps(results, indent=2, ensure_ascii=False).encode("utf-8")
     entry = token_store.put_bytes(data, "claims.json")
     handle = _handle(entry)
-    
-    return {
-        "success": True,
-        "claims": results,
-        "token": handle["token"],
-        "rel": handle["rel"],
-        "download_url": handle["download_url"],
-        "bytes": handle["bytes"],
-        "sha256": handle["sha256"]
-    }
+    # Merge the full handle so gateway_download_path / download_url_note
+    # (BR_20260715 #02) ride along instead of being dropped by cherry-picking.
+    return {**handle, "claims": results}
 
 
 @mcp.tool()
@@ -1915,11 +1933,79 @@ async def gpss_download_representative_figure(
     BR_20260628 A: serialized through _GPSS_POLICY (Concurrency=1 + random
     pacing + cooldown parking), so parallel calls cannot trip Cloudflare's
     Managed Challenge on tiponet.tipo.gov.tw.
+
+    BR_20260715 #03 (cuboai): GPSS's figure image库 only holds TW (its native
+    corpus) reliably; for US/CN/EP/WO the detail-page row often has no exact
+    number match, so the impl (correctly) refuses a neighbour row and returns a
+    hard {success:false, error:"...no row matching..."}. That hard-fail was
+    handed straight to the caller, who then had to hand-roll the PDF pipeline.
+    Per the patentworks source-ladder (代表圖從缺前必走雙路徑: GPSS headless →
+    fetch_patent_pdf → extract_representative_figure), we now DEGRADE instead of
+    hard-failing: when GPSS misses for a non-TW jurisdiction we fetch the
+    official PDF (fetch_patent_pdf, official sources first, no scraping) and
+    return a NON-fatal envelope carrying the PDF handle + the explicit next step
+    (figure_extract.py), so the caller gets a usable artifact + a routed hint
+    rather than a dead end. TW misses stay hard-fail (GPSS is the authority for
+    TW; a TW miss is a real absence, not a jurisdiction gap).
     """
     async with _GPSS_POLICY.guard():
-        return await _gpss_download_representative_figure_impl(
+        result = await _gpss_download_representative_figure_impl(
             publication_number, all_figures=all_figures
         )
+    if result.get("success"):
+        return result
+    # GPSS missed. Only degrade for non-TW jurisdictions (TW miss = real absence).
+    country, _ = _get_patent_country_and_normalized_no(publication_number)
+    gpss_miss_markers = ("no row matching", "resolved to a DIFFERENT patent",
+                         "No figure found")
+    err = str(result.get("error", ""))
+    is_gpss_jurisdiction_miss = any(m in err for m in gpss_miss_markers)
+    if (country or "").upper() == "TW" or not is_gpss_jurisdiction_miss:
+        return result  # TW absence, or a non-jurisdiction error (network/parse) — pass through.
+    return await _degrade_figure_to_pdf(publication_number, result)
+
+
+async def _degrade_figure_to_pdf(
+    publication_number: str,
+    gpss_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """BR_20260715 #03: non-TW GPSS figure miss -> official PDF + routed next step.
+
+    Runs the official PDF pipeline (fetch_patent_pdf, allow_scraping=False so no
+    unauthorized scraping) and returns a non-fatal envelope. figure_kind flags
+    the degrade so the caller can tell this apart from a native GPSS figure.
+    """
+    try:
+        pdf = await fetch_patent_pdf(publication_number=publication_number,
+                                    allow_scraping=False)
+    except Exception as e:  # noqa: BLE001
+        pdf = {"success": False, "error": f"fetch_patent_pdf exception: {e}"}
+    if not pdf.get("success"):
+        # PDF pipeline also missed — return the ORIGINAL GPSS error plus the PDF
+        # attempt so the caller sees every ladder rung tried (Exhaustion Gate).
+        return {
+            **gpss_result,
+            "degrade_attempted": "fetch_patent_pdf",
+            "degrade_error": pdf.get("error"),
+            "degrade_hint": (
+                "GPSS has no figure row for this non-TW patent and the official "
+                "PDF pipeline also missed. Try fetch_patent_pdf(allow_scraping=True) "
+                "with user authorization, or epo_family() to find a TW family member."
+            ),
+        }
+    # Non-fatal degrade: caller gets the official PDF handle + the next step.
+    return {
+        **pdf,
+        "success": True,
+        "figure_kind": "degraded_pdf",
+        "gpss_figure_miss": gpss_result.get("error"),
+        "next_step": (
+            "GPSS holds no figure row for this non-TW jurisdiction; the official "
+            "PDF is landed above. Extract the representative figure locally via "
+            "skills/patentworks/scripts/figure_extract.py --pdf <downloaded> "
+            "--out <png> (the figure is inside this PDF)."
+        ),
+    }
 
 
 async def _gpss_download_representative_figure_impl(
@@ -3148,6 +3234,7 @@ async def patent_search(
     num: int = 30,
     skip: int = 0,
     allow_scraping: bool = False,
+    include_claim1: bool = False,
 ) -> Dict[str, Any]:
     """Unified patent SEARCH — the single search entry point. The source ladder
     is BUILT IN: TIPO GPSS (official, primary) → EPO OPS → USPTO PPUBS →
@@ -3179,6 +3266,14 @@ async def patent_search(
             (provenance notes `biblio_truncated`).
         allow_scraping: explicit authorization for the Google Patents tail
             (default False).
+        include_claim1: BR_20260715 #05 (cuboai). GPSS occasionally returns an
+            empty/boilerplate-only Claim 1 for US cases (records carry
+            claim1_empty=true). By default the envelope surfaces a claim1_audit
+            advisory (empty_count + the pubnos needing a PPUBS fallback) so the
+            caller isn't blindsided by blank claims. Set include_claim1=True to
+            have the server AUTO-backfill those empties via ppubs_batch_get_claims
+            and merge the recovered Claim 1 text into the records in ONE call —
+            no manual second round-trip.
 
     Returns {success, records[], source, provenance[], gaps[], total} —
     records use the unified screening record schema (missing fields are
@@ -3217,6 +3312,51 @@ async def patent_search(
                 reason=_friction.normalize_reason(e),
                 detail="patentdb absorb failed (swallowed, search unaffected)",
             )
+
+    # BR_20260715 #05: US Claim 1 empties. Surface an advisory by default; when
+    # include_claim1=True, auto-backfill via PPUBS so the caller gets filled
+    # records in one call instead of a manual ppubs_batch_get_claims round-trip.
+    if envelope.get("success") and envelope.get("records"):
+        recs = envelope["records"]
+        empty_pubnos = [
+            r.get("pubno") or r.get("publication_number")
+            for r in recs
+            if r.get("claim1_empty") and (r.get("pubno") or r.get("publication_number"))
+        ]
+        if empty_pubnos:
+            envelope["claim1_audit"] = {
+                "empty_count": len(empty_pubnos),
+                "empty_pubnos": empty_pubnos,
+                "fallback": (
+                    "這些公開號 Claim 1 為空/僅樣板；已自動補抓（include_claim1=True）"
+                    if include_claim1 else
+                    "這些公開號 Claim 1 為空/僅樣板，需 ppubs_batch_get_claims 補抓；"
+                    "或重呼叫時帶 include_claim1=True 讓 server 自動補齊"
+                ),
+            }
+            if include_claim1:
+                try:
+                    filled = await ppubs_batch_get_claims(publication_numbers=empty_pubnos)
+                    claims_map = filled.get("claims") or {}
+                    merged = 0
+                    for r in recs:
+                        pn = r.get("pubno") or r.get("publication_number")
+                        got = claims_map.get(pn) if pn else None
+                        c1 = (got or {}).get("claim1") if isinstance(got, dict) else None
+                        if c1:
+                            r["claim1"] = c1
+                            r["claim1_empty"] = False
+                            r["claim1_source"] = (got or {}).get("source", "ppubs")
+                            merged += 1
+                    envelope["claim1_audit"]["backfilled"] = merged
+                except Exception as e:  # noqa: BLE001 — backfill must never break search
+                    logger.warning("patent_search include_claim1 backfill failed: %s", e)
+                    envelope["claim1_audit"]["backfill_error"] = str(e)
+                    _friction.record_friction(
+                        "silent", tool="patent_search", source="ppubs",
+                        reason=_friction.normalize_reason(e),
+                        detail="include_claim1 PPUBS backfill failed",
+                    )
     return envelope
 
 
@@ -4884,16 +5024,8 @@ def main():
             data = json.dumps(results, indent=2, ensure_ascii=False).encode("utf-8")
             entry = token_store.put_bytes(data, "claims.json")
             handle = _handle(entry)
-            
-            output_data = {
-                "success": True,
-                "claims": results,
-                "token": handle["token"],
-                "rel": handle["rel"],
-                "download_url": handle["download_url"],
-                "bytes": handle["bytes"],
-                "sha256": handle["sha256"]
-            }
+            # Merge the full handle (BR_20260715 #02: keep gateway_download_path).
+            output_data = {**handle, "claims": results}
             
             if args.output:
                 with open(args.output, "w", encoding="utf-8") as f:
