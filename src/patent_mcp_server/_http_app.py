@@ -160,7 +160,7 @@ def _landing_html(tools, prefix: str, skill_available: bool, locale: str = "en")
     s = STRINGS.get(locale, STRINGS["en"])
     mcp_ep = f"{prefix}/mcp"
     rows = "".join(
-        f"<tr><td class=name>{html.escape(t.name)}</td>"
+        f"<tr><td class=name><a href=\"{prefix}/tools/{html.escape(t.name)}\">{html.escape(t.name)}</a></td>"
         f"<td>{html.escape((t.description or '').strip().splitlines()[0] if (t.description or '').strip() else '')}</td></tr>"
         for t in tools
     )
@@ -236,7 +236,7 @@ def build_app(mcp, store):
     The DAV routes share this ONE app (no second lifespan — see serve() docstring
     on the single FastMCP session-manager lifespan constraint)."""
     from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
-    from starlette.routing import Route
+    from starlette.routing import Route, Mount
     from mcp.server.transport_security import TransportSecuritySettings
 
     from patent_mcp_server._auth_provider import AuthProvider, AuthError, Identity
@@ -261,6 +261,153 @@ def build_app(mcp, store):
 
     # Gateway path prefix used when rendering absolute-looking links on the page.
     prefix = os.environ.get("PATENTS_GATEWAY_PREFIX", "")
+
+    # --- SSE transport (legacy HTTP+SSE face) -------------------------------
+    # DD-5: mcp.sse_app() ships its OWN lifespan + its own SseServerTransport;
+    # mounting that whole Starlette app here would double-enter the app lifespan
+    # (the streamable session-manager lifespan must run EXACTLY once — see
+    # serve() docstring). So we DO NOT mount sse_app(); instead we build a bare
+    # SseServerTransport and hand-wire its two endpoints (SSE stream GET +
+    # message POST) as plain routes on THIS app. The transport needs no
+    # app-lifespan of its own — each connection independently opens
+    # connect_sse() and runs the low-level MCP server.
+    #
+    # The message POST path is advertised to the client inside the SSE stream as
+    # an absolute URL; behind the gateway the client actually reaches
+    # `{prefix}/sse/messages`, so the transport's endpoint MUST carry the gateway
+    # prefix (same reasoning as the DAV base_href derivation, DD-4). When no
+    # prefix is set (direct UDS/localhost) it degrades to the bare `/sse/messages`.
+    from mcp.server.sse import SseServerTransport
+    _sse_message_path = f"{prefix}/sse/messages"
+    _sse = SseServerTransport(_sse_message_path)
+
+    # SSE stream handler, mirroring the SDK's own handle_sse in sse_app()
+    # (connect_sse drives the response over raw ASGI scope/receive/send). We
+    # expose it as a Starlette Route endpoint (NOT a Mount) so the exact `/sse`
+    # path matches without Mount's trailing-slash 307 redirect (which breaks SSE
+    # clients that don't follow redirects). Inside, we reach the raw ASGI
+    # send via request._send — the documented way to hand a Starlette request
+    # back to a low-level ASGI response driver.
+    from starlette.responses import Response as _SseAck
+
+    async def sse_stream(request):
+        async with _sse.connect_sse(
+            request.scope, request.receive, request._send,
+        ) as (read_stream, write_stream):
+            await mcp._mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp._mcp_server.create_initialization_options(),
+            )
+        return _SseAck(status_code=204)
+
+    def _schema_rows(schema, depth=0):
+        """Render a JSON-Schema object's properties as HTML table rows.
+        Recurses one level into nested object/array item schemas."""
+        if not isinstance(schema, dict):
+            return ""
+        props = schema.get("properties") or {}
+        required = set(schema.get("required") or [])
+        rows = []
+        for name, spec in props.items():
+            spec = spec if isinstance(spec, dict) else {}
+            typ = spec.get("type")
+            if isinstance(typ, list):
+                typ = " | ".join(str(t) for t in typ)
+            typ = typ or ("enum" if "enum" in spec else ("object" if "properties" in spec else ""))
+            enum = spec.get("enum")
+            default = spec.get("default")
+            desc = (spec.get("description") or "").strip()
+            req = "✔" if name in required else ""
+            extra = []
+            if enum is not None:
+                extra.append("enum: " + ", ".join(html.escape(str(e)) for e in enum))
+            if default is not None:
+                extra.append("default: " + html.escape(str(default)))
+            extra_html = ("<br><span class=muted>" + " · ".join(extra) + "</span>") if extra else ""
+            pad = "padding-left:%drem" % (depth * 1.2 + 0.6)
+            rows.append(
+                f"<tr><td class=name style='{pad}'>{html.escape(str(name))}</td>"
+                f"<td>{html.escape(str(typ))}</td>"
+                f"<td style='text-align:center'>{req}</td>"
+                f"<td>{html.escape(desc)}{extra_html}</td></tr>"
+            )
+            # Recurse one level into nested object / array-of-object.
+            nested = None
+            if isinstance(spec.get("properties"), dict):
+                nested = spec
+            elif isinstance(spec.get("items"), dict) and spec["items"].get("properties"):
+                nested = spec["items"]
+            if nested is not None and depth < 2:
+                rows.append(_schema_rows(nested, depth + 1))
+        return "".join(rows)
+
+    def _tool_page_html(tool) -> str:
+        name = html.escape(tool.name)
+        desc = html.escape((tool.description or "").strip())
+        schema = getattr(tool, "inputSchema", None) or {}
+        import json as _json
+        rows = _schema_rows(schema)
+        table = (
+            "<table><tr><th>參數</th><th>型別</th><th>必填</th><th>說明</th></tr>"
+            + rows + "</table>"
+            if rows else "<p class=muted>此工具無輸入參數。</p>"
+        )
+        raw = html.escape(_json.dumps(schema, ensure_ascii=False, indent=2))
+        back = f'{prefix}/tools'
+        return f"""<!doctype html><html lang=zh-Hant><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>{name} — patentmcp</title><style>{_LANDING_CSS}
+th{{text-align:left;border-top:1px solid #243040;padding:.4rem .6rem;color:var(--muted);font-weight:600}}
+</style></head><body>
+<p class=muted><a href="{prefix}/">← patentmcp</a> · <a href="{back}">所有工具</a></p>
+<h1><code>{name}</code></h1>
+<p class=muted>{desc}</p>
+<h2>輸入參數（inputSchema）</h2>
+{table}
+<h2>原始 JSON Schema</h2>
+<pre>{raw}</pre>
+</body></html>"""
+
+    async def tool_page(request):
+        want = request.path_params["name"]
+        try:
+            tools = await mcp.list_tools()
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse(
+                {"error": "tool_registry_unavailable", "detail": str(e)},
+                status_code=500,
+            )
+        match = next((t for t in tools if t.name == want), None)
+        if match is None:
+            return HTMLResponse(
+                f"<!doctype html><meta charset=utf-8><title>404</title>"
+                f"<p>Unknown tool: <code>{html.escape(want)}</code>. "
+                f"<a href='{prefix}/tools'>See all tools</a>.</p>",
+                status_code=404,
+            )
+        return HTMLResponse(_tool_page_html(match))
+
+    async def tools_index(request):
+        try:
+            tools = await mcp.list_tools()
+        except Exception:  # noqa: BLE001
+            tools = []
+        rows = "".join(
+            f"<tr><td class=name><a href=\"{prefix}/tools/{html.escape(t.name)}\">{html.escape(t.name)}</a></td>"
+            f"<td>{html.escape((t.description or '').strip().splitlines()[0] if (t.description or '').strip() else '')}</td></tr>"
+            for t in tools
+        )
+        return HTMLResponse(
+            f"""<!doctype html><html lang=zh-Hant><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Tools — patentmcp</title><style>{_LANDING_CSS}</style></head><body>
+<p class=muted><a href="{prefix}/">← patentmcp</a></p>
+<h1>工具總覽 <span class=count>({len(tools)})</span></h1>
+<p class=muted>點入任一工具查看完整 inputSchema。</p>
+<table>{rows}</table>
+</body></html>"""
+        )
 
     async def blob(request):
         token = request.path_params["token"]
@@ -400,12 +547,30 @@ def build_app(mcp, store):
         Route(f"{_DAV_MOUNT_PREFIX}/{{subject}}", dav, methods=_dav.DAV_METHODS),
         Route(f"{_DAV_MOUNT_PREFIX}/{{subject}}/{{rel:path}}", dav,
               methods=_dav.DAV_METHODS),
+        # /webdav alias for the SAME dav() handler (DD-4). base_href is derived
+        # from the real request path, so one handler serves both mount prefixes
+        # correctly; kept alongside /dav so existing rclone clients don't break.
+        Route("/webdav/{subject}", dav, methods=_dav.DAV_METHODS),
+        Route("/webdav/{subject}/{rel:path}", dav, methods=_dav.DAV_METHODS),
         # Standard liveness path (R8.3) + back-compat alias — same coroutine,
         # no duplicated logic (DD-2).
         Route("/health", health, methods=["GET"]),
         Route("/healthz", health, methods=["GET"]),
         # Machine-readable tool introspection (R8.1) — live registry (DD-1).
-        Route("/tools", tools_json, methods=["GET"]),
+        Route("/tools", tools_index, methods=["GET"]),
+        # JSON introspection kept at /tools.json (machine-readable, R8.1);
+        # /tools is now the human index page linking to per-tool schema pages.
+        Route("/tools.json", tools_json, methods=["GET"]),
+        Route("/tools/{name}", tool_page, methods=["GET"]),
+        # Legacy HTTP+SSE transport face (DD-5). Bare SseServerTransport wired
+        # on THIS app — NOT a mounted sse_app() (which would double-enter the
+        # streamable session-manager lifespan and crash).
+        #   * /sse            — SSE stream, a Route (exact match, no Mount 307).
+        #   * /sse/messages   — JSON-RPC POST sink, a Mount to the transport's
+        #                       raw-ASGI handler (advertised to clients inside the
+        #                       stream as `{prefix}/sse/messages`, see _sse init).
+        Route("/sse", sse_stream, methods=["GET"]),
+        Mount("/sse/messages", app=_sse.handle_post_message),
         Route("/files/{token}/blob/{rel:path}", blob, methods=["GET"]),
         Route(f"/skills/{_SKILL_NAME}.zip", skill_zip, methods=["GET"]),
     ])

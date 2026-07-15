@@ -1,0 +1,26 @@
+[
+  {
+    "title": "外網取用 tool schema 分頁",
+    "participants": ["Browser", "Gateway", "PatentmcpApp", "FastMCPRegistry"],
+    "messages": [
+      { "from": "Browser", "to": "Gateway", "label": "GET /patentmcp/tools/{name}" },
+      { "from": "Gateway", "to": "PatentmcpApp", "label": "strip /patentmcp → GET /tools/{name} over UDS" },
+      { "from": "PatentmcpApp", "to": "FastMCPRegistry", "label": "list_tools()" },
+      { "from": "FastMCPRegistry", "to": "PatentmcpApp", "label": "tools[] with inputSchema" },
+      { "from": "PatentmcpApp", "to": "Gateway", "label": "200 HTML schema 分頁 (或 404 未知 name)" },
+      { "from": "Gateway", "to": "Browser", "label": "200/404" }
+    ]
+  },
+  {
+    "title": "外網 SSE 連線（自建 SseServerTransport，不進第二 lifespan）",
+    "participants": ["McpClient", "Gateway", "PatentmcpApp", "SseServerTransport", "McpServer"],
+    "messages": [
+      { "from": "McpClient", "to": "Gateway", "label": "GET /patentmcp/sse (text/event-stream)" },
+      { "from": "Gateway", "to": "PatentmcpApp", "label": "strip → GET /sse over UDS" },
+      { "from": "PatentmcpApp", "to": "SseServerTransport", "label": "connect_sse(scope)" },
+      { "from": "SseServerTransport", "to": "McpServer", "label": "_mcp_server.run(read, write)" },
+      { "from": "McpClient", "to": "PatentmcpApp", "label": "POST /patentmcp/sse/messages (JSON-RPC)" },
+      { "from": "PatentmcpApp", "to": "SseServerTransport", "label": "handle_post_message" }
+    ]
+  }
+]

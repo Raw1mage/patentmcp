@@ -1,0 +1,82 @@
+{
+  "diagram_title": "patentmcp 對外公開 HTTP 多傳輸面服務",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "渲染文件站（landing + tools schema 分頁）",
+      "description": "從 live FastMCP registry 取 tool 清單與 inputSchema，動態渲染安裝說明、傳輸面總覽、/uds 本機連法段落、tools 索引與每工具 schema 分頁",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "多傳輸面請求分派（/mcp /sse /webdav /files）",
+      "description": "在單一 Starlette app（單一 streamable session-manager lifespan）上，把外部請求依子路徑分派到對應傳輸 handler，SSE 用自建 SseServerTransport 避開第二 lifespan",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "gateway 對外代理與公開暴露",
+      "description": "opencode gateway 以 https://cms.thesmart.cc/patentmcp/ 走 UDS 連進 container、strip 前綴後轉發；route 導正 socket 路徑並設 auth=0 公開",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    {
+      "id": "AR1",
+      "source": "EXTERNAL",
+      "target": "A2:input",
+      "type": "input",
+      "label": "外部 HTTP 請求（瀏覽器 / MCP client / WebDAV client）"
+    },
+    {
+      "id": "AR2",
+      "source": "EXTERNAL",
+      "target": "A2:control",
+      "type": "control",
+      "label": "單一 app 單一 lifespan 約束 + DAV href request-path 反推規則"
+    },
+    {
+      "id": "AR3",
+      "source": "EXTERNAL",
+      "target": "A2:mechanism",
+      "type": "mechanism",
+      "label": "_http_app.py build_app() / FastMCP / SseServerTransport"
+    },
+    {
+      "id": "AR4",
+      "source": "A1:output",
+      "target": "A2:control",
+      "type": "control",
+      "label": "tool schema 文件（index + 分頁）"
+    },
+    {
+      "id": "AR5",
+      "source": "A2:output",
+      "target": "A3:input",
+      "type": "input",
+      "label": "裸路徑 ASGI 回應（/ /tools /mcp /sse /webdav /files）"
+    },
+    {
+      "id": "AR6",
+      "source": "EXTERNAL",
+      "target": "A3:control",
+      "type": "control",
+      "label": "web_routes.conf（socket 路徑 + auth=0 公開）"
+    },
+    {
+      "id": "AR7",
+      "source": "EXTERNAL",
+      "target": "A3:mechanism",
+      "type": "mechanism",
+      "label": "opencode gateway :1080 + UDS .run/patentmcp.sock"
+    },
+    {
+      "id": "AR8",
+      "source": "A3:output",
+      "target": "EXTERNAL",
+      "type": "output",
+      "label": "https://cms.thesmart.cc/patentmcp/ 對外公開服務"
+    }
+  ]
+}

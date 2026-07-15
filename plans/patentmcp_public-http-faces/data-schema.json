@@ -1,0 +1,33 @@
+{
+  "schemas": [
+    {
+      "name": "web_routes.conf 條目（/patentmcp）",
+      "kind": "config",
+      "fields": [
+        { "name": "prefix", "type": "string", "notes": "/patentmcp" },
+        { "name": "type", "type": "enum(tcp|uds)", "notes": "uds" },
+        { "name": "target", "type": "path", "notes": "/home/pkcs12/projects/patentmcp/.run/patentmcp.sock（導正，原指向不存在的 vendor 路徑）" },
+        { "name": "port", "type": "int", "notes": "0（uds 無 port）" },
+        { "name": "owner_uid", "type": "int", "notes": "1000" },
+        { "name": "auth", "type": "enum(0|1)", "notes": "0=公開（由 1 改成 0）" }
+      ]
+    },
+    {
+      "name": "GET /tools/{name} 分頁資料源投影",
+      "kind": "json",
+      "fields": [
+        { "name": "name", "type": "string", "notes": "tool 名（path_param 比對）" },
+        { "name": "description", "type": "string", "notes": "完整描述（非只首行）" },
+        { "name": "inputSchema", "type": "object", "notes": "JSON Schema：properties/type/required/enum/default/description，遞迴渲染" }
+      ]
+    },
+    {
+      "name": "SSE route 對（自建）",
+      "kind": "message",
+      "fields": [
+        { "name": "GET /sse", "type": "route", "notes": "handle_sse → sse.connect_sse + _mcp_server.run" },
+        { "name": "POST /sse/messages", "type": "route", "notes": "sse.handle_post_message；message_path prefix-aware" }
+      ]
+    }
+  ]
+}
