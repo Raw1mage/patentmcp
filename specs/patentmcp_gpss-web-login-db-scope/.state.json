@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-16T15:01:39.037Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-16T15:08:53.608Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "RCA 定案(Playwright 鐵證): patDB web 幽靈欄位 supersede DD-2; 修法=登入 session+檢索前設庫範圍 state 含 CN; IDEF0+GRAFCET 已驗證"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-16T15:35:17.501Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "tasks+handoff+errors+observability+test-vectors 已就緒"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-16T15:35:17.634Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user go: task 1 live 逆工 _20_* 設定頁"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-16T17:42:23.002Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "BR_20260716 庫範圍 + 正交 pat_no issue 皆修復並 live 驗證：CN/TW/US 三軸 pat_no 全覆蓋（150/150, 100/100, 100/100），pytest gpss 17 passed，tasks.md 14/14，issue closed"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-16T17:46:25.314Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user-confirmed graduation"
+    }
+  ]
+}

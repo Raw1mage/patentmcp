@@ -39,3 +39,13 @@
 - [x] 7.3 測試 `tests/test_epo_slice_plan.py`:單片(total≤wall)/二分遞迴(各片<wall)/DATE_RANGE_REQUIRED/SLICE_INEFFECTIVE/深度 cap 觸頂 truncated/probe cap;Fake EPO client 可控 total 分佈
 - [x] 7.4 全套件回歸零 fail
 - [x] 7.5 SKILL.md §5 EPO bulk 條目補 slice_plan 工作流;收搜 issue_20260710_epo_bulk_auto_date_slicing 至 closed/
+
+## 8. GPSS query-slicing 全自動分片(extend 2026-07-15,DD-10/DD-11,BR_20260715)
+
+- [x] 8.1 `search_dispatcher.py` 新增 GPSS 布林式 parser + 分片器:解析 keyword 為頂層 AND 群(正向 OR 群 vs NOT 群)、選詞數最多正向群二分(`Bx`/`By`)、NOT 群原樣保留、遞迴二分(深度 cap 6)、CONDITION_LENGTH_IRREDUCIBLE fail-fast。純函式(不打網路),可單獨測試
+- [x] 8.2 `bulk_harvest` 偵測 `Exceeded search condition length` → 觸發自動分片:逐子查詢 `_bulk_pull_gpss_kw` → pubno union 去重 → envelope 補 `sharding:{applied,shards[],union_total,union_landed}`
+- [x] 8.3 `patent_bulk` docstring 補 GPSS 自動分片說明(對呼叫端透明、sharding 稽核欄、IRREDUCIBLE 邊界)
+- [x] 8.4 測試 `tests/test_gpss_query_slice.py`（9 pass / 0 fail）:parser 布林/片語/括號/NOT、最長群選取、遞迴二分、**NOT 群每 shard byte-identical**、union 去重、IRREDUCIBLE fail-fast、三國對稱性(A∩B∩C¬D 與 B∩C¬D 皆適用)
+- [x] 8.5 全套件回歸零 fail（210 passed / 0 fail）
+- [x] 8.6 SKILL.md §5 GPSS bulk 條目補自動分片工作流 + 檢索式紀律(勿塞冗詞、優先分類軸);BR_20260715 歸檔 closed/
+- [x] 8.7 architecture.md 同步(GPSS query-slicing);idef0/grafcet 分片節點更新

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-16T06:48:43.941Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-16T06:58:26.801Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "gpss3 web boolean search 設計齊備(推演證實):proposal+design+idef0+grafcet+spec+sequence+data-schema"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-16T07:18:55.352Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "tasks.md 6 phases + handoff + test-vectors + errors + observability 齊備"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-16T07:21:31.622Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "t7 硬閘解除,進入 t6 工具實作"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-16T07:31:27.876Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "gpss_web_search 實作完成,純函式+真實網路端到端驗證通過,收尾同步齊備"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-16T07:48:49.187Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "使用者明確指示 graduate;verified 通過,收尾同步齊備"
+    }
+  ]
+}

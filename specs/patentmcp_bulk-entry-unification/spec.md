@@ -71,6 +71,20 @@ EPO 分支 SHALL 每完成一頁 biblio fan-out 即呼叫 absorb callback 落地
 - **WHEN** 各片 total 總和與母數差超過 5%(date 條件在該 query 未生效)
 - **THEN** 回 `SLICE_INEFFECTIVE` fail-fast,不靜默交殘缺切片計畫
 
+### Requirement: GPSS 自動 query 分片(檢索條件超長)
+
+`patent_bulk(source="gpss", keyword=...)` 撞 GPSS `Exceeded search condition length` 時 SHALL 自動分片重試,對呼叫端透明回單一 union 結果。分片 SHALL 只二分最長的正向 AND-of-OR 群,NOT 群在每個子查詢中 SHALL byte-identical 完整保留(集合論等價 `(Bx∪By)∩C¬D = (Bx∩C¬D)∪(By∩C¬D)`;拆 NOT 群不等價會漏排)。子查詢仍超長 SHALL 遞迴二分(深度 cap 6)。各子查詢 records SHALL 以 pubno 為 key union 去重。envelope SHALL 補 `sharding:{applied, shards:[{query_frag,total,landed}], union_total, union_landed}`。連單一 OR 詞+全 AND/NOT 都仍超長 SHALL 回 `CONDITION_LENGTH_IRREDUCIBLE`。
+
+#### Scenario: 長布林式自動分片 union
+
+- **WHEN** `patent_bulk(source="gpss", keyword="(B ~45詞) and (C ~50詞) not (D ~50詞)")` 現況必撞 condition-length 牆
+- **THEN** 回 `success:true` + `sharding.applied:true`,union_total 與手動拆最長群 union 的 pubno 集合相等;每 shard 的 not(...) 段 byte-identical
+
+#### Scenario: 不可再分 fail-fast
+
+- **WHEN** 連「單一 OR 詞 + 全 AND/NOT 群」都仍超過 condition-length 上限
+- **THEN** 回 `{success:false, error_code:"CONDITION_LENGTH_IRREDUCIBLE"}` 要求呼叫端縮詞,不靜默交殘缺結果
+
 ## Acceptance Checks
 
 - [ ] `patent_bulk` 路由測試:gpss 無 keyword→export 路徑、gpss 有 keyword→harvest 路徑、epo→收割路徑、無效 source→INVALID_PARAMS
@@ -80,3 +94,4 @@ EPO 分支 SHALL 每完成一頁 biblio fan-out 即呼叫 absorb callback 落地
 - [ ] SKILL.md §5 已收錄 `patent_bulk` 契約與 EPO 布林能力
 - [ ] 全測試套件無回歸
 - [ ] slice_plan 測試:單片/遞迴二分/DATE_RANGE_REQUIRED/SLICE_INEFFECTIVE/深度觸頂 truncated 全覆蓋
+- [ ] GPSS query-slicing 測試:parser 布林/片語/括號/NOT、最長正向群選取、遞迴二分、NOT 群每 shard byte-identical、pubno union 去重、CONDITION_LENGTH_IRREDUCIBLE fail-fast 全覆蓋

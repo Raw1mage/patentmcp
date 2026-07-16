@@ -2,6 +2,12 @@
 
 本檔為 patentmcp 的變更紀錄(繁體中文)。早於 2026-07-06 的歷史見 git log 與 `specs/` 各 plan 套件。
 
+## 2026-07-13
+
+### Changed
+
+- **代表圖來源梯改為全國別 GPSS 爬圖優先 + PDF pipeline fallback**:`patentmcp_batch_download_figures` 原本僅 `TW` 走 GPSS 爬圖、所有非 TW 一律走 PDF pipeline(`extract_representative_figure` — 需先取整份 PDF 再本地 poppler 渲染)。改為**所有國別**先試 `_GpssScrapeSession.fetch_representative_figure`(GPSS 詳情頁單次爬取即得全解析度 G2 代表圖,最便利現成,且 country-agnostic + 內建 neighbour-guard 號碼核對);僅當 GPSS miss(近期公開尚未入 image庫 / Cloudflare 擋 / 詳情頁無圖)才 fallback 到 PDF pipeline。共用 session 的 cookie/cf_clearance jar 跨全部 item 重用。雙層皆 miss 時該筆 skip 並回 `{gpss_error, pdf_error, tried:[gpss,pdf_pipeline]}` 記錄兩層均嘗試。503 cooldown 與 failure isolation 語義保留。驗證:`tests/test_gpss_session_batch.py` 8 tests(含新增 GPSS-first-all-jurisdictions / gpss-miss-fallback-to-pdf / both-tiers-miss-combined-error 三 case)全過;鄰近 `test_br20260628_figures.py` + `test_br20260628_tooling_gaps.py` 共 38 tests 無回歸。
+
 ## 2026-07-11
 
 ### Added

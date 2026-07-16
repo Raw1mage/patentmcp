@@ -1,0 +1,17 @@
+[
+  {
+    "title": "web 路徑登入 → 設庫範圍 → 檢索 (CN-capable)",
+    "participants": ["caller", "gpss_web_search impl", "GPSS4Session", "TIPO GPSS web"],
+    "messages": [
+      {"from": "caller", "to": "gpss_web_search impl", "label": "expr + databases (含 CN)"},
+      {"from": "gpss_web_search impl", "to": "GPSS4Session", "label": "login() md5-captcha"},
+      {"from": "GPSS4Session", "to": "TIPO GPSS web", "label": "POST accserver (帳密+captcha)"},
+      {"from": "TIPO GPSS web", "to": "GPSS4Session", "label": "authed session + slot-key"},
+      {"from": "gpss_web_search impl", "to": "TIPO GPSS web", "label": "POST 檢索及顯示設定 (設庫範圍含 CN)"},
+      {"from": "gpss_web_search impl", "to": "TIPO GPSS web", "label": "POST 檢索式 (_21_1_T / _3_10_X)"},
+      {"from": "gpss_web_search impl", "to": "TIPO GPSS web", "label": "GET ttsserv_watch (poll 各庫命中)"},
+      {"from": "TIPO GPSS web", "to": "gpss_web_search impl", "label": "totals 含 CN 命中 + records"},
+      {"from": "gpss_web_search impl", "to": "caller", "label": "success: totals(含 CN) + records + provenance"}
+    ]
+  }
+]

@@ -42,24 +42,35 @@ def _db_path() -> Path:
 
 # ---- pubno 正規化（與 patents.py _get_patent_country_and_normalized_no 對齊）----
 
+# ISO-3166 alpha-2 country codes that appear as publication-number prefixes in
+# this project's multi-jurisdiction pool. A pubno ALWAYS starts with its own
+# 2-letter country code; the prior parser only recognised TW/US/EP/WO/CN and
+# silently defaulted everything else to "US", then prefixed "US" onto an
+# already-complete foreign pubno (KR20260067039A -> USKR20260067039A), minting
+# double-prefix numbers that exist in no patent office (RCA DD-31, 2026-07-14).
+_KNOWN_CC = (
+    "TW", "US", "EP", "WO", "CN", "KR", "JP", "CA", "AU", "DE", "GB",
+    "FR", "ES", "FI", "PL", "MX", "IT", "NL", "SE", "CH", "AT", "BE",
+    "DK", "NO", "RU", "IN", "BR", "SG", "IL", "HK", "MO",
+)
+
+
 def normalize_pubno(publication_number: str) -> Tuple[str, str]:
     import re
     # strip whitespace, slashes, hyphens, commas, dots (format separators)
     pat = re.sub(r"[\s/\-,\.]+", "", publication_number or "").upper()
     country = "US"
-    if pat.startswith("TW"):
-        country, pat = "TW", pat[2:]
-    elif pat.startswith("US"):
-        country, pat = "US", pat[2:]
-    elif pat.startswith("EP"):
-        country, pat = "EP", pat[2:]
-    elif pat.startswith("WO"):
-        country, pat = "WO", pat[2:]
-    elif pat.startswith("CN"):
-        country, pat = "CN", pat[2:]
-    elif re.match(r"^[IMD]\d+", pat):
+    # A pubno leads with its own 2-letter ISO country code. Match the FULL known
+    # set (not just TW/US/EP/WO/CN) so foreign numbers are split correctly and
+    # never get a spurious default-US prefix stacked on top.
+    matched_cc = False
+    for cc in _KNOWN_CC:
+        if pat.startswith(cc):
+            country, pat, matched_cc = cc, pat[len(cc):], True
+            break
+    if not matched_cc and re.match(r"^[IMD]\d+", pat):
         country = "TW"
-    elif re.match(r"^\d{9}$", pat):
+    elif not matched_cc and re.match(r"^\d{9}$", pat):
         country = "TW"
     m_cert = re.match(r"^([IMD]\d+)[A-Za-z]*$", pat)
     if m_cert:

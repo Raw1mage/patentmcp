@@ -18,7 +18,7 @@ import logging
 import re
 import time
 from datetime import date, timedelta
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from patent_mcp_server import screening_table as _st
@@ -470,6 +470,11 @@ async def bulk_harvest(spec: QuerySpec, *, gpss_client: Any) -> Dict[str, Any]:
     try:
         records, total, prov = await _bulk_pull_gpss_kw(spec, gpss_client)
     except BackendError as e:
+        # Condition-length wall (DD-10/DD-11): the WHOLE boolean was too long a
+        # STRING for GPSS. Split the widest positive OR-group and union the
+        # shards' hits (recall-preserving; NOT groups stay byte-identical).
+        if spec.keyword and _GPSS_CONDITION_LENGTH_MARKER in str(e):
+            return await _bulk_harvest_sharded(spec, gpss_client, str(e))
         return _envelope(
             False, [], None, [_entry("gpss", "error", _error_reason(e))],
             [], None, error_code="GPSS_ERROR", message=str(e),
@@ -480,6 +485,268 @@ async def bulk_harvest(spec: QuerySpec, *, gpss_client: Any) -> Dict[str, Any]:
         )
     return _envelope(True, records, "gpss", prov,
                      list(SOURCE_GAPS.get("gpss", [])), total)
+
+
+# GPSS caps the search-condition STRING; the exact byte ceiling is opaque, so we
+# probe with a conservative length threshold. A shard whose keyword is under this
+# is assumed to clear the wall; if a shard STILL trips it at harvest time, the
+# recursive splitter is re-driven by the live error (belt-and-suspenders).
+_GPSS_CONDITION_LENGTH_LIMIT = 900  # chars; tuned below the observed TIPO ceiling
+
+
+async def _bulk_harvest_sharded(
+    spec: QuerySpec, gpss_client: Any, trigger_msg: str,
+) -> Dict[str, Any]:
+    """Split an over-long GPSS keyword and union the per-shard harvests.
+
+    Deterministic set-algebra recovery (DD-11): bisect the widest positive
+    OR-group into shards whose keyword strings each clear the condition-length
+    wall, harvest each via the SAME _bulk_pull_gpss_kw, then union records by
+    `pubno` (first occurrence wins). NOT groups are byte-identical across shards
+    so no patent is silently dropped. Irreducible → CONDITION_LENGTH_IRREDUCIBLE.
+    """
+    def _fits(kw: str) -> bool:
+        return len(kw) <= _GPSS_CONDITION_LENGTH_LIMIT
+
+    try:
+        shard_queries = _shard_gpss_query(spec.keyword, _fits)
+    except ValueError:
+        return _envelope(
+            False, [], None,
+            [_entry("gpss", "error", "condition_length_irreducible")],
+            [], None, error_code="CONDITION_LENGTH_IRREDUCIBLE",
+            message=("檢索條件字串超過 GPSS 上限且無法再分（單一 OR 詞 + 全 AND/NOT "
+                     "群仍超長）；請縮短同義詞群或改用分類軸。原始錯誤：" + trigger_msg),
+        )
+
+    union: Dict[str, Dict[str, Any]] = {}
+    prov: List[Dict[str, Any]] = [
+        _entry("gpss", "shard", f"condition-length wall → {len(shard_queries)} shards")
+    ]
+    shard_meta: List[Dict[str, Any]] = []
+    union_landed = 0
+    grand_total = 0
+    for frag in shard_queries:
+        shard_spec = replace(spec, keyword=frag)
+        try:
+            recs, s_total, s_prov = await _bulk_pull_gpss_kw(shard_spec, gpss_client)
+        except BackendError as e:
+            # A shard STILL over the wall (threshold under-estimated the true
+            # ceiling) → honest fail-fast rather than a silent partial union.
+            if _GPSS_CONDITION_LENGTH_MARKER in str(e):
+                return _envelope(
+                    False, [], None,
+                    [_entry("gpss", "error",
+                            f"shard still over condition length: {frag[:80]!r}")],
+                    [], None, error_code="CONDITION_LENGTH_IRREDUCIBLE",
+                    message=("分片後子查詢仍超過 GPSS 條件長度上限，請縮短同義詞群。"
+                             "子查詢片段：" + frag),
+                )
+            return _envelope(
+                False, [], None, [_entry("gpss", "error", _error_reason(e))],
+                [], None, error_code="GPSS_ERROR", message=str(e),
+            )
+        prov.extend(s_prov)
+        landed = 0
+        for rec in recs:
+            pubno = rec.get("pubno")
+            key = pubno if pubno else id(rec)
+            if key not in union:
+                union[key] = rec
+                landed += 1
+        union_landed += landed
+        grand_total += s_total or 0
+        shard_meta.append({
+            "query_frag": frag,
+            "total": s_total or 0,
+            "landed": landed,
+        })
+
+    records = list(union.values())
+    env = _envelope(
+        True, records, "gpss", prov,
+        list(SOURCE_GAPS.get("gpss", [])), grand_total,
+    )
+    env["sharding"] = {
+        "applied": True,
+        "shards": shard_meta,
+        "union_total": grand_total,
+        "union_landed": len(records),
+    }
+    return env
+
+
+# ── GPSS query-slicing (DD-10/DD-11; BR_20260715) ───────────────────
+# TIPO GPSS enforces a hard limit on the search-condition STRING length; a long
+# landscape-recall boolean (dozens of OR synonyms) trips it with
+# `GPSS_ERROR: Exceeded search condition length`. POST cannot bypass it (proven
+# 2026-07-15: GPSS reads only the URL query string, body is ignored — DD-10), so
+# the only fix is to make the query STRING shorter: split it and union the hits.
+#
+# The split is a deterministic set-algebra operation, NOT a heuristic. A GPSS
+# keyword is a top-level AND of groups: positive OR-groups joined by and/or, and
+# NOT groups joined by `not`. We bisect ONLY the widest positive OR-group into
+# Bx / By and keep everything else — every other positive group AND every NOT
+# group — byte-identical in both shards, because:
+#     (Bx ∪ By) ∩ C ∩ ¬D  =  (Bx ∩ C ∩ ¬D) ∪ (By ∩ C ∩ ¬D)     (distributive)
+# holds, but splitting a NOT group is NOT recall-preserving:
+#     ¬(D1 ∪ D2) = ¬D1 ∩ ¬D2  ≠  ¬D1 ∪ ¬D2
+# so a split NOT group would silently drop patents. NOT groups are frozen.
+
+_GPSS_CONDITION_LENGTH_MARKER = "Exceeded search condition length"
+_GPSS_SHARD_DEPTH_CAP = 6  # bisection depth cap (aligns with DD-9 EPO slice cap)
+
+
+def _split_top_level(tokens: List[str]) -> List[Tuple[str, List[str]]]:
+    """Split a token stream into top-level (connector, group-tokens) segments.
+
+    A "group" is either a parenthesized run or a bare term at paren-depth 0.
+    The connector is the boolean operator (`and`/`or`/`not`) that precedes the
+    group at depth 0; the first group's connector is "" (leading). Operators and
+    parentheses INSIDE a group stay with that group's tokens (untouched).
+    """
+    segments: List[Tuple[str, List[str]]] = []
+    pending_conn = ""
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        low = tok.lower()
+        if low in ("and", "or", "not") and _paren_depth(tokens[:i]) == 0:
+            pending_conn = low
+            i += 1
+            continue
+        if tok == "(":
+            depth = 0
+            grp: List[str] = []
+            while i < n:
+                t = tokens[i]
+                grp.append(t)
+                if t == "(":
+                    depth += 1
+                elif t == ")":
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+                i += 1
+            segments.append((pending_conn, grp))
+            pending_conn = ""
+        else:
+            segments.append((pending_conn, [tok]))
+            pending_conn = ""
+            i += 1
+    return segments
+
+
+def _paren_depth(tokens: List[str]) -> int:
+    return sum(1 if t == "(" else -1 if t == ")" else 0 for t in tokens)
+
+
+def _group_terms(grp_tokens: List[str]) -> List[str]:
+    """Extract the OR-joined TERMS of a positive group (strip outer parens/ops)."""
+    inner = grp_tokens
+    if inner and inner[0] == "(" and inner[-1] == ")":
+        inner = inner[1:-1]
+    return [t for t in inner if t.lower() not in ("and", "or", "not")
+            and t not in ("(", ")")]
+
+
+def _render_group(terms: List[str]) -> str:
+    """Render a list of terms back into a parenthesized OR-group string."""
+    if len(terms) == 1:
+        return terms[0]
+    return "(" + " or ".join(terms) + ")"
+
+
+def _parse_gpss_query(keyword: str) -> Dict[str, Any]:
+    """Parse a GPSS boolean keyword into positive vs NOT top-level groups.
+
+    Returns {positive_groups: [[terms]...], not_groups: [[terms]...],
+    raw_structure: [(connector, group_tokens)...]}. positive_groups carries the
+    OR-terms of each and/or-joined group; not_groups carries the terms of each
+    `not`-joined group (kept for classification only — NOT groups are never
+    split). raw_structure preserves the exact top-level segmentation so the
+    sharder can rebuild the query with a single group swapped.
+    """
+    raw = re.findall(r'"[^"]*"|\(|\)|[^()\s]+', keyword or "")
+    segments = _split_top_level(raw)
+    positive_groups: List[List[str]] = []
+    not_groups: List[List[str]] = []
+    for conn, grp in segments:
+        terms = _group_terms(grp)
+        if conn == "not":
+            not_groups.append(terms)
+        else:
+            positive_groups.append(terms)
+    return {
+        "positive_groups": positive_groups,
+        "not_groups": not_groups,
+        "raw_structure": segments,
+    }
+
+
+def _render_query(segments: List[Tuple[str, List[str]]]) -> str:
+    """Rebuild a keyword string from top-level (connector, group_tokens)."""
+    parts: List[str] = []
+    for conn, grp in segments:
+        if conn:
+            parts.append(conn)
+        parts.append(" ".join(grp))
+    out = " ".join(p for p in parts if p)
+    out = out.replace("( ", "(").replace(" )", ")")
+    return out
+
+
+def _shard_gpss_query(keyword: str, fits_fn: Any) -> List[str]:
+    """Split an over-long GPSS keyword into shards that each pass `fits_fn`.
+
+    `fits_fn(query_str) -> bool` is True when the query fits the condition-length
+    limit (injectable for tests; production uses a length threshold or a live
+    retry probe). Bisects ONLY the widest positive OR-group into two halves,
+    keeping every other positive group AND all NOT groups byte-identical in both
+    shards (recall-preserving; DD-11). Recurses on any shard still over-long
+    (depth cap _GPSS_SHARD_DEPTH_CAP). Raises ValueError with sentinel
+    "CONDITION_LENGTH_IRREDUCIBLE" when even a single OR-term + all AND/NOT
+    groups still exceeds the limit.
+    """
+    def _rec(kw: str, depth: int) -> List[str]:
+        if fits_fn(kw):
+            return [kw]
+        if depth >= _GPSS_SHARD_DEPTH_CAP:
+            raise ValueError("CONDITION_LENGTH_IRREDUCIBLE")
+        parsed = _parse_gpss_query(kw)
+        segments = parsed["raw_structure"]
+        # Pick the positive group (connector != "not") with the most OR-terms.
+        widest_idx = -1
+        widest_terms: List[str] = []
+        for idx, (conn, grp) in enumerate(segments):
+            if conn == "not":
+                continue
+            terms = _group_terms(grp)
+            if len(terms) > len(widest_terms):
+                widest_terms = terms
+                widest_idx = idx
+        # Irreducible: no positive group has >1 term to bisect.
+        if widest_idx < 0 or len(widest_terms) <= 1:
+            raise ValueError("CONDITION_LENGTH_IRREDUCIBLE")
+        mid = len(widest_terms) // 2
+        left, right = widest_terms[:mid], widest_terms[mid:]
+        conn, _grp = segments[widest_idx]
+        shards: List[str] = []
+        for half in (left, right):
+            new_segments = list(segments)
+            new_segments[widest_idx] = (conn, _tokenize_group(_render_group(half)))
+            shard_kw = _render_query(new_segments)
+            shards.extend(_rec(shard_kw, depth + 1))
+        return shards
+
+    return _rec(keyword, 0)
+
+
+def _tokenize_group(group_str: str) -> List[str]:
+    """Tokenize a rendered group string back into tokens (parens/phrases/terms)."""
+    return re.findall(r'"[^"]*"|\(|\)|[^()\s]+', group_str)
 
 
 def _keyword_to_cql(keyword: str, field: str = "txt") -> str:

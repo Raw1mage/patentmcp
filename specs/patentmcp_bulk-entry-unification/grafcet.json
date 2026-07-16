@@ -15,12 +15,12 @@
     "StepNumber": 1,
     "ModuleRef": "A2",
     "StepType": "normal",
-    "StepAction": "GPSS 拉取:keyword 缺→分類軸 export;keyword 給→收割;expSkip 迴圈至窮盡或 num",
+    "StepAction": "GPSS 拉取:keyword 缺→分類軸 export;keyword 給→收割;expSkip 迴圈至窮盡或 num。若撞 condition-length 超長 → query-slicing:二分最長正向 OR 群(NOT 群原樣保留)、遞迴至每片合法、逐子查詢拉取、pubno union 去重;不可再分(單詞仍超長)→ CONDITION_LENGTH_IRREDUCIBLE",
     "LinkInputType": ["track"],
     "LinkInputNumber": [0],
     "LinkOutputNumber": [3],
     "LinkOutputType": "track",
-    "Condition": ["拉取完成或 BackendError"],
+    "Condition": ["拉取完成(含自動分片 union)或 BackendError/IRREDUCIBLE"],
     "SubGrafcet": []
   },
   {

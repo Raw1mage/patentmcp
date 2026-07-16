@@ -1,0 +1,25 @@
+{
+  "schemas": [
+    {
+      "name": "gpss_web_search result",
+      "kind": "json",
+      "fields": [
+        {"name": "success", "type": "bool", "notes": "true 成功; false 帶 error_code"},
+        {"name": "totals", "type": "object<db_name,int>", "notes": "各庫命中數, 含大陸公開/公告 (修法後非零)"},
+        {"name": "grand_total", "type": "int", "notes": "sum(totals)"},
+        {"name": "records", "type": "array<{pubno_core,doc_type,harder_path}>", "notes": "result-list 書目"},
+        {"name": "databases_queried", "type": "array<str>", "notes": "實際查詢庫集 (None->DB_DEFAULT US+CN)"},
+        {"name": "provenance", "type": "array<{step,ok,...}>", "notes": "handshake/login/dbscope/post/poll 各步證跡"},
+        {"name": "error_code", "type": "str?", "notes": "GPSS_WEB_LOGIN_FAILED / GPSS_WEB_DBSCOPE_FAILED / GPSS_WEB_RESULT_TOO_BROAD / GPSS_WEB_POLL_TIMEOUT"}
+      ]
+    },
+    {
+      "name": "session db-scope POST payload (真實欄位 live 取證)",
+      "kind": "message",
+      "fields": [
+        {"name": "INFO", "type": "str", "notes": "session slot info"},
+        {"name": "<CN checkbox 真實欄位名>", "type": "str", "notes": "task 1.1 live render 取得; 對應 CNA/CNB 選庫; 非 patDB (幽靈欄位)"}
+      ]
+    }
+  ]
+}

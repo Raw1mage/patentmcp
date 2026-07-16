@@ -1,0 +1,44 @@
+{
+  "diagram_title": "gpss web 路徑登入 session 庫範圍檢索 (CN-capable)",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "解析庫範圍需求",
+      "description": "從 databases 參數決定目標庫集; None -> DB_DEFAULT(US+CN); 顯式 -> 使用者指定庫集 (含 CN)",
+      "decomposition": {}
+    },
+    {
+      "id": "A2",
+      "title": "登入 GPSS4 member session",
+      "description": "複用 GPSS4Session 登入 state machine (md5-captcha), 取得 authed session + slot-key token; 失敗 fail-fast GPSS_WEB_LOGIN_FAILED",
+      "decomposition": {}
+    },
+    {
+      "id": "A3",
+      "title": "設定 session 檢索庫範圍 state",
+      "description": "同一 authed session 內 POST 檢索及顯示設定頁真實選庫表單, 把庫範圍設為含 CN + 使用者指定庫集; 失敗 fail-fast GPSS_WEB_DBSCOPE_FAILED",
+      "decomposition": {}
+    },
+    {
+      "id": "A4",
+      "title": "送出檢索式並輪詢結果",
+      "description": "在已設庫範圍的 session 送布林/進階檢索式, poll ttsserv_watch 取各庫命中數 (含 CN) + result-list 書目",
+      "decomposition": {}
+    }
+  ],
+  "arrows": [
+    {"id": "AR1", "source": "EXTERNAL", "target": "A1:input", "label": "databases 參數 / expr 檢索式", "type": "input"},
+    {"id": "AR2", "source": "EXTERNAL", "target": "A1:control", "label": "DB_DEFAULT=US+CN (gpss/client.py:66-68)", "type": "control"},
+    {"id": "AR3", "source": "A1:output", "target": "A3:input", "label": "目標庫集 (含 CN)", "type": "output"},
+    {"id": "AR4", "source": "EXTERNAL", "target": "A2:input", "label": "GPSS4_USERNAME/PASSWORD", "type": "input"},
+    {"id": "AR5", "source": "EXTERNAL", "target": "A2:mechanism", "label": "GPSS4Session md5-captcha login", "type": "mechanism"},
+    {"id": "AR6", "source": "A2:output", "target": "A3:control", "label": "authed session + slot-key token", "type": "output"},
+    {"id": "AR7", "source": "EXTERNAL", "target": "A3:control", "label": "檢索及顯示設定頁選庫表單 (真實欄位 live render)", "type": "control"},
+    {"id": "AR8", "source": "A3:output", "target": "A4:control", "label": "session 庫範圍 state = 含 CN", "type": "output"},
+    {"id": "AR9", "source": "EXTERNAL", "target": "A4:mechanism", "label": "_GPSS_POLICY.guard() per-host serialize + pacing", "type": "mechanism"},
+    {"id": "AR10", "source": "A4:output", "target": "EXTERNAL", "label": "totals (含 CN 命中) + records 書目", "type": "output"},
+    {"id": "AR11", "source": "EXTERNAL", "target": "A2:control", "label": "fail-fast no fallback (使用者天條)", "type": "control"},
+    {"id": "AR12", "source": "EXTERNAL", "target": "A4:input", "label": "expr / query 檢索式", "type": "input"}
+  ]
+}

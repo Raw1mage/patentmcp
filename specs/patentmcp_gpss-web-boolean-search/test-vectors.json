@@ -1,0 +1,62 @@
+[
+  {
+    "id": "TV-1",
+    "description": "欄位化括號布林式語法合法 → 通過驗證,進入 handshake",
+    "input": {"expr": "(radar or mmwave)@TI not (vehicle)@AB"},
+    "expected": {"syntax_valid": true, "network_called": true}
+  },
+  {
+    "id": "TV-2",
+    "description": "跨欄位檢索語法 (逗號分隔欄位代碼) 合法",
+    "input": {"expr": "(奈米碳管)@TI,CL"},
+    "expected": {"syntax_valid": true}
+  },
+  {
+    "id": "TV-3",
+    "description": "非法欄位代碼 → INVALID_PARAMS 零網路呼叫",
+    "input": {"expr": "(x)@ZZ"},
+    "expected": {"success": false, "error_code": "INVALID_PARAMS", "network_called": false}
+  },
+  {
+    "id": "TV-4",
+    "description": "括號不配對 → INVALID_PARAMS 零網路呼叫",
+    "input": {"expr": "(radar or mmwave@TI"},
+    "expected": {"success": false, "error_code": "INVALID_PARAMS", "network_called": false}
+  },
+  {
+    "id": "TV-5",
+    "description": "日期範圍併入檢索式 (ID=YYYYMMDD:YYYYMMDD)",
+    "input": {"expr": "(heartbeat)@TI", "date_from": "20200101", "date_to": "20231231"},
+    "expected": {"query_applied_contains": "ID=20200101:20231231"}
+  },
+  {
+    "id": "TV-6",
+    "description": "國別限縮經 patDB 參數 (不進檢索式字串)",
+    "input": {"expr": "(heartbeat)@TI", "databases": ["TWA", "CNA"]},
+    "expected": {"databases_queried": ["TWA", "CNA"], "patDB_param": "TWA,CNA"}
+  },
+  {
+    "id": "TV-7",
+    "description": "總命中 >30萬 → GPSS_WEB_RESULT_TOO_BROAD,不回 records",
+    "input": {"expr": "a", "_simulated_total": 300001},
+    "expected": {"success": false, "error_code": "GPSS_WEB_RESULT_TOO_BROAD", "records_returned": 0}
+  },
+  {
+    "id": "TV-8",
+    "description": "handshake INFO token 抽取失敗 → GPSS_WEB_HANDSHAKE_FAILED,非靜默空結果",
+    "input": {"expr": "(heartbeat)@TI", "_simulated_no_info_token": true},
+    "expected": {"success": false, "error_code": "GPSS_WEB_HANDSHAKE_FAILED"}
+  },
+  {
+    "id": "TV-9",
+    "description": "ttsserv_watch 輪詢逾時 → 回部分就緒 + pending_databases",
+    "input": {"expr": "(heartbeat)@TI", "_simulated_poll_timeout": true},
+    "expected": {"success": true, "partial": true, "pending_databases_nonempty": true}
+  },
+  {
+    "id": "TV-10",
+    "description": "全程不呼叫 gpss_api REST (零 API 額度)",
+    "input": {"expr": "(heartbeat)@TI"},
+    "expected": {"gpss_api_called": false}
+  }
+]

@@ -1,0 +1,51 @@
+{
+  "schemas": [
+    {
+      "name": "gpss_web_search_input",
+      "kind": "message",
+      "fields": [
+        {"name": "expr", "type": "string", "notes": "單一欄位化括號布林檢索式,如 (radar or mmwave)@TI not (vehicle)@AB;@欄位/布林/鄰近運算編碼在字串內"},
+        {"name": "date_from", "type": "string?", "notes": "YYYYMMDD;併入檢索式 ID=date_from:date_to"},
+        {"name": "date_to", "type": "string?", "notes": "YYYYMMDD;與 date_from 成對"},
+        {"name": "databases", "type": "string[]?", "notes": "國別/資料庫代碼 TWA/USA/CNA/EPA/…;經 patDB POST 參數;預設依系統設定"},
+        {"name": "num", "type": "int?", "notes": "結果列書目回傳上限(非母數上限);預設保守值"}
+      ]
+    },
+    {
+      "name": "gpss_web_search_envelope",
+      "kind": "json",
+      "fields": [
+        {"name": "success", "type": "bool", "notes": "true=有意義結果;false=錯誤(見 error_code)"},
+        {"name": "totals", "type": "object", "notes": "各資料庫精確命中數,如 {TWA: 113, CNA: 47};由 ttsserv_watch 輪詢取得"},
+        {"name": "grand_total", "type": "int", "notes": "各庫命中數總和(≤30萬;>30萬 則 success=false)"},
+        {"name": "records", "type": "object[]", "notes": "結果列書目(pubno/title/…);複用 _gpss_iter_result_rows 解析"},
+        {"name": "provenance", "type": "object[]", "notes": "每步嘗試記錄(handshake/post/poll)供稽核"},
+        {"name": "query_applied", "type": "string", "notes": "實際送出的完整檢索式(含併入的 ID=日期)"},
+        {"name": "databases_queried", "type": "string[]", "notes": "實際查的資料庫"},
+        {"name": "error_code", "type": "string?", "notes": "失敗時的結構化錯誤碼(見 error_codes schema)"},
+        {"name": "hint", "type": "string?", "notes": "限縮/修正提示(TOO_BROAD/INVALID_PARAMS 時)"}
+      ]
+    },
+    {
+      "name": "error_codes",
+      "kind": "config",
+      "fields": [
+        {"name": "INVALID_PARAMS", "type": "enum", "notes": "檢索式語法非法(欄位代碼/括號/日期);零網路呼叫(DD-5)"},
+        {"name": "GPSS_WEB_HANDSHAKE_FAILED", "type": "enum", "notes": "gpss3 INFO token 抽取失敗;不靜默空結果(DD-1)"},
+        {"name": "GPSS_WEB_RESULT_TOO_BROAD", "type": "enum", "notes": "總命中 >30萬 模糊上限;fail-fast 不救 + 限縮提示(DD-4)"},
+        {"name": "GPSS_WEB_POLL_TIMEOUT", "type": "enum", "notes": "ttsserv_watch 輪詢逾時;回部分就緒庫 + 明示哪些仍檢索中(DD-3)"}
+      ]
+    },
+    {
+      "name": "gpss3_form_fields",
+      "kind": "config",
+      "fields": [
+        {"name": "_21_1_T", "type": "string", "notes": "通用文字檢索式欄位(size=100,T_XX型);塞完整單一檢索式(推演證實)"},
+        {"name": "@_21_1_T", "type": "string", "notes": "隨附 T_XX 型別標記"},
+        {"name": "INFO", "type": "string", "notes": "session token;每次 handshake 由 _gpss_extract_info 抽取"},
+        {"name": "patDB", "type": "string", "notes": "資料庫別逗號串(國別限縮);獨立 POST 參數"},
+        {"name": "ttsserv_watch", "type": "endpoint", "notes": "/gpss3/gpsskmc/ttsserv_watch? — AJAX 各庫筆數輪詢端點(推演證實)"}
+      ]
+    }
+  ]
+}

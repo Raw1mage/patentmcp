@@ -11,7 +11,7 @@
     {
       "id": "A2",
       "title": "GPSS 窮盡拉取",
-      "description": "keyword 缺→分類軸 export(強制全欄 expFld);keyword 給→keyword 收割;expSkip 自動分頁至 num/total 窮盡",
+      "description": "keyword 缺→分類軸 export(強制全欄 expFld);keyword 給→keyword 收割;expSkip 自動分頁至 num/total 窮盡。condition-length 超長撞 GPSS_ERROR → 自動 query-slicing(二分最長正向 OR 群、NOT 群原樣保留、遞迴分片、pubno union 去重)對呼叫端透明回單一結果。DD-10/DD-11",
       "decomposition": null
     },
     {
@@ -32,7 +32,7 @@
     { "id": "AR2", "source": "EXTERNAL", "target": "A1:control", "type": "control", "label": "no-fallback 天條 / INVALID_PARAMS fail-fast" },
     { "id": "AR3", "source": "A1:output", "target": "A2:input", "type": "output", "label": "QuerySpec (source=gpss)" },
     { "id": "AR4", "source": "A1:output", "target": "A3:input", "type": "output", "label": "QuerySpec (source=epo)" },
-    { "id": "AR5", "source": "EXTERNAL", "target": "A2:control", "type": "control", "label": "GPSS 時段額度 / expSkip 分頁" },
+    { "id": "AR5", "source": "EXTERNAL", "target": "A2:control", "type": "control", "label": "GPSS 時段額度 / expSkip 分頁 / condition-length 上限(超長→自動分片,NOT 群不拆)" },
     { "id": "AR6", "source": "EXTERNAL", "target": "A3:control", "type": "control", "label": "OPS 15/min 節流 / skip wall 2000" },
     { "id": "AR7", "source": "EXTERNAL", "target": "A2:mechanism", "type": "mechanism", "label": "GPSS client" },
     { "id": "AR8", "source": "EXTERNAL", "target": "A3:mechanism", "type": "mechanism", "label": "EPO OPS client + absorb callback" },

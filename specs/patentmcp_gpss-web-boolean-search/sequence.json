@@ -1,0 +1,22 @@
+[
+  {
+    "title": "gpss_web_search 人類路徑布林檢索計數流程",
+    "participants": ["Caller", "gpss_web_search", "SyntaxValidator", "_GPSS_POLICY", "gpss3(TIPO)", "ttsserv_watch"],
+    "messages": [
+      {"from": "Caller", "to": "gpss_web_search", "label": "gpss_web_search(expr, date_from?, date_to?, databases?)"},
+      {"from": "gpss_web_search", "to": "SyntaxValidator", "label": "驗欄位代碼白名單 + @欄位 + 括號 + 日期語法"},
+      {"from": "SyntaxValidator", "to": "gpss_web_search", "label": "非法 → INVALID_PARAMS(零網路呼叫)"},
+      {"from": "gpss_web_search", "to": "_GPSS_POLICY", "label": "acquire guard(Concurrency=1 + pacing)"},
+      {"from": "gpss_web_search", "to": "gpss3(TIPO)", "label": "GET portal → gpss3 → 抽 INFO token + action URL"},
+      {"from": "gpss3(TIPO)", "to": "gpss_web_search", "label": "INFO token + action(handshake 失敗 → GPSS_WEB_HANDSHAKE_FAILED)"},
+      {"from": "gpss_web_search", "to": "gpss3(TIPO)", "label": "POST 單一檢索式 _21_1_T + patDB 國別"},
+      {"from": "gpss3(TIPO)", "to": "gpss_web_search", "label": "結果頁框架 + state token"},
+      {"from": "gpss_web_search", "to": "ttsserv_watch", "label": "輪詢各庫命中數(最大次數+逾時)"},
+      {"from": "ttsserv_watch", "to": "gpss_web_search", "label": "各資料庫命中數(TWA/USA/CNA)"},
+      {"from": "gpss_web_search", "to": "gpss_web_search", "label": "總命中 >30萬 → GPSS_WEB_RESULT_TOO_BROAD(不救)"},
+      {"from": "gpss_web_search", "to": "gpss3(TIPO)", "label": "GET 結果列(≤30萬時)解析書目"},
+      {"from": "gpss_web_search", "to": "_GPSS_POLICY", "label": "release guard"},
+      {"from": "gpss_web_search", "to": "Caller", "label": "{各庫命中數, records[], provenance} | 結構化錯誤"}
+    ]
+  }
+]

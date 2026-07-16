@@ -3,8 +3,9 @@
 Covers:
   1 — _GpssScrapeSession holds ONE persistent httpx client (cookie reuse)
   2 — batch shares ONE session across all TW items (single client created)
-  3 — batch non-TW branch routes to extract_representative_figure (PDF
-      pipeline), NOT get_patent()/thumbnail (the fixed bug + thumbnail ban)
+  3 — batch routes EVERY jurisdiction to GPSS scrape first (most convenient
+      ready-made source); PDF pipeline (extract_representative_figure) is a
+      fallback used ONLY when GPSS misses. Never get_patent()/thumbnail.
   4 — one failing item does not abort the batch (session survives)
   5 — single-call tool wrappers still pass session_client=None (throwaway)
 
@@ -84,33 +85,95 @@ class BatchSharesOneSessionTest(unittest.TestCase):
         self.assertEqual(set(out["downloaded"].keys()), {"TW111", "TW222", "TW333"})
 
 
-class BatchNonTwUsesPdfPipelineTest(unittest.TestCase):
-    def test_non_tw_calls_extract_representative_figure_not_thumbnail(self):
-        calls = {"extract": [], "get_patent": 0}
+class BatchGpssFirstAllJurisdictionsTest(unittest.TestCase):
+    def test_non_tw_tries_gpss_first_no_pdf_when_gpss_hits(self):
+        # GPSS-first for every jurisdiction: when GPSS returns a figure, the PDF
+        # pipeline (extract_representative_figure) must NOT be touched, and
+        # get_patent()/thumbnail is never used.
+        calls = {"gpss": [], "extract": [], "get_patent": 0}
+
+        async def _fake_fig_impl(pn, session_client=None, all_figures=False):
+            calls["gpss"].append(pn)
+            return {"success": True, "download_url": f"gpss/{pn}"}
 
         async def _fake_extract(pn, *a, **k):
             calls["extract"].append(pn)
-            return {"success": True, "download_url": f"pdf/{pn}", "page_number": 2}
+            return {"success": True, "download_url": f"pdf/{pn}"}
 
         async def _fake_get_patent(pn, *a, **k):
             calls["get_patent"] += 1
-            return {"success": True}  # deliberately no representative_figure_url
+            return {"success": True}
 
+        orig_impl = P._gpss_download_representative_figure_impl
         orig_extract = P.extract_representative_figure
         orig_gp = P.gpatents_client.get_patent
+        P._gpss_download_representative_figure_impl = _fake_fig_impl  # type: ignore
         P.extract_representative_figure = _fake_extract  # type: ignore
         P.gpatents_client.get_patent = _fake_get_patent  # type: ignore
         try:
             out = asyncio.run(P.patentmcp_batch_download_figures(["US999", "CN888"]))
         finally:
+            P._gpss_download_representative_figure_impl = orig_impl  # type: ignore
             P.extract_representative_figure = orig_extract  # type: ignore
             P.gpatents_client.get_patent = orig_gp  # type: ignore
 
-        # non-TW must go through the report-grade PDF pipeline...
-        self.assertEqual(set(calls["extract"]), {"US999", "CN888"})
-        # ...and NEVER through the old get_patent/thumbnail path (the bug).
+        # every jurisdiction hits GPSS first...
+        self.assertEqual(set(calls["gpss"]), {"US999", "CN888"})
+        # ...PDF pipeline untouched when GPSS hits...
+        self.assertEqual(calls["extract"], [])
+        # ...and the old get_patent/thumbnail path is never used.
         self.assertEqual(calls["get_patent"], 0)
         self.assertEqual(set(out["downloaded"].keys()), {"US999", "CN888"})
+
+    def test_gpss_miss_falls_back_to_pdf_pipeline(self):
+        # When GPSS misses (e.g. figure not yet in the image库), the batch must
+        # fall back to the report-grade PDF pipeline for that item.
+        calls = {"gpss": [], "extract": []}
+
+        async def _fake_fig_impl(pn, session_client=None, all_figures=False):
+            calls["gpss"].append(pn)
+            return {"success": False, "error": "neighbour guard / not in image库"}
+
+        async def _fake_extract(pn, *a, **k):
+            calls["extract"].append(pn)
+            return {"success": True, "download_url": f"pdf/{pn}"}
+
+        orig_impl = P._gpss_download_representative_figure_impl
+        orig_extract = P.extract_representative_figure
+        P._gpss_download_representative_figure_impl = _fake_fig_impl  # type: ignore
+        P.extract_representative_figure = _fake_extract  # type: ignore
+        try:
+            out = asyncio.run(P.patentmcp_batch_download_figures(["US999"]))
+        finally:
+            P._gpss_download_representative_figure_impl = orig_impl  # type: ignore
+            P.extract_representative_figure = orig_extract  # type: ignore
+
+        self.assertEqual(calls["gpss"], ["US999"])       # GPSS tried first
+        self.assertEqual(calls["extract"], ["US999"])    # then PDF fallback
+        self.assertEqual(set(out["downloaded"].keys()), {"US999"})
+        self.assertEqual(out["downloaded"]["US999"]["download_url"], "pdf/US999")
+
+    def test_both_tiers_miss_reports_combined_error(self):
+        # When BOTH GPSS and the PDF pipeline miss, the item is skipped with an
+        # error that records both tiers were attempted.
+        async def _fake_fig_impl(pn, session_client=None, all_figures=False):
+            return {"success": False, "error": "gpss miss"}
+
+        async def _fake_extract(pn, *a, **k):
+            return {"success": False, "error": "NO_FIGURE_PAGE"}
+
+        orig_impl = P._gpss_download_representative_figure_impl
+        orig_extract = P.extract_representative_figure
+        P._gpss_download_representative_figure_impl = _fake_fig_impl  # type: ignore
+        P.extract_representative_figure = _fake_extract  # type: ignore
+        try:
+            out = asyncio.run(P.patentmcp_batch_download_figures(["US404"]))
+        finally:
+            P._gpss_download_representative_figure_impl = orig_impl  # type: ignore
+            P.extract_representative_figure = orig_extract  # type: ignore
+
+        self.assertIn("US404", out["skipped"])
+        self.assertEqual(set(out["downloaded"].keys()), set())
 
 
 class BatchFailureIsolationTest(unittest.TestCase):

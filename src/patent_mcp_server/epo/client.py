@@ -252,9 +252,38 @@ class EPOClient:
             ipc = bib.get("classifications-ipcr", {}).get("classification-ipcr", [])
             ipc = ipc if isinstance(ipc, list) else [ipc]
             ipc_codes = [_txt(c.get("text")) for c in ipc if c]
+            # application-reference (申請號): EPO biblio DOES carry it under
+            # bibliographic-data/application-reference/document-id[docdb]. The
+            # original parser dropped it (leaving apply_no unfillable for pool
+            # backfill); screening.py already knew the shape. Prefer the docdb
+            # document-id (country+doc-number+kind), fall back to epodoc.
+            appno = ""
+            app_date = ""
+            appref = bib.get("application-reference", {})
+            appref = appref[0] if isinstance(appref, list) else appref
+            app_dids = (appref or {}).get("document-id", [])
+            app_dids = app_dids if isinstance(app_dids, list) else [app_dids]
+            _epodoc = None
+            for d in app_dids:
+                dtype = d.get("@document-id-type")
+                if dtype == "docdb":
+                    cc = _txt(d.get("country")); num = _txt(d.get("doc-number"))
+                    kind = _txt(d.get("kind"))
+                    if num:
+                        appno = f"{cc}{num}{kind}"
+                        app_date = _txt(d.get("date")) or app_date
+                        break
+                elif dtype == "epodoc":
+                    _epodoc = d
+            if not appno and _epodoc is not None:
+                num = _txt(_epodoc.get("doc-number"))
+                if num:
+                    appno = num
+                    app_date = _txt(_epodoc.get("date")) or app_date
             return {"success": True, "pub": pub, "found": True, "title": title,
                     "abstract": abstract, "applicants": applicants,
-                    "ipc": ipc_codes[:8]}
+                    "ipc": ipc_codes[:8], "apply_no": appno,
+                    "apply_date": app_date}
         except Exception as e:  # noqa: BLE001
             logger.error(f"EPO biblio parse failed for {pub}: {e}")
             return {"success": False, "error": f"parse error: {e}"}

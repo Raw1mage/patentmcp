@@ -1,0 +1,50 @@
+{
+  "diagram_title": "gpss_web_search — GPSS 人類登入路徑欄位化括號布林檢索計數",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "驗證檢索式語法",
+      "description": "驗欄位代碼白名單(TI/AB/CL/AX/IV/ID/IPC/CPC)、@欄位後綴合法性、括號配對、日期語法;非法即 INVALID_PARAMS 零網路呼叫(DD-5)",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "建立 gpss3 登入態 handshake",
+      "description": "複用 _gpss_client + _GPSS_POLICY;訪 portal → gpss3 → 抽 INFO token + action URL(Cloudflare cf_clearance 續連,序列化節流 DD-6)",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "提交單一檢索式 POST",
+      "description": "單一欄位化括號布林式(含 @欄位/日期 ID=/跨欄位 not)塞 _21_1_T;國別經 patDB 參數;回結果頁框架(DD-2)",
+      "decomposition": null
+    },
+    {
+      "id": "A4",
+      "title": "輪詢 AJAX 各庫精確筆數",
+      "description": "輪詢 ttsserv_watch 端點至各資料庫(TWA/USA/CNA)命中數就緒;最大輪詢次數+逾時保護;部分就緒明示(DD-3)",
+      "decomposition": null
+    },
+    {
+      "id": "A5",
+      "title": "判母數 + 解析書目 / fail-fast",
+      "description": "命中 >30萬 → GPSS_WEB_RESULT_TOO_BROAD + 限縮提示(不救 DD-4);否則解析結果列書目回傳",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    {"id": "AR1", "source": "EXTERNAL", "target": "A1:input", "type": "input", "label": "檢索式 expr + date_from/to + databases"},
+    {"id": "AR2", "source": "EXTERNAL", "target": "A1:control", "type": "control", "label": "欄位代碼白名單 + 語法規則"},
+    {"id": "AR3", "source": "A1:output", "target": "A2:input", "type": "output", "label": "已驗證檢索式"},
+    {"id": "AR4", "source": "EXTERNAL", "target": "A2:control", "type": "control", "label": "Cloudflare 節流天條(_GPSS_POLICY Concurrency=1)"},
+    {"id": "AR5", "source": "EXTERNAL", "target": "A2:mechanism", "type": "mechanism", "label": "_gpss_client + SoftScrapePolicy"},
+    {"id": "AR6", "source": "A2:output", "target": "A3:input", "type": "output", "label": "INFO token + action URL + session client"},
+    {"id": "AR7", "source": "A3:control", "target": "A3:control", "type": "control", "label": "patDB 國別限縮參數"},
+    {"id": "AR8", "source": "A3:output", "target": "A4:input", "type": "output", "label": "結果頁框架 + state token"},
+    {"id": "AR9", "source": "EXTERNAL", "target": "A4:mechanism", "type": "mechanism", "label": "ttsserv_watch AJAX 端點"},
+    {"id": "AR10", "source": "A4:output", "target": "A5:input", "type": "output", "label": "各庫命中數 + 結果列 HTML"},
+    {"id": "AR11", "source": "EXTERNAL", "target": "A5:control", "type": "control", "label": "30萬母數上限 / 使用者限縮原則"},
+    {"id": "AR12", "source": "A5:output", "target": "EXTERNAL", "type": "output", "label": "各庫精確命中數 + 書目 | TOO_BROAD 限縮提示"}
+  ]
+}

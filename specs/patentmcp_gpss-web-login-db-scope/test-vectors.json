@@ -1,0 +1,20 @@
+[
+  {
+    "id": "TV-1",
+    "description": "databases=None 沿用帳號當前範圍 (back-compat, 現行行為不變)",
+    "input": {"tool": "gpss4_advanced_search", "query": "(video)@TI AND AD=2024:2024", "databases": null},
+    "expected": {"success": true, "note": "harvest 不呼叫 set_search_databases; 結果 = 帳號當前預設範圍"}
+  },
+  {
+    "id": "TV-2",
+    "description": "databases=[CNA,CNB] harvest 前先鎖範圍, 撈回 CN 純源池",
+    "input": {"tool": "gpss4_advanced_search", "query": "(激光雷达 or 摄像 or 图像)@TI,AB and (老人 or 跌倒 or 生命体征)@TI,AB and AD=2024:2024", "databases": ["CNA", "CNB"]},
+    "expected": {"success": true, "all_pat_no_prefix": "CN", "note": "結果全為 CN 源 (非 TW/JP/WO 混合); 量級對齊 REST databases=[CNA,CNB]"}
+  },
+  {
+    "id": "TV-3",
+    "description": "set_search_databases 存檔失敗 fail-fast, 不靜默用舊範圍續查",
+    "input": {"method": "set_search_databases", "dbs": ["CNA"], "simulate": "存檔 POST 未跳回設定頁"},
+    "expected": {"error_code": "GPSS4_DBSCOPE_FAILED", "note": "raise/回 error, 不繼續 harvest"}
+  }
+]

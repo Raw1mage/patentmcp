@@ -2796,6 +2796,342 @@ async def _gpss_search_impl(
 
 
 # =====================================================================
+# TIPO GPSS Web-path Boolean Search — HUMAN login path, NO API quota
+# /plans/patentmcp_gpss-web-boolean-search  DD-1..6
+# Reuses the gpss3 handshake infra (_gpss_client / _GPSS_POLICY /
+# _gpss_extract_info / _gpss_extract_action / _gpss_iter_result_rows).
+# =====================================================================
+
+# GPSS field codes that may appear after "@" (fuzzy) or "=" (exact) in a
+# field-qualified boolean expr. Whitelist = KB knowledge-base/gpss-search-syntax
+# §8. Anything outside this set is a syntax error (DD-5, zero network call).
+_GPSS_WEB_FIELD_CODES = {
+    "TI", "AB", "CL", "AX", "IV", "IN", "PA", "ID", "AD", "PN", "AN",
+    "IPC", "CPC", "IC", "CS", "DE", "PR", "AG", "TY",
+}
+
+
+def _gpss_web_validate_expr(expr: str) -> Optional[str]:
+    """Validate a single field-qualified bracketed boolean expression BEFORE
+    any network call (DD-5). Returns None when valid, else a human hint.
+
+    Checks: non-empty, balanced parentheses, every `@CODE`/`CODE=` field token
+    is in the whitelist. Does NOT execute the query — gpss3 is the final judge
+    of semantics; this only rejects the objectively malformed to save a
+    Cloudflare-throttled round trip.
+    """
+    import re
+    if not expr or not expr.strip():
+        return "檢索式不可為空"
+    # Balanced parentheses
+    depth = 0
+    for ch in expr:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return "括號不配對:右括號多於左括號"
+    if depth != 0:
+        return "括號不配對:左括號未閉合"
+    # Field codes after @ (fuzzy). e.g. (radar)@TI  or cross-field (x)@TI,CL
+    for m in re.finditer(r"@([A-Za-z]+(?:,[A-Za-z]+)*)", expr):
+        for code in m.group(1).upper().split(","):
+            if code not in _GPSS_WEB_FIELD_CODES:
+                return f"未知欄位代碼 @{code};合法代碼見 gpss-search-syntax KB §8"
+    return None
+
+
+def _gpss_web_compose_query(expr: str, date_from: Optional[str],
+                            date_to: Optional[str]) -> str:
+    """Fold the date range into the single search expression as an ID= clause
+    (DD-2: date is carried IN the expr string, matching the API-side ID
+    syntax). Country is NOT here — it rides the patDB POST param (DD-2)."""
+    q = expr.strip()
+    if date_from or date_to:
+        q = f"({q}) and ID={date_from or ''}:{date_to or ''}"
+    return q
+
+
+def _gpss_web_extract_ptmp(html: str) -> str:
+    """Extract the result-page search-scratch key `ptmp`, from which the
+    ttsserv_watch poll key is derived: kmtmp = ptmp.substr(0, indexOf('/'))
+    (t7 recon). gpss3 emits it as a JS var assignment on the result page."""
+    import re
+    m = re.search(r'ptmp\s*=\s*["\']([^"\']+)["\']', html)
+    if m:
+        return m.group(1)
+    # Fallback: the AURL prefix is sometimes emitted pre-composed.
+    m = re.search(r'ttsserv_watch\?([^/"\']+)/km\.swp', html)
+    return m.group(1) if m else ""
+
+
+def _gpss_web_parse_totals(watch_text: str) -> Dict[str, int]:
+    """Parse a ttsserv_watch AJAX response into {db_name: hit_count}.
+
+    transferULLI(d) parses each sub-db as `subdbname(rec)` where subdbname is
+    the text before '(' and rec is the parenthesised number (t7 recon). A db
+    still counting shows a spinner/countdown instead of a number — skipped."""
+    import re
+    totals: Dict[str, int] = {}
+    for m in re.finditer(r'([^\s<>()]+)\s*\(\s*([\d,]+)\s*\)', watch_text):
+        name = m.group(1).strip()
+        try:
+            totals[name] = int(m.group(2).replace(",", ""))
+        except ValueError:
+            continue
+    return totals
+
+
+def _gpss_web_is_too_broad(html: str, ptmp: str = "") -> bool:
+    """Detect a genuine >30萬母數 overflow (DD-4) — fail-fast rather than poll
+    an infinite母數.
+
+    IMPORTANT (防呆教訓): the strings `reclock` and `超過30萬` also appear as
+    FIXED page furniture on EVERY result page — `class="reclock"` is the
+    重新計時 button, and `全部結果超過30萬筆不提供檢索去重` is the
+    close_nodup (檢索去重) disabled-feature tooltip. Matching those verbatim
+    misfires on normal results (the exact假訊號 this project already hit once).
+
+    The RELIABLE signal is structural: a genuine overflow page canNOT produce a
+    result scratch key, so `ptmp` is empty. A normal page (even a large one)
+    yields a ptmp and should be polled. So: overflow IFF the overflow-count
+    sentinel is present AND no ptmp was produced.
+    """
+    import re
+    # The去重-tooltip text is page furniture; the count sentinel we care about is
+    # the result-count area declaring the母數 itself exceeded the ceiling.
+    count_sentinel = bool(re.search(
+        r'筆數超過\s*30\s*萬|超過\s*30\s*萬筆(?!不提供)|母數超過', html))
+    return count_sentinel and not ptmp
+
+
+async def _gpss_web_search_impl(
+    expr: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    databases: Optional[List[str]] = None,
+    num: int = 30,
+    poll_max: int = 8,
+) -> Dict[str, Any]:
+    """Search TIPO GPSS via the HUMAN login path (gpss3 web UI), NOT the REST
+    API — zero API quota. Accepts ONE field-qualified bracketed boolean
+    expression (e.g. `(radar or mmwave)@TI not (vehicle)@AB`); date/country
+    narrowing is built in (DD-2). Returns per-database exact hit counts polled
+    from ttsserv_watch (t7) plus the result-list bibliography.
+
+    fail-fast, no fallback (使用者天條): malformed expr → INVALID_PARAMS with
+    ZERO network call; handshake failure → GPSS_WEB_HANDSHAKE_FAILED; >30萬
+    母數 → GPSS_WEB_RESULT_TOO_BROAD (never returns records); poll timeout →
+    partial totals + pending_databases. NEVER falls back to the gpss_api REST
+    path (would burn quota).
+    """
+    import re
+
+    provenance: List[Dict[str, Any]] = []
+
+    # A2: syntax validation FIRST — zero network call on failure (DD-5)
+    hint = _gpss_web_validate_expr(expr)
+    if hint is not None:
+        return {
+            "success": False,
+            "error_code": "INVALID_PARAMS",
+            "hint": hint,
+            "provenance": [{"step": "validate", "ok": False, "detail": hint}],
+        }
+
+    query_applied = _gpss_web_compose_query(expr, date_from, date_to)
+    # DD-2 [SUPERSEDED by DD-3, BR_20260716]: the gpss3 web search form has NO
+    # patDB field — country/database scope is an account-level per-user
+    # server-side config (the _20_* 進階檢索設定 page), NOT a POST param. The old
+    # `data["patDB"]=...` was a ghost field the server silently ignored. The
+    # gpss3 anonymous-handshake path has no login and thus no scope-setting
+    # ability, so `databases` cannot be honoured here (DD-1: scope-narrowed
+    # search must go through the logged-in gpss4 path / gpss4_set_search_scope).
+    # Fail-fast rather than silently ignore a scope the caller asked for.
+    if databases:
+        return {
+            "success": False,
+            "error_code": "GPSS_WEB_DBSCOPE_UNSUPPORTED",
+            "error": (
+                "gpss3 web search cannot narrow by database (scope is an "
+                "account-level per-user config, not a query param; BR_20260716). "
+                "Use gpss4_set_search_scope(databases=...) then gpss4_advanced_search, "
+                "or gpss4_advanced_search(databases=...) directly."
+            ),
+            "provenance": [{"step": "validate", "ok": False,
+                            "detail": "databases unsupported on gpss3 path"}],
+        }
+
+    try:
+        async with _GPSS_POLICY.guard():
+            async with _gpss_client(None) as client:
+                # A1: handshake (Step 1-3, reused verbatim from figure impl)
+                await client.get("https://tiponet.tipo.gov.tw/030_OUT_V1/home.do")
+                await client.get("https://tiponet.tipo.gov.tw/gpss3/")
+                rand_val = random.random()
+                gpss_url = (
+                    f"https://tiponet.tipo.gov.tw/gpss3/gpsskmc/gpssbkm?@@{rand_val}"
+                )
+                res = await client.get(gpss_url)
+                info_val = _gpss_extract_info(res.text)
+                if not info_val:
+                    return {
+                        "success": False,
+                        "error_code": "GPSS_WEB_HANDSHAKE_FAILED",
+                        "provenance": [{"step": "handshake", "ok": False}],
+                    }
+                provenance.append({"step": "handshake", "ok": True})
+                action_url = (
+                    "https://tiponet.tipo.gov.tw"
+                    f"{_gpss_extract_action(res.text)}"
+                )
+
+                # A3: single field-qualified boolean expr into _21_1_T
+                # (推演證實). NO patDB param (DD-2 SUPERSEDED by DD-3): the form
+                # has no such field; database scope is set out-of-band on the
+                # logged-in gpss4 _20_* settings page. `databases` was already
+                # rejected above for this anonymous path.
+                data = {
+                    "INFO": info_val,
+                    "@_21_1_T": "T_XX",
+                    "_21_1_T": query_applied,
+                    "@_0_9_T": "T_XX",
+                    "_0_9_T": "",
+                    "_IMG_檢索.x": "25",
+                    "_IMG_檢索.y": "25",
+                }
+                res = await client.post(action_url, data=data)
+
+                # Follow a refresh redirect if present
+                m_refresh = re.search(
+                    r'CONTENT=["\']?0;\s*URL=([^"\'>\s]+)["\']?',
+                    res.text, re.IGNORECASE,
+                )
+                if m_refresh:
+                    redirect_url = m_refresh.group(1).strip("'\"")
+                    if not redirect_url.startswith("http"):
+                        redirect_url = (
+                            "https://tiponet.tipo.gov.tw/gpss3/gpsskmc/"
+                            f"{redirect_url}"
+                        )
+                    res = await client.get(redirect_url)
+                provenance.append({"step": "post", "ok": True,
+                                   "query_applied": query_applied})
+
+                # Extract the result scratch key first — it is BOTH the
+                # too-broad discriminator (a genuine overflow yields no ptmp)
+                # AND the ttsserv_watch poll key (t7).
+                ptmp = _gpss_web_extract_ptmp(res.text)
+
+                # A4a: genuine >30萬 fail-fast (DD-4) — overflow sentinel AND
+                # no result scratch key. Page-furniture reclock/close_nodup
+                # text alone does NOT trigger this (防呆教訓).
+                if _gpss_web_is_too_broad(res.text, ptmp):
+                    return {
+                        "success": False,
+                        "error_code": "GPSS_WEB_RESULT_TOO_BROAD",
+                        "hint": "母數超過30萬:加 date_from/date_to、指定 databases 國別、或收窄布林同義詞群",
+                        "query_applied": query_applied,
+                        "provenance": provenance,
+                    }
+
+                # A4b: poll ttsserv_watch for per-db exact counts (t7)
+                totals: Dict[str, int] = {}
+                pending = False
+                if ptmp:
+                    kmtmp = ptmp.split("/", 1)[0]
+                    from urllib.parse import quote
+                    watch_url = (
+                        "https://tiponet.tipo.gov.tw/gpss3/gpsskmc/"
+                        f"ttsserv_watch?{kmtmp}/km.swp:102:1:{quote('全部')}:"
+                    )
+                    for attempt in range(poll_max):
+                        await _gpss_scrape_pace()
+                        wres = await client.get(watch_url)
+                        totals = _gpss_web_parse_totals(wres.text)
+                        # A db still counting shows a countdown, not a number
+                        if totals and "countdown" not in wres.text.lower() \
+                                and "reclock" not in wres.text.lower():
+                            break
+                    else:
+                        pending = True
+                    provenance.append({"step": "poll", "ok": not pending,
+                                       "rounds": attempt + 1})
+
+                # A5: parse result-list bibliography (reuse existing helper)
+                records: List[Dict[str, str]] = []
+                for path, doc_type, core in _gpss_iter_result_rows(res.text):
+                    if len(records) >= num:
+                        break
+                    records.append({"pubno_core": core, "doc_type": doc_type,
+                                    "harder_path": path})
+
+                grand_total = sum(totals.values()) if totals else len(records)
+                result = {
+                    "success": True,
+                    "totals": totals,
+                    "grand_total": grand_total,
+                    "records": records,
+                    "query_applied": query_applied,
+                    "databases_queried": databases or [],
+                    "provenance": provenance,
+                }
+                if pending:
+                    result["partial"] = True
+                    result["error_code"] = "GPSS_WEB_POLL_TIMEOUT"
+                    result["pending_databases"] = ["(未就緒庫仍在計數)"]
+                return result
+
+    except Exception as e:  # noqa: BLE001
+        logger.warning("_gpss_web_search_impl exception: %s", e)
+        return {
+            "success": False,
+            "error_code": "GPSS_WEB_HANDSHAKE_FAILED",
+            "hint": f"gpss3 網頁路徑例外: {e}",
+            "provenance": provenance,
+        }
+
+
+@mcp.tool()
+async def gpss_web_search(
+    expr: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    databases: Optional[List[str]] = None,
+    num: int = 30,
+) -> Dict[str, Any]:
+    """Boolean patent search via TIPO GPSS HUMAN login path — NO API quota.
+
+    Use when you need TIPO GPSS's full boolean power (field-qualified brackets,
+    NOT, proximity, truncation) WITHOUT spending GPSS REST API quota, or when
+    no GPSS_USER_CODE is configured. Pass ONE field-qualified bracketed
+    expression; date + country narrowing are built in.
+
+    Args:
+        expr: single field-qualified bracketed boolean expression, e.g.
+            "(radar or mmwave)@TI not (vehicle)@AB". Field codes go AFTER the
+            bracket via @ (fuzzy) — see gpss-search-syntax KB §8 for the code
+            table (TI/AB/CL/AX/IV/ID/IPC/CPC/…). Malformed expr is rejected
+            with ZERO network call.
+        date_from/date_to: YYYYMMDD publication-date bounds, folded into the
+            expr as an ID= clause. Give a date range to keep the母數 meaningful.
+        databases: country/db codes (TWA/USA/CNA/EPA/…) via the patDB param;
+            omit for the site default. Narrow by country to avoid >30萬母數.
+        num: max result-list bibliography rows to return (NOT the母數 cap).
+
+    Returns {success, totals:{db:count}, grand_total, records[], query_applied,
+    databases_queried, provenance[]}. On >30萬母數 returns success=false /
+    GPSS_WEB_RESULT_TOO_BROAD with a narrowing hint (never records). This tool
+    NEVER touches the gpss_api REST path.
+    """
+    return await _gpss_web_search_impl(
+        expr=expr, date_from=date_from, date_to=date_to,
+        databases=databases, num=num or 30,
+    )
+
+
+# =====================================================================
 # EPO OPS Tools — official INPADOC family / biblio / CQL search
 # =====================================================================
 
@@ -3420,6 +3756,18 @@ async def patent_bulk(
         ~2000) to land a multi-thousand-row slice in one call — GPSS books biblio
         inline per page so there is no fan-out timeout risk. Hard-capped at 5000.
       • One collect-then-absorb at the end (no fan-out timeout window).
+      • Auto query-slicing (transparent): a long landscape-recall boolean can trip
+        the TIPO condition-length wall (`Exceeded search condition length`). When
+        it does, the keyword is split deterministically — ONLY the widest positive
+        OR-group is bisected; every other positive group AND all NOT groups stay
+        byte-identical in each shard (recall-preserving:
+        (Bx∪By)∩C¬D = (Bx∩C¬D)∪(By∩C¬D), but splitting a NOT group would silently
+        under-exclude). Each shard is harvested and the hits are unioned by pubno,
+        so the CALLER sees a single merged result. The envelope carries an audit
+        field `sharding:{applied, shards:[{query_frag,total,landed}], union_total,
+        union_landed}`. If even a single OR-term + all AND/NOT groups is still too
+        long → CONDITION_LENGTH_IRREDUCIBLE (shorten synonym groups / use a
+        classification axis). GPSS-only; EPO uses date-slicing instead (below).
 
     source="epo" (EPO OPS):
       • keyword boolean (AND/OR/NOT + "quoted phrases" + parens) is translated to
@@ -4898,6 +5246,8 @@ async def gpss4_advanced_search(
     query: str,
     max_pages: int = 200,
     expand_family: bool = False,
+    databases: Optional[List[str]] = None,
+    persist_scope: bool = True,
     delivery: str = "token",
     owner_identity: str = "",
     subject_id: str = "",
@@ -4990,8 +5340,11 @@ async def gpss4_advanced_search(
     try:
         res = await harvest(
             query, max_pages=max_pages, expand_family=expand_family,
-            dump_dir=_dbg_dump,
+            dump_dir=_dbg_dump, databases=databases, persist_scope=persist_scope,
         )
+    except GPSS4DbScopeError as e:
+        return {"success": False, "error_code": "GPSS4_DBSCOPE_FAILED",
+                "error": str(e)}
     except GPSS4AdvSearchError as e:
         return {"success": False, "error_code": "GPSS4_ADV_SEARCH", "error": str(e)}
     except Exception as e:
@@ -5022,6 +5375,71 @@ async def gpss4_advanced_search(
         from patent_mcp_server.gpss4.adv_search import write_csv
         out["csv_path"] = write_csv(res, csv_path)
     return out
+
+
+# ---------------------------------------------------------------------------
+# GPSS4 per-user search-database scope setter (BR_20260716, DD-6/DD-7)
+# The web search database scope is an ACCOUNT-LEVEL per-user server-side config
+# (NOT a query param). This tool sets it ONCE, account-persistent by default, so
+# subsequent gpss4_advanced_search harvests (with databases=None) inherit it.
+# ---------------------------------------------------------------------------
+@mcp.tool(annotations=_RO)
+async def gpss4_set_search_scope(
+    databases: List[str],
+    persist: bool = True,
+) -> Dict[str, Any]:
+    """Set the GPSS4 account's search database scope (DD-3/DD-6/DD-7).
+
+    The GPSS4 web search database range is an account-level per-user server-side
+    config set on the 進階檢索設定 (_20_*) page — NOT a query parameter and NOT
+    part of the advanced-search query syntax (BR_20260716). This tool logs in
+    (GPSS4_USERNAME / GPSS4_PASSWORD from env), rewrites the database-family
+    checkboxes to EXACTLY `databases`, saves, and verifies the save took.
+
+    Use this to pin the scope ONCE (account-persistent); afterwards
+    gpss4_advanced_search with databases=None inherits it. To scope a single
+    harvest without touching the account default, pass databases=[...] to
+    gpss4_advanced_search directly instead (session-scoped there is out of band —
+    this tool's persist flag controls account vs current-login save).
+
+    databases: REST-style db codes to enable, e.g. ["CNA","CNB"] (大陸公開/公告).
+               Valid codes: TWA/TWB/TWD, JPA/JPB/JPD, CNA/CNB/CND, KRA/KRB/KRD,
+               USA/USB/USD, SEA/SEB, WO, EPA/EPB/EPD, OA/OB. Unknown -> error.
+               NOTE: this SETS the scope to exactly these — codes NOT listed are
+               UNCHECKED. Include every database you want searchable.
+    persist:   DEFAULT True -> 儲存個人化設定，永久有效 (account-persistent, survives
+               across sessions). False -> 本次套用 (current login only).
+
+    Fail-fast (DD-4, 使用者天條): login / settings-page / unknown-code /
+    save-not-confirmed all return an error; NEVER silently keeps the old scope.
+
+    Returns {success, databases, fields, persist} on success, or
+    {success:false, error_code, error} on failure.
+    """
+    from patent_mcp_server.gpss4.adv_search import (
+        set_search_databases, _login_session, GPSS4DbScopeError,
+        GPSS4AdvSearchError,
+    )
+    if not databases:
+        return {"success": False, "error_code": "GPSS4_DBSCOPE_FAILED",
+                "error": "databases must be a non-empty list"}
+    try:
+        async with _GPSS_POLICY.guard():
+            s = await _login_session()
+            try:
+                res = await set_search_databases(s, databases, persist=persist)
+            finally:
+                await s.close()
+    except GPSS4DbScopeError as e:
+        return {"success": False, "error_code": "GPSS4_DBSCOPE_FAILED",
+                "error": str(e)}
+    except GPSS4AdvSearchError as e:
+        return {"success": False, "error_code": "GPSS_WEB_LOGIN_FAILED",
+                "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error_code": "GPSS4_DBSCOPE_RUNTIME",
+                "error": f"{type(e).__name__}: {e}"}
+    return {"success": True, **res}
 
 
 def main():
