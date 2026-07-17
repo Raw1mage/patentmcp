@@ -12,7 +12,6 @@ Auth: a single userCode (API 驗證碼) issued by TIPO after approval.
 """
 
 import json
-import json
 import logging
 import os
 import re
@@ -37,6 +36,15 @@ GPSS_API_URL = "https://tiponet.tipo.gov.tw/gpss1/gpsskmc/gpss_api"
 # introducer, then re-parse. Verified: recovers a 1.3MB body (7 stray '\' → 200
 # records) that both strict modes rejected.
 _ILLEGAL_JSON_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu])')
+
+# BR_20260718: an unrecoverable parse in the RESIDENT process is almost always a
+# TRUNCATED body from a Cloudflare-killed keep-alive connection, not a formatting
+# malformation (those are handled by _parse_gpss_json's 3 layers). Disabling
+# keep-alive (limits below) reduced but did not eliminate it, so on parse
+# failure we retry the SAME url on a fresh ONE-SHOT client (short-lived clients
+# never reproduce the truncation) before failing loud with a TRANSPORT-semantics
+# error code that downstream must never read as zero hits.
+_TRUNCATION_RETRIES = 2
 
 
 def _parse_gpss_json(text: str) -> Optional[Dict[str, Any]]:
@@ -204,6 +212,17 @@ class GPSSClient:
     def configured(self) -> bool:
         return bool(self.user_codes)
 
+    async def _fresh_get(self, url: str) -> httpx.Response:
+        """GET `url` on a brand-new one-shot client (BR_20260718 truncation
+        retry). A short-lived client never reproduces the Cloudflare half-dead
+        keep-alive truncation; factored out so tests can fake it."""
+        async with httpx.AsyncClient(
+            timeout=self._client.timeout, follow_redirects=True,
+        ) as one:
+            resp = await one.get(url)
+            resp.raise_for_status()
+            return resp
+
     @staticmethod
     def _build_query(
         conditions: List[GPSSCondition],
@@ -314,12 +333,42 @@ class GPSSClient:
                 return {"success": True, "format": "xml", "raw": text}
 
             data = _parse_gpss_json(text)
+            # BR_20260718: parse failure here = suspected TRUNCATED body (see
+            # _TRUNCATION_RETRIES note). Retry on fresh one-shot connections
+            # before failing loud with transport semantics.
+            if data is None:
+                for attempt in range(1, _TRUNCATION_RETRIES + 1):
+                    logger.warning(
+                        "GPSS body unparseable (len=%d, skip=%s) — suspected "
+                        "truncated keep-alive body; fresh-connection retry %d/%d",
+                        len(text), skip, attempt, _TRUNCATION_RETRIES,
+                    )
+                    try:
+                        r2 = await self._fresh_get(url)
+                    except Exception as e:  # noqa: BLE001
+                        logger.error(f"GPSS truncation-retry request failed: {e}")
+                        continue
+                    text = r2.text
+                    data = _parse_gpss_json(text)
+                    if data is not None:
+                        break
             if data is None:
                 logger.error(
-                    "GPSS JSON unrecoverable after control-char + illegal-escape "
-                    "sanitize (len=%d, skip=%s)", len(text), skip,
+                    "GPSS JSON unrecoverable after sanitize + %d fresh-connection "
+                    "retries (len=%d, skip=%s)", _TRUNCATION_RETRIES, len(text), skip,
                 )
-                return {"success": False, "error": "Expected JSON but parse failed", "raw": text[:500]}
+                return {
+                    "success": False,
+                    "error_code": "GPSS_TRUNCATED_BODY",
+                    "error": (
+                        "GPSS returned an unparseable (likely truncated) JSON body "
+                        f"after {_TRUNCATION_RETRIES} fresh-connection retries. "
+                        "TRANSPORT failure, NOT an empty result — never interpret "
+                        "as zero hits / missing recall capability."
+                    ),
+                    "transport": "truncation",
+                    "raw": text[:500],
+                }
 
             if not isinstance(data, dict):
                 return {"success": False, "error": f"Expected JSON object but got {type(data).__name__}", "raw": text[:500]}

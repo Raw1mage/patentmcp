@@ -91,6 +91,19 @@ class GPSS4AdvSearchError(RuntimeError):
     pass
 
 
+class GPSS4AdvZeroHits(Exception):
+    """BR_20260718: the engine reported the search READY with 0 hits in every
+    scoped database. A zero-hit search never renders a result list at all —
+    the query POST returns the search-form watcher shell (chkURL contract,
+    len≈30k, 前次檢索還沒好), which the old flow mis-read as a 簡詳目並列
+    view-switch failure. Carried as an exception only to unwind the harvest
+    flow; harvest() converts it into a structured empty pool."""
+
+    def __init__(self, counts: Dict[str, int]):
+        super().__init__(f"zero hits (per-DB counts={counts})")
+        self.counts = counts
+
+
 @dataclass
 class AdvPatent:
     """One row in the 進階檢索 簡目 result list."""
@@ -529,6 +542,15 @@ _INFO_RE = re.compile(r"""name=["']?INFO["']?\s+value=["']?([0-9A-Fa-f]+)""", re
 _JOB_URL_RE = re.compile(r'AURL\s*=\s*"(/gpss4/gpsskmc/ttsserv_watch\?)"\s*\+\s*kmtmp')
 _PTMP_RE = re.compile(r'ptmp\s*=\s*"([^"]+)"')
 _NEEDCHECK_RE = re.compile(r'NeedCheck\s*=\s*1')
+# BR_20260718: SEARCH-FORM watcher shell (前次檢索還沒好). Distinct from the
+# RESULT-page AURL job shell (_JOB_URL_RE): the form page's JS polls
+#   chkURL = "/gpss4/gpsskmc/ttsserv_watch?" + kmtmp + "/km.swp:<slot>:" +
+#            curtslot(1) + ":" + encodeURIComponent("全部") + ":"
+# and the DB_OK watch body carries per-DB hit counts `全部(N)` — for a
+# zero-hit search this shell is the ONLY thing the server ever returns.
+_CHKURL_RE = re.compile(
+    r'chkURL\s*=\s*"(/gpss4/gpsskmc/ttsserv_watch\?)"\s*\+\s*kmtmp\s*\+\s*"(/km\.swp:\d+:)"')
+_WATCH_COUNT_RE = re.compile(r'>([^<>()]+)\((\d[\d,]*)\)</font>')
 
 
 async def _login_session() -> "GPSS4Session":
@@ -590,6 +612,21 @@ async def _submit_query(s: "GPSS4Session", adv_tab_url: str, query: str,
         k in result_html for k in _RESULT_MARKERS
     ):
         result_html = await _poll_job(s, result_html, str(pr.url))
+    # BR_20260718: still no result markers -> this may be the SEARCH-FORM
+    # watcher shell (chkURL contract), which a zero-hit search never leaves.
+    # Poll the watch: DB_OK + 全部(0) = genuine empty result (raise the
+    # zero-hit unwinder); DB_OK + hits>0 with no list = typed fail-loud.
+    if not any(k in result_html for k in _RESULT_MARKERS):
+        counts = await _search_ready_watch(s, result_html, str(pr.url))
+        if counts is not None:
+            total_all = counts.get("全部", sum(counts.values()))
+            if total_all == 0:
+                raise GPSS4AdvZeroHits(counts)
+            raise GPSS4AdvSearchError(
+                f"search completed with {total_all} hits but the result list "
+                f"did not render (search-ready shell; per-DB counts={counts}) "
+                "— retry the query"
+            )
     _dump(dump_dir, "post_resp.html", result_html)
     # the result form's own action/INFO (for 家族收合 / JPAGE POSTs)
     rfm = _ADV_FORM_ACTION_RE.search(result_html)
@@ -597,6 +634,31 @@ async def _submit_query(s: "GPSS4Session", adv_tab_url: str, query: str,
     return (result_html,
             BASE + rfm.group(1) if rfm else action,
             rim.group(1) if rim else info)
+
+
+async def _search_ready_watch(s: "GPSS4Session", shell_html: str, referer: str,
+                              max_polls: int = 40) -> Optional[Dict[str, int]]:
+    """BR_20260718: poll the SEARCH-FORM shell's chkURL watch until DB_OK and
+    return the per-DB hit counts {name: N}. Returns None when the shell does
+    not carry the chkURL contract (different failure shape — let the caller's
+    existing fail-fast paths handle it). Fails fast if the watch never
+    completes."""
+    cm = _CHKURL_RE.search(shell_html)
+    pm = _PTMP_RE.search(shell_html)
+    if not cm or not pm:
+        return None
+    kmtmp = pm.group(1).split("/")[0]
+    watch = f"{BASE}{cm.group(1)}{kmtmp}{cm.group(2)}1:\u5168\u90e8:"
+    for _ in range(max_polls):
+        r = await s.client.get(watch, headers={"Referer": referer})
+        if "DB_OK" in r.text:
+            return {
+                name.strip(): int(n.replace(",", ""))
+                for name, n in _WATCH_COUNT_RE.findall(r.text)
+            }
+        await asyncio.sleep(1.5)
+    raise GPSS4AdvSearchError(
+        f"search-ready watch never reached DB_OK after {max_polls} polls")
 
 
 async def _poll_job(s: "GPSS4Session", shell_html: str, referer: str,
@@ -791,8 +853,27 @@ async def harvest(query: str, max_pages: int = 200, expand_family: bool = True,
             await set_search_databases(
                 s, databases, persist=persist_scope, dump_dir=dump_dir)
         adv_tab_url = _extract_adv_tab_url(member)
-        result_html, form_action, info = await _submit_query(
-            s, adv_tab_url, query, dump_dir)
+        try:
+            result_html, form_action, info = await _submit_query(
+                s, adv_tab_url, query, dump_dir)
+        except GPSS4AdvZeroHits as z:
+            # BR_20260718: genuine zero-hit search (watch DB_OK, 全部(0)).
+            # The server never renders a result list for these, so there is
+            # nothing to view-switch or paginate — return a structured empty
+            # pool instead of the old misleading "view switch failed" error.
+            logger.info("GPSS4 adv search zero hits: %s", z.counts)
+            return {
+                "query": query,
+                "total": 0,
+                "hit_count": 0,
+                "pages_fetched": 0,
+                "total_pages": 0,
+                "complete": True,
+                "truncated": False,
+                "zero_hits": True,
+                "db_counts": z.counts,
+                "patents": [],
+            }
         referer = adv_tab_url
         if expand_family and "\u5bb6\u65cf\u6536\u5408" in result_html:
             collapsed = await _collapse_family(
