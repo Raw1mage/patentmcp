@@ -1,0 +1,28 @@
+{
+  "schemas": [
+    {
+      "name": "QuerySpec.pub_number（型別放寬）",
+      "kind": "config",
+      "fields": [
+        { "name": "pub_number", "type": "Optional[Union[str, List[str]]]", "notes": "單值維持原行為；清單內部組成 'no or no or ...' 餵 GPSSCondition(PN)。向後相容。" }
+      ]
+    },
+    {
+      "name": "provenance（number 軸新增欄位）",
+      "kind": "json",
+      "fields": [
+        { "name": "reason", "type": "string", "notes": "zero_hits | likely_number_syntax_error（疑似號碼語法時）" },
+        { "name": "number_axis_cleaned", "type": "Optional[dict]", "notes": "清洗發生時記 {original, cleaned, stripped:['@PN','outer_parens']}" },
+        { "name": "hint", "type": "Optional[str]", "notes": "likely_number_syntax_error 時的自救線索" }
+      ]
+    },
+    {
+      "name": "error envelope（新增 code）",
+      "kind": "json",
+      "fields": [
+        { "name": "error_code", "type": "string", "notes": "新增 NUMBER_AXIS_SYNTAX_UNSUPPORTED：清洗後仍非合法號碼列" },
+        { "name": "hint", "type": "string", "notes": "「keyword 軸不吃 @PN 尾綴，請用 pub_number 參數或純 no or no」" }
+      ]
+    }
+  ]
+}

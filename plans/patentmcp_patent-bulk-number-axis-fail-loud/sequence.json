@@ -1,0 +1,35 @@
+[
+  {
+    "title": "patent_bulk pub_number 清單批量補書目",
+    "participants": ["Caller", "patent_bulk", "normalize_query", "_run_gpss", "GPSS REST"],
+    "messages": [
+      { "from": "Caller", "to": "patent_bulk", "label": "pub_number=[CN117338286, CN117338290]" },
+      { "from": "patent_bulk", "to": "normalize_query", "label": "spec(pub_number=list)" },
+      { "from": "normalize_query", "to": "_run_gpss", "label": "QuerySpec(pub_number 清單)" },
+      { "from": "_run_gpss", "to": "GPSS REST", "label": "GPSSCondition(PN, 'CN117338286 or CN117338290')" },
+      { "from": "GPSS REST", "to": "_run_gpss", "label": "全書目 records" },
+      { "from": "patent_bulk", "to": "Caller", "label": "success + records + patentdb_absorb" }
+    ]
+  },
+  {
+    "title": "@PN 尾綴偵測 → 清洗 → 命中",
+    "participants": ["Caller", "patent_bulk", "normalize_query", "_run_gpss"],
+    "messages": [
+      { "from": "Caller", "to": "patent_bulk", "label": "keyword='(CN117338286 or CN117338290)@PN', keyword_field=PN" },
+      { "from": "patent_bulk", "to": "normalize_query", "label": "spec(keyword 含號碼軸語法)" },
+      { "from": "normalize_query", "to": "normalize_query", "label": "偵測 @PN 尾綴+外括號 → 清洗 + number_axis_cleaned" },
+      { "from": "normalize_query", "to": "_run_gpss", "label": "清洗後 QuerySpec" },
+      { "from": "_run_gpss", "to": "Caller", "label": "success + records + provenance.number_axis_cleaned" }
+    ]
+  },
+  {
+    "title": "zero_hits 疑似號碼語法分級",
+    "participants": ["Caller", "_run_gpss", "GPSS REST"],
+    "messages": [
+      { "from": "Caller", "to": "_run_gpss", "label": "number 軸查詢" },
+      { "from": "_run_gpss", "to": "GPSS REST", "label": "GPSSCondition(PN, ...)" },
+      { "from": "GPSS REST", "to": "_run_gpss", "label": "zero hits" },
+      { "from": "_run_gpss", "to": "Caller", "label": "provenance.reason=likely_number_syntax_error + hint" }
+    ]
+  }
+]

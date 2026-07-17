@@ -85,7 +85,11 @@ class QuerySpec:
     keyword_field: str = "TI/AB"
     applicant: Optional[str] = None
     inventor_country: Optional[str] = None
-    pub_number: Optional[str] = None
+    pub_number: Optional[Union[str, List[str]]] = None
+    # Set by normalize_query when it strips number-axis syntax (@PN suffix /
+    # outer parens) from a keyword, so _run_gpss can grade a later zero_hits as
+    # likely_number_syntax_error instead of a blind zero (BR_20260718).
+    number_axis_cleaned: Optional[Dict[str, Any]] = None
     date_from: Optional[str] = None
     date_to: Optional[str] = None
     databases: Optional[List[str]] = None
@@ -97,6 +101,68 @@ class QuerySpec:
         return {a for a in _HARD_AXES if getattr(self, a)}
 
 
+# Number-axis syntax that GPSS's *advanced-search web* form accepts but the
+# GPSS *keyword* engine does NOT: a trailing field tag (@PN/@AN/@PD) and/or an
+# outer paren wrap. Fed as free text it silently misses -> zero_hits with
+# success:true, which reads as "API can't do number query" (BR_20260718). We
+# detect + clean these at the single entry so the query actually runs, and the
+# caller is told (provenance.number_axis_cleaned) rather than silently misled.
+_NUMBER_AXIS_TAG_RE = re.compile(r"@(PN|AN|PD)\s*$", re.I)
+_NUMBER_LIST_RE = re.compile(r"^[\w\-/]+(\s+or\s+[\w\-/]+)*$", re.I)
+
+
+def _clean_number_axis(keyword: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Strip a trailing @PN/@AN/@PD tag and a single outer paren wrap from a
+    number-axis keyword. Returns (cleaned, audit-or-None). audit is None when
+    nothing looked like number-axis syntax (so a normal full-text keyword is
+    never touched)."""
+    original = keyword
+    stripped: List[str] = []
+    tag_m = _NUMBER_AXIS_TAG_RE.search(keyword)
+    if tag_m:
+        keyword = _NUMBER_AXIS_TAG_RE.sub("", keyword).strip()
+        stripped.append(tag_m.group(0).strip())
+    # A single fully-enclosing outer paren wrap: "(a or b)" -> "a or b".
+    if keyword.startswith("(") and keyword.endswith(")"):
+        inner = keyword[1:-1]
+        # only unwrap when the parens are the OUTERMOST pair (balanced, no early close)
+        depth = 0
+        outermost = True
+        for i, ch in enumerate(inner):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth < 0:
+                    outermost = False
+                    break
+        if outermost and depth == 0:
+            keyword = inner.strip()
+            stripped.append("outer_parens")
+    if not stripped:
+        return original, None
+    return keyword, {"original": original, "cleaned": keyword, "stripped": stripped}
+
+
+def _looks_like_number_axis(keyword: Optional[str]) -> bool:
+    """True when a keyword resembles a number-list / number-axis query (used to
+    grade a zero_hits as likely_number_syntax_error)."""
+    if not keyword:
+        return False
+    if _NUMBER_AXIS_TAG_RE.search(keyword):
+        return True
+    core = keyword.strip()
+    if core.startswith("(") and core.endswith(")"):
+        core = core[1:-1].strip()
+    # a token that carries digits joined only by `or` looks like a number list
+    return bool(_NUMBER_LIST_RE.match(core)) and any(c.isdigit() for c in core)
+
+
+class NumberAxisSyntaxError(ValueError):
+    """keyword carried number-axis syntax that could not be cleaned into a
+    legal number list (BR_20260718 fail-loud, DD-2)."""
+
+
 def normalize_query(**kwargs: Any) -> QuerySpec:
     """Strip strings, clamp pagination, default keyword_field."""
     clean: Dict[str, Any] = {}
@@ -106,6 +172,24 @@ def normalize_query(**kwargs: Any) -> QuerySpec:
         clean[k] = v
     spec = QuerySpec(**clean)
     spec.keyword_field = spec.keyword_field or "TI/AB"
+    # Number-axis syntax detect + clean (BR_20260718 DD-2/DD-4): when the
+    # keyword targets the PN field (or carries an explicit @PN/@AN/@PD tag),
+    # strip the web-form-only syntax so the GPSS keyword engine can match it.
+    if spec.keyword and (
+        _NUMBER_AXIS_TAG_RE.search(spec.keyword)
+        or (spec.keyword_field or "").upper() == "PN"
+    ):
+        cleaned, audit = _clean_number_axis(spec.keyword)
+        if audit is not None:
+            # A tag/paren was present. If cleaning left nothing usable, fail loud
+            # instead of sending an empty/garbage query that silently zero-hits.
+            if not cleaned or not _NUMBER_LIST_RE.match(cleaned):
+                raise NumberAxisSyntaxError(
+                    "keyword 軸不吃 @PN 尾綴 / 外括號號碼語法,清洗後仍非合法號碼列;"
+                    "請改用 pub_number 參數(單值或清單)或純 'no or no' keyword"
+                )
+            spec.keyword = cleaned
+            spec.number_axis_cleaned = audit
     spec.num = max(1, int(spec.num or 30))
     spec.skip = max(0, int(spec.skip or 0))
     spec.allow_scraping = bool(spec.allow_scraping)
@@ -181,9 +265,26 @@ async def _run_gpss(spec: QuerySpec, gpss_client: Any) -> Tuple[List[Dict[str, A
     if spec.applicant:
         conditions.append(GPSSCondition("AX", spec.applicant))
     if spec.pub_number:
-        conditions.append(GPSSCondition("PN", spec.pub_number))
+        # single value keeps prior behaviour; a list is joined into GPSS's
+        # `no or no or ...` PN form (BR_20260718 DD-1, back-compat).
+        pn = spec.pub_number
+        if isinstance(pn, (list, tuple)):
+            pn = " or ".join(str(x).strip() for x in pn if str(x).strip())
+        if pn:
+            conditions.append(GPSSCondition("PN", pn))
     if spec.date_from or spec.date_to:
         conditions.append(GPSSCondition("ID", f"{spec.date_from or ''}:{spec.date_to or ''}"))
+
+    # Grade a coming zero_hits: a PN-axis query, a cleaned number-axis keyword,
+    # or a keyword that still looks like number syntax → likely_number_syntax_error
+    # rather than a blind zero (BR_20260718 DD-3).
+    _number_axis_query = bool(
+        spec.pub_number
+        or spec.number_axis_cleaned
+        or (spec.keyword_field or "").upper() == "PN"
+        or _looks_like_number_axis(spec.keyword)
+    )
+    _zero_note = "likely_number_syntax_error" if _number_axis_query else None
 
     target = spec.num
     chunk = 50
@@ -204,7 +305,7 @@ async def _run_gpss(spec: QuerySpec, gpss_client: Any) -> Tuple[List[Dict[str, A
                 break
             # status=success + message == "no record found" boilerplate → zero hits
             if res.get("status") == "success":
-                return [], _to_int(res.get("total")) or 0, None
+                return [], _to_int(res.get("total")) or 0, _zero_note
             raise BackendError(str(res.get("error") or res.get("message") or "GPSS search failed"))
         page = _st.gpss_to_records(res)
         total = _to_int(res.get("total"))
@@ -215,7 +316,9 @@ async def _run_gpss(spec: QuerySpec, gpss_client: Any) -> Tuple[List[Dict[str, A
             break
         skip += len(page)
         await asyncio.sleep(1.0)
-    return records[:target], total, None
+    # empty result with no explicit zero-branch (page was empty first iter) also
+    # carries the number-axis grade so the miss provenance is actionable.
+    return records[:target], total, (None if records else _zero_note)
 
 
 # ── classification-axis bulk export (plans/patentmcp_classification-bulk-export) ──

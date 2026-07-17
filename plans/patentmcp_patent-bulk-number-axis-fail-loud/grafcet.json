@@ -1,0 +1,98 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A1",
+    "StepType": "initial",
+    "StepAction": "接收 patent_bulk/patent_search 呼叫，進入 normalize_query",
+    "LinkInputType": [],
+    "LinkInputNumber": [],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["工具被呼叫"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "偵測 keyword 是否含號碼軸語法（@PN/@AN 尾綴或整包外括號）",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [2, 3],
+    "LinkOutputType": "or",
+    "Condition": ["含號碼軸語法", "不含"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "清洗：strip @PN 尾綴 + 拆外括號，記 number_axis_cleaned；驗證是否為合法號碼列",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [3, 6],
+    "LinkOutputType": "or",
+    "Condition": ["清洗後為合法號碼列", "清洗後仍非法"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "組裝 GPSSCondition：pub_number 單值/清單 → PN、keyword → 欄位",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [1, 2],
+    "LinkOutputNumber": [4],
+    "LinkOutputType": "track",
+    "Condition": ["條件就緒"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "_run_gpss 執行檢索",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [3],
+    "LinkOutputNumber": [5, 7],
+    "LinkOutputType": "or",
+    "Condition": ["有命中", "zero_hits"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 5,
+    "ModuleRef": "A3",
+    "StepType": "final",
+    "StepAction": "回傳 success + records（patentdb 自動落庫）",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [4],
+    "LinkOutputNumber": [],
+    "LinkOutputType": "track",
+    "Condition": ["有命中"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 6,
+    "ModuleRef": "A2",
+    "StepType": "final",
+    "StepAction": "回傳 typed NUMBER_AXIS_SYNTAX_UNSUPPORTED（fail-loud，不靜默）",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [2],
+    "LinkOutputNumber": [],
+    "LinkOutputType": "track",
+    "Condition": ["清洗後仍非法號碼列"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 7,
+    "ModuleRef": "A3",
+    "StepType": "final",
+    "StepAction": "zero_hits 分級：疑似號碼語法標 likely_number_syntax_error + hint，否則 zero_hits",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [4],
+    "LinkOutputNumber": [],
+    "LinkOutputType": "track",
+    "Condition": ["zero_hits"],
+    "SubGrafcet": []
+  }
+]

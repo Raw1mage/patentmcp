@@ -3585,7 +3585,7 @@ async def patent_search(
     keyword_field: str = "TI/AB",
     applicant: Optional[str] = None,
     inventor_country: Optional[str] = None,
-    pub_number: Optional[str] = None,
+    pub_number: Optional[Union[str, List[str]]] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     databases: Optional[List[str]] = None,
@@ -3614,8 +3614,12 @@ async def patent_search(
             (TI, AB, CL, "TI/AB", "TI/AB/CL").
         applicant: applicant/assignee name.
         inventor_country: inventor country code (GPSS only).
-        pub_number: publication number for a direct lookup (works across
-            jurisdictions via GPSS PN).
+        pub_number: publication number(s) for a direct lookup (works across
+            jurisdictions via GPSS PN). Pass a single string, OR a LIST of
+            numbers for a batch lookup — the list is joined into GPSS's
+            `no or no or ...` PN form for you. Do NOT hand-craft `@PN` suffix /
+            outer-paren web-advanced-search syntax in `keyword`; that silently
+            zero-hits — use this parameter instead (BR_20260718).
         date_from/date_to: publication date bounds, YYYYMMDD.
         databases: GPSS patDB list (USA,USB,CNA,CNB,TWA,TWB…); maps to
             country filters on other sources.
@@ -3728,6 +3732,7 @@ async def patent_bulk(
     keyword_field: str = "TI/AB",
     applicant: Optional[str] = None,
     inventor_country: Optional[str] = None,
+    pub_number: Optional[Union[str, List[str]]] = None,
     databases: Optional[List[str]] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -3831,6 +3836,7 @@ async def patent_bulk(
     spec = _sd.normalize_query(
         ipc=ipc, cpc=cpc, uspc=uspc, keyword=keyword, keyword_field=keyword_field,
         applicant=applicant, inventor_country=inventor_country,
+        pub_number=pub_number,
         databases=databases, date_from=date_from, date_to=date_to,
         num=num, skip=skip,
     )

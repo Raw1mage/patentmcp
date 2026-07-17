@@ -1,0 +1,38 @@
+[
+  {
+    "id": "TV-1",
+    "description": "pub_number 清單組成 PN 條件",
+    "input": { "pub_number": ["CN117338286", "CN117338290"] },
+    "expected": { "gpss_condition": { "field": "PN", "value": "CN117338286 or CN117338290" } }
+  },
+  {
+    "id": "TV-2",
+    "description": "pub_number 單值向後相容",
+    "input": { "pub_number": "CN117338286" },
+    "expected": { "gpss_condition": { "field": "PN", "value": "CN117338286" } }
+  },
+  {
+    "id": "TV-3",
+    "description": "@PN 尾綴 + 外括號清洗",
+    "input": { "keyword": "(CN117338286 or CN117338290)@PN", "keyword_field": "PN" },
+    "expected": { "cleaned_keyword": "CN117338286 or CN117338290", "number_axis_cleaned": true }
+  },
+  {
+    "id": "TV-4",
+    "description": "清洗後仍非法 → typed 錯",
+    "input": { "keyword": "()@PN", "keyword_field": "PN" },
+    "expected": { "error_code": "NUMBER_AXIS_SYNTAX_UNSUPPORTED" }
+  },
+  {
+    "id": "TV-5",
+    "description": "zero_hits 疑似號碼語法分級",
+    "input": { "keyword": "ZZ999999@PN", "keyword_field": "PN", "gpss_result": "zero" },
+    "expected": { "provenance_reason": "likely_number_syntax_error", "has_hint": true }
+  },
+  {
+    "id": "TV-6",
+    "description": "一般全文 keyword 不被誤判清洗",
+    "input": { "keyword": "wireless sensor network", "keyword_field": "TI/AB" },
+    "expected": { "cleaned": false, "number_axis_cleaned": false }
+  }
+]

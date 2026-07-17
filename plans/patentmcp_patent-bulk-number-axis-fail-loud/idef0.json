@@ -1,0 +1,36 @@
+{
+  "diagram_title": "patent_bulk 號碼軸顯化 + fail-loud",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "正規化查詢並偵測號碼軸語法",
+      "description": "normalize_query 清整參數；偵測 keyword 含 @PN/@AN 尾綴或整包外括號的號碼軸語法，清洗或標記",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "組裝 GPSS 檢索條件",
+      "description": "pub_number 單值/清單 → GPSSCondition(PN)；keyword → 對應欄位；清洗後非法號碼列 → typed 錯",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "執行檢索並分級結果",
+      "description": "_run_gpss 執行；命中回 records；zero_hits 時若疑似號碼語法標 likely_number_syntax_error + hint",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    { "id": "AR1", "source": "EXTERNAL", "target": "A1:input", "type": "input", "label": "patent_bulk/patent_search 呼叫 (keyword, pub_number, keyword_field)" },
+    { "id": "AR2", "source": "EXTERNAL", "target": "A1:control", "type": "control", "label": "號碼軸語法規則 (@PN/@AN/@PD 尾綴, 外括號)" },
+    { "id": "AR3", "source": "EXTERNAL", "target": "A1:mechanism", "type": "mechanism", "label": "normalize_query 號碼軸偵測/清洗" },
+    { "id": "AR4", "source": "A1:output", "target": "A2:input", "type": "output", "label": "清整後 QuerySpec (含 number_axis_cleaned 旗標)" },
+    { "id": "AR5", "source": "EXTERNAL", "target": "A2:control", "type": "control", "label": "GPSS 條件語義 (PN/欄位/合法號碼列)" },
+    { "id": "AR6", "source": "A2:mechanism", "target": "A2:mechanism", "type": "mechanism", "label": "GPSSCondition 組裝" },
+    { "id": "AR7", "source": "A2:output", "target": "A3:input", "type": "output", "label": "GPSS conditions 或 NUMBER_AXIS_SYNTAX_UNSUPPORTED" },
+    { "id": "AR8", "source": "EXTERNAL", "target": "A3:control", "type": "control", "label": "zero_hits 分級規則 (疑似號碼語法)" },
+    { "id": "AR9", "source": "EXTERNAL", "target": "A3:mechanism", "type": "mechanism", "label": "_run_gpss + GPSS REST" },
+    { "id": "AR10", "source": "A3:output", "target": "EXTERNAL", "type": "output", "label": "records 或分級 provenance (likely_number_syntax_error / zero_hits)" }
+  ]
+}
