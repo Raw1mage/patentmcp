@@ -1,0 +1,86 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A1",
+    "StepType": "initial",
+    "StepAction": "接收 login() 呼叫，游標指向帳號池首組帳號",
+    "LinkInputType": [],
+    "LinkInputNumber": [],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["login() 被呼叫"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "檢查是否仍有未失敗帳號",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [2, 5],
+    "LinkOutputType": "or",
+    "Condition": ["存在未失敗帳號", "全部帳號已失敗"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "以當前帳號跑完整登入序列（含 max_captcha_retry 次 CAPTCHA 重試）",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [3],
+    "LinkOutputType": "track",
+    "Condition": ["存在未失敗帳號"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "判讀該帳號登入是否成功",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [2],
+    "LinkOutputNumber": [4, 6],
+    "LinkOutputType": "or",
+    "Condition": ["登入失敗（CAPTCHA耗盡/帳密被拒/HTTP錯誤）", "登入成功"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "標記當前帳號本 process 失敗，游標移下一帳號",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [3],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["登入失敗"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 5,
+    "ModuleRef": "A1",
+    "StepType": "final",
+    "StepAction": "raise GPSS4LoginError（tried N accounts，fail-fast 無 fallback）",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [],
+    "LinkOutputType": "track",
+    "Condition": ["全部帳號已失敗"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 6,
+    "ModuleRef": "A3",
+    "StepType": "final",
+    "StepAction": "記住當前有效帳號，回傳已認證 session",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [3],
+    "LinkOutputNumber": [],
+    "LinkOutputType": "track",
+    "Condition": ["登入成功"],
+    "SubGrafcet": []
+  }
+]

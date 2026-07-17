@@ -107,6 +107,10 @@ services:
       # member-area account credentials the httpx login chain needs.
       GPSS4_USERNAME: "${GPSS4_USERNAME:-}"
       GPSS4_PASSWORD: "${GPSS4_PASSWORD:-}"
+      # GPSS4 login account pool #2+ (paired; rotates on login failure).
+      # Consecutive numbered suffixes; add _3/_4 to extend the pool.
+      GPSS4_USERNAME_2: "${GPSS4_USERNAME_2:-}"
+      GPSS4_PASSWORD_2: "${GPSS4_PASSWORD_2:-}"
     restart: unless-stopped
     healthcheck:
       # Readiness = the inward UDS socket exists (docxmcp reference; standard

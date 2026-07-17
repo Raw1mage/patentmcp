@@ -1,0 +1,23 @@
+{
+  "schemas": [
+    {
+      "name": "GPSS4 帳號池 env",
+      "kind": "config",
+      "fields": [
+        { "name": "GPSS4_USERNAME", "type": "string", "notes": "帳號1 使用者名（email）。無後綴，向後相容。" },
+        { "name": "GPSS4_PASSWORD", "type": "string", "notes": "帳號1 密碼。" },
+        { "name": "GPSS4_USERNAME_2", "type": "string", "notes": "帳號2 使用者名。連續掃描 _2/_3… 至缺號止。" },
+        { "name": "GPSS4_PASSWORD_2", "type": "string", "notes": "帳號2 密碼。與 _USERNAME_2 成對，兩者皆非空才納入池。" }
+      ]
+    },
+    {
+      "name": "GPSS4Session rotation state",
+      "kind": "config",
+      "fields": [
+        { "name": "accounts", "type": "List[Tuple[str,str]]", "notes": "解析後的 (username,password) 帳號池（保序）" },
+        { "name": "_cursor", "type": "int", "notes": "當前帳號索引" },
+        { "name": "_failed_accounts", "type": "set[int]", "notes": "本次 process 已登入失敗的帳號索引集合" }
+      ]
+    }
+  ]
+}

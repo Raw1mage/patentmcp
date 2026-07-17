@@ -1,0 +1,54 @@
+[
+  {
+    "id": "TV-1",
+    "description": "編號式帳號池解析：帳號1 無後綴 + _2，連續掃描至缺號止",
+    "input": {
+      "GPSS4_USERNAME": "a@x.com", "GPSS4_PASSWORD": "p1",
+      "GPSS4_USERNAME_2": "b@y.com", "GPSS4_PASSWORD_2": "p2"
+    },
+    "expected": { "accounts": [["a@x.com", "p1"], ["b@y.com", "p2"]] }
+  },
+  {
+    "id": "TV-2",
+    "description": "退讀單帳號相容（未設 _2）",
+    "input": { "GPSS4_USERNAME": "a@x.com", "GPSS4_PASSWORD": "p1" },
+    "expected": { "accounts": [["a@x.com", "p1"]] }
+  },
+  {
+    "id": "TV-3",
+    "description": "成對不完整不納入（_2 只有 username 缺 password）",
+    "input": {
+      "GPSS4_USERNAME": "a@x.com", "GPSS4_PASSWORD": "p1",
+      "GPSS4_USERNAME_2": "b@y.com"
+    },
+    "expected": { "accounts": [["a@x.com", "p1"]] }
+  },
+  {
+    "id": "TV-4",
+    "description": "主帳號登入失敗 → 換第二帳號成功",
+    "input": {
+      "accounts": [["a", "p1"], ["b", "p2"]],
+      "login_results": { "a": "fail", "b": "success" }
+    },
+    "expected": { "success": true, "used_account": "b", "failed": ["a"] }
+  },
+  {
+    "id": "TV-5",
+    "description": "全部登入失敗 → GPSS4LoginError（tried 2）",
+    "input": {
+      "accounts": [["a", "p1"], ["b", "p2"]],
+      "login_results": { "a": "fail", "b": "fail" }
+    },
+    "expected": { "raises": "GPSS4LoginError", "tried": 2 }
+  },
+  {
+    "id": "TV-6",
+    "description": "session 過期 re-login 用當前有效帳號不誤換（DD-6）",
+    "input": {
+      "accounts": [["a", "p1"], ["b", "p2"]],
+      "logged_in_account": "a",
+      "event": "session_expired_relogin"
+    },
+    "expected": { "relogin_account": "a", "rotated": false }
+  }
+]

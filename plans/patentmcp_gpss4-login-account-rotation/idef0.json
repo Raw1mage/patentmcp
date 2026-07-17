@@ -1,0 +1,36 @@
+{
+  "diagram_title": "GPSS4 多帳號登入輪替",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "選取當前有效登入帳號",
+      "description": "從登入帳號池依游標取一組未失敗的 (username,password)；全部失敗則發出失敗訊號",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "執行單帳號登入序列",
+      "description": "以當前帳號跑完整 gpss4 登入序列（home→login page→CAPTCHA→POST→SSO refresh），含 max_captcha_retry 次重試",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "判讀登入結果並輪替",
+      "description": "該帳號成功則記住並回 session；失敗則標記帳號並移游標，全部失敗 raise GPSS4LoginError",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    { "id": "AR1", "source": "EXTERNAL", "target": "A1:input", "type": "input", "label": "login() 呼叫" },
+    { "id": "AR2", "source": "EXTERNAL", "target": "A1:control", "type": "control", "label": "帳號池 GPSS4_USERNAME[_N]/PASSWORD[_N] + 本次失敗集合" },
+    { "id": "AR3", "source": "EXTERNAL", "target": "A1:mechanism", "type": "mechanism", "label": "rotation 游標" },
+    { "id": "AR4", "source": "A1:output", "target": "A2:input", "type": "output", "label": "當前 (username,password)" },
+    { "id": "AR5", "source": "EXTERNAL", "target": "A2:control", "type": "control", "label": "gpss4 登入協議 (ID/SECU/TPHC/CAPTCHA)" },
+    { "id": "AR6", "source": "EXTERNAL", "target": "A2:mechanism", "type": "mechanism", "label": "httpx AsyncClient + CaptchaTable OCR" },
+    { "id": "AR7", "source": "A2:output", "target": "A3:input", "type": "output", "label": "登入結果 (成功 landing_url / 失敗 last_err)" },
+    { "id": "AR8", "source": "EXTERNAL", "target": "A3:control", "type": "control", "label": "登入失敗判定 (CAPTCHA 耗盡/帳密被拒/HTTP錯誤)" },
+    { "id": "AR9", "source": "A3:mechanism", "target": "A1:mechanism", "type": "mechanism", "label": "標記失敗 + 移游標 (輪替回饋)" },
+    { "id": "AR10", "source": "A3:output", "target": "EXTERNAL", "type": "output", "label": "已認證 session 或 GPSS4LoginError" }
+  ]
+}

@@ -8,7 +8,10 @@ this module drives the GPSS4 *web app* logged-in member area — session-based
 First version is read-only: list project folders, list patents in a folder,
 export folder contents.
 
-Credentials come from GPSS4_USERNAME / GPSS4_PASSWORD (env / .env).
+Credentials come from a login account pool: GPSS4_USERNAME / GPSS4_PASSWORD
+(account 1) plus GPSS4_USERNAME_2 / GPSS4_PASSWORD_2, _3, ... (env / .env). On
+login failure the session rotates to the next account; a single account works
+as before (back-compat).
 """
 
 from patent_mcp_server.gpss4.session import GPSS4Session

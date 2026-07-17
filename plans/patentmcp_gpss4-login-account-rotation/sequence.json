@@ -1,0 +1,25 @@
+[
+  {
+    "title": "gpss4 主帳號登入失敗輪替至第二帳號",
+    "participants": ["Caller", "GPSS4Session", "GPSS4 web"],
+    "messages": [
+      { "from": "Caller", "to": "GPSS4Session", "label": "login()" },
+      { "from": "GPSS4Session", "to": "GPSS4 web", "label": "_login_one_account(帳號1): home→captcha→POST ×max_retry" },
+      { "from": "GPSS4 web", "to": "GPSS4Session", "label": "全部重試失敗 (驗證碼錯誤/帳密被拒)" },
+      { "from": "GPSS4Session", "to": "GPSS4Session", "label": "標記帳號1 失敗, 游標→帳號2" },
+      { "from": "GPSS4Session", "to": "GPSS4 web", "label": "_login_one_account(帳號2): 完整登入序列" },
+      { "from": "GPSS4 web", "to": "GPSS4Session", "label": "SSO landing (已認證)" },
+      { "from": "GPSS4Session", "to": "Caller", "label": "success (uid, landing_url)" }
+    ]
+  },
+  {
+    "title": "全部帳號登入失敗 fail-fast",
+    "participants": ["Caller", "GPSS4Session", "GPSS4 web"],
+    "messages": [
+      { "from": "Caller", "to": "GPSS4Session", "label": "login()" },
+      { "from": "GPSS4Session", "to": "GPSS4 web", "label": "_login_one_account(帳號1) → 失敗" },
+      { "from": "GPSS4Session", "to": "GPSS4 web", "label": "_login_one_account(帳號2) → 失敗" },
+      { "from": "GPSS4Session", "to": "Caller", "label": "raise GPSS4LoginError (tried 2 accounts)" }
+    ]
+  }
+]

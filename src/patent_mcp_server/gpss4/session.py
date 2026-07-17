@@ -20,6 +20,12 @@ attempt fetches the home page ONCE and reuses that slot's ID/SECU through POST.
 
 Session lives ~5400s (90 min). On expiry / redirect-to-login, re-login
 automatically (approved behaviour, not a new silent fallback — design.md DD-4).
+
+Multi-account login pool (patentmcp_gpss4-login-account-rotation): credentials
+resolve to an ordered pool (GPSS4_USERNAME[_N] / GPSS4_PASSWORD[_N]); on login
+failure the pool rotates to the next not-yet-failed account, and only when the
+whole pool fails does login() raise. session-expiry re-login uses the current
+valid account and does NOT rotate.
 """
 
 from __future__ import annotations
@@ -28,7 +34,7 @@ import logging
 import os
 import random
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
@@ -66,6 +72,35 @@ class GPSS4LoginError(RuntimeError):
     pass
 
 
+def _load_accounts(explicit: Optional[List[Tuple[str, str]]]) -> List[Tuple[str, str]]:
+    """Resolve the login account pool (DD-3).
+
+    Priority: explicit constructor arg > numbered env vars. Account 1 is the
+    un-suffixed GPSS4_USERNAME / GPSS4_PASSWORD (back-compat); accounts 2+ are
+    GPSS4_USERNAME_2 / GPSS4_PASSWORD_2, _3, ... scanned CONSECUTIVELY until a
+    number is missing. Only pairs where BOTH username and password are non-empty
+    are admitted (credentials are paired, DD-3).
+    """
+    if explicit is not None:
+        return [(u, p) for (u, p) in explicit if u and p]
+    out: List[Tuple[str, str]] = []
+    # Account 1: un-suffixed (legacy).
+    u1 = os.getenv("GPSS4_USERNAME")
+    p1 = os.getenv("GPSS4_PASSWORD")
+    if u1 and p1:
+        out.append((u1, p1))
+    # Accounts 2+: consecutive numbered suffixes, stop at first gap.
+    idx = 2
+    while True:
+        u = os.getenv(f"GPSS4_USERNAME_{idx}")
+        p = os.getenv(f"GPSS4_PASSWORD_{idx}")
+        if not (u and p):
+            break
+        out.append((u, p))
+        idx += 1
+    return out
+
+
 class GPSS4Session:
     """Holds an authenticated httpx client (TTS* cookie jar) for GPSS4 web."""
 
@@ -73,11 +108,20 @@ class GPSS4Session:
         self,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        accounts: Optional[List[Tuple[str, str]]] = None,
         timeout: float = 40.0,
         max_captcha_retry: int = 6,
     ):
-        self.username = username or os.getenv("GPSS4_USERNAME")
-        self.password = password or os.getenv("GPSS4_PASSWORD")
+        # Back-compat: a single positional (username, password) seeds a
+        # 1-account pool; otherwise resolve the numbered env pool (DD-3).
+        explicit: Optional[List[Tuple[str, str]]] = None
+        if accounts is not None:
+            explicit = list(accounts)
+        elif username and password:
+            explicit = [(username, password)]
+        self.accounts: List[Tuple[str, str]] = _load_accounts(explicit)
+        self._cursor: int = 0
+        self._failed_accounts: set = set()
         self.max_captcha_retry = max_captcha_retry
         self._captcha = CaptchaTable()
         self._client = httpx.AsyncClient(
@@ -94,8 +138,33 @@ class GPSS4Session:
         # bare gpssbkm?@@<n> mints a fresh anonymous slot (member nav absent).
         self.landing_url = ""
 
+    @property
+    def username(self) -> Optional[str]:
+        """Current-cursor account username (back-compat: _submit reads this)."""
+        if not self.accounts or self._cursor >= len(self.accounts):
+            return None
+        return self.accounts[self._cursor][0]
+
+    @property
+    def password(self) -> Optional[str]:
+        """Current-cursor account password (back-compat: _submit reads this)."""
+        if not self.accounts or self._cursor >= len(self.accounts):
+            return None
+        return self.accounts[self._cursor][1]
+
+    def _advance_account(self) -> bool:
+        """Mark the current account failed and move the cursor to the next
+        not-yet-failed account. Returns True if such an account exists, False
+        if the whole pool has now failed to log in (DD-4/DD-5)."""
+        self._failed_accounts.add(self._cursor)
+        for idx in range(len(self.accounts)):
+            if idx not in self._failed_accounts:
+                self._cursor = idx
+                return True
+        return False
+
     def configured(self) -> bool:
-        return bool(self.username and self.password)
+        return bool(self.accounts)
 
     # ---- low-level steps -------------------------------------------------
 
@@ -197,16 +266,13 @@ class GPSS4Session:
 
     # ---- public API ------------------------------------------------------
 
-    async def login(self) -> Dict[str, object]:
-        """Run the full login sequence with CAPTCHA-retry. Returns a status dict."""
-        if not self.configured():
-            raise GPSS4LoginError(
-                "GPSS4_USERNAME / GPSS4_PASSWORD not set (env or .env)."
-            )
-        if not self._captcha.ready():
-            raise GPSS4LoginError(
-                "CAPTCHA md5 table missing (gpss4/captcha_data/md5_table.json)."
-            )
+    async def _login_one_account(self) -> Dict[str, object]:
+        """Run the full login sequence for the CURRENT-cursor account, with
+        CAPTCHA-retry. Returns a success status dict, or raises GPSS4LoginError
+        if this account cannot be logged in after max_captcha_retry attempts
+        (DD-2). The rotation loop in login() decides whether to try another
+        account.
+        """
         last_err = ""
         for attempt in range(1, self.max_captcha_retry + 1):
             # One slot per attempt: home->login page (fields + gif urls), same jar.
@@ -242,6 +308,43 @@ class GPSS4Session:
 
         raise GPSS4LoginError(
             f"login failed after {self.max_captcha_retry} attempts: {last_err}"
+        )
+
+    async def login(self) -> Dict[str, object]:
+        """Run the login sequence, rotating through the account pool on failure.
+
+        Tries the current-cursor account via _login_one_account(); if it fails
+        (CAPTCHA exhausted / credentials rejected / HTTP error), marks it failed
+        for this process, rotates to the next not-yet-failed account, and
+        retries. When the whole pool has failed, raises GPSS4LoginError
+        (DD-1..DD-5). session-expiry re-login uses the current valid account, it
+        does NOT rotate (DD-6).
+        """
+        if not self.configured():
+            raise GPSS4LoginError(
+                "GPSS4_USERNAME / GPSS4_PASSWORD not set (env or .env)."
+            )
+        if not self._captcha.ready():
+            raise GPSS4LoginError(
+                "CAPTCHA md5 table missing (gpss4/captcha_data/md5_table.json)."
+            )
+        errors: List[str] = []
+        while self._cursor < len(self.accounts):
+            acct_user = self.username
+            try:
+                return await self._login_one_account()
+            except GPSS4LoginError as e:
+                errors.append(f"account #{self._cursor} ({acct_user}): {e}")
+                logger.warning(
+                    "gpss4 account #%d (%s) login failed, rotating to next",
+                    self._cursor, acct_user,
+                )
+                if not self._advance_account():
+                    break  # whole pool exhausted
+        n = len(self.accounts)
+        logger.error("gpss4 all %d accounts failed to login", n)
+        raise GPSS4LoginError(
+            f"login failed after trying {n} account(s): " + "; ".join(errors)
         )
 
     async def ensure_logged_in(self) -> None:
