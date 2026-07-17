@@ -1,0 +1,86 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A1",
+    "StepType": "initial",
+    "StepAction": "接收檢索請求，游標指向帳號池首個帳號",
+    "LinkInputType": [],
+    "LinkInputNumber": [],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["search() 被呼叫"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "檢查是否仍有未用盡帳號",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [2, 5],
+    "LinkOutputType": "or",
+    "Condition": ["存在未用盡帳號", "全部帳號已用盡"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "以當前 userCode 發送 GPSS REST 請求並解析回應",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [3],
+    "LinkOutputType": "track",
+    "Condition": ["存在未用盡帳號"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "判讀回應 message 是否含額度用盡訊號",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [2],
+    "LinkOutputNumber": [4, 6],
+    "LinkOutputType": "or",
+    "Condition": ["message 含 over download quantity", "非額度用盡（成功/查無/其他錯誤）"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "標記當前帳號本次 process 用盡，游標移下一帳號",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [3],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["message 含 over download quantity"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 5,
+    "ModuleRef": "A1",
+    "StepType": "final",
+    "StepAction": "回傳 GPSS_ALL_ACCOUNTS_EXHAUSTED 結構化錯誤（fail-fast，無 fallback）",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [],
+    "LinkOutputType": "track",
+    "Condition": ["全部帳號已用盡"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 6,
+    "ModuleRef": "A3",
+    "StepType": "final",
+    "StepAction": "原樣回傳檢索結果（成功／查無資料／HTTP 錯誤）",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [3],
+    "LinkOutputNumber": [],
+    "LinkOutputType": "track",
+    "Condition": ["非額度用盡"],
+    "SubGrafcet": []
+  }
+]

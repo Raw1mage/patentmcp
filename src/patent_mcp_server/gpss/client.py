@@ -87,11 +87,83 @@ class GPSSCondition:
         return f"{prefix}{self.field}={self.value}"
 
 
-class GPSSClient:
-    """Async client for the TIPO GPSS REST API."""
+# TIPO GPSS time-window quota-exhausted signal. GPSS bills by OUTPUT record
+# count and resets per time-window (weekday 08-18 narrow 10,000 / off-hours +
+# weekend wide 30,000). When a userCode's window quota is spent, GPSS returns
+# status=success but a message containing "Over download quantity". We rotate to
+# the next account ONLY on this signal — a "no record found" message is NOT
+# exhaustion and must not trigger rotation (would burn all accounts). Matched
+# case-insensitively as a substring. "Over search quantity" is the alternate
+# phrasing of the same time-window output cap.
+_QUOTA_EXHAUSTED_MARKERS = ("over download quantity", "over search quantity")
 
-    def __init__(self, user_code: Optional[str] = None, timeout: float = 40.0):
-        self.user_code = user_code or os.getenv("GPSS_USER_CODE")
+
+def _is_quota_exhausted(message: Optional[str]) -> bool:
+    """True IFF the GPSS message is a time-window quota-exhausted signal (DD-2).
+
+    Strictly distinct from "no record found": only the official over-quantity
+    markers count, so a normal empty-result message never triggers rotation.
+    """
+    if not message:
+        return False
+    low = message.lower()
+    return any(marker in low for marker in _QUOTA_EXHAUSTED_MARKERS)
+
+
+def _load_user_codes(explicit: Optional[List[str]]) -> List[str]:
+    """Resolve the account pool (DD-4).
+
+    Priority: explicit constructor arg > GPSS_USER_CODES (comma-separated) >
+    GPSS_USER_CODE (legacy single code). Strips whitespace, drops empties,
+    de-duplicates while preserving order.
+    """
+    raw: List[str]
+    if explicit is not None:
+        raw = list(explicit)
+    else:
+        codes_env = os.getenv("GPSS_USER_CODES")
+        if codes_env and codes_env.strip():
+            raw = codes_env.split(",")
+        else:
+            single = os.getenv("GPSS_USER_CODE")
+            raw = [single] if single else []
+    seen: set = set()
+    out: List[str] = []
+    for c in raw:
+        if c is None:
+            continue
+        code = c.strip()
+        if code and code not in seen:
+            seen.add(code)
+            out.append(code)
+    return out
+
+
+class GPSSClient:
+    """Async client for the TIPO GPSS REST API.
+
+    Holds an ORDERED POOL of userCode accounts and rotates through them when a
+    time-window quota is exhausted (DD-1..DD-6). Rotation is internal to
+    search() so every caller sharing the module-level instance benefits
+    transparently. An account marked exhausted stays skipped for the lifetime
+    of this process (DD-3); a restart clears it (the GPSS window resets anyway).
+    """
+
+    def __init__(
+        self,
+        user_code: Optional[str] = None,
+        user_codes: Optional[List[str]] = None,
+        timeout: float = 40.0,
+    ):
+        # Back-compat: a single positional user_code seeds a 1-account pool.
+        explicit: Optional[List[str]] = None
+        if user_codes is not None:
+            explicit = list(user_codes)
+        elif user_code is not None:
+            explicit = [user_code]
+        self.user_codes: List[str] = _load_user_codes(explicit)
+        self._cursor: int = 0
+        self._exhausted: set = set()
         # GPSS sits behind Cloudflare (resp headers carry cf-ray). In a
         # long-lived MCP-server process the single client's pool holds
         # keep-alive connections that Cloudflare silently drops after an idle
@@ -106,8 +178,31 @@ class GPSSClient:
             limits=httpx.Limits(max_keepalive_connections=0),
         )
 
+    @property
+    def user_code(self) -> Optional[str]:
+        """The current-cursor userCode (back-compat: external refs still read this).
+
+        Returns None when the pool is empty. Rotation advances the cursor via
+        _advance_account(); this always reflects the account search() will use
+        next.
+        """
+        if not self.user_codes or self._cursor >= len(self.user_codes):
+            return None
+        return self.user_codes[self._cursor]
+
+    def _advance_account(self) -> bool:
+        """Mark the current account exhausted and move the cursor to the next
+        not-yet-exhausted account. Returns True if such an account exists,
+        False if the whole pool is now exhausted (DD-3/DD-5)."""
+        self._exhausted.add(self._cursor)
+        for idx in range(len(self.user_codes)):
+            if idx not in self._exhausted:
+                self._cursor = idx
+                return True
+        return False
+
     def configured(self) -> bool:
-        return bool(self.user_code)
+        return bool(self.user_codes)
 
     @staticmethod
     def _build_query(
@@ -155,35 +250,69 @@ class GPSSClient:
         fmt: str = "json",
     ) -> Dict[str, Any]:
         """Run a GPSS search. `conditions` is a list of GPSSCondition (at least one
-        is required by the API). Returns parsed JSON (or raw text if XML)."""
-        if not self.user_code:
+        is required by the API). Returns parsed JSON (or raw text if XML).
+
+        Rotates through the userCode account pool: if the current account's
+        time-window quota is exhausted (GPSS message "Over download quantity"),
+        the request is retried on the next not-yet-exhausted account. When the
+        whole pool is exhausted, returns GPSS_ALL_ACCOUNTS_EXHAUSTED fail-fast
+        (DD-1..DD-6).
+        """
+        if not self.configured():
             return {
                 "success": False,
                 "error": "GPSS_USER_CODE not set. Apply for a userCode at TIPO and "
-                "set the GPSS_USER_CODE environment variable.",
+                "set the GPSS_USER_CODES (or legacy GPSS_USER_CODE) environment variable.",
             }
         if not conditions:
             return {"success": False, "error": "At least one search condition is required."}
 
         if databases is None:
             databases = DB_DEFAULT
-        params = [("userCode", self.user_code)] + self._build_query(
-            conditions, databases, case_type, patent_type, fields, fmt, num, skip
-        )
-        # GPSS field names contain '/' (TI/AB) and the +/- combinators ride in the
-        # KEY; httpx's param encoder would percent-encode those and break the query.
-        # Build the query string by hand: keys literal, values url-encoded.
-        qs = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params)
-        url = f"{GPSS_API_URL}?{qs}"
-        try:
-            resp = await self._client.get(url)
-            resp.raise_for_status()
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"GPSS request failed: {e}")
-            return {"success": False, "error": str(e)}
 
-        text = resp.text
-        if fmt == "json":
+        # Rotation loop: at most one attempt per not-yet-exhausted account.
+        # Bound by the pool size so a pool of all-exhausted accounts can never
+        # loop forever.
+        accounts_tried = 0
+        while True:
+            if self.user_code is None:
+                # No live account left in the pool.
+                return {
+                    "success": False,
+                    "error_code": "GPSS_ALL_ACCOUNTS_EXHAUSTED",
+                    "error": (
+                        f"All {len(self.user_codes)} GPSS account(s) have exhausted "
+                        "their time-window quota. Retry later (GPSS quota resets per "
+                        "time-window; off-hours/weekend has the wider cap) or add more "
+                        "accounts to GPSS_USER_CODES."
+                    ),
+                    "accounts_tried": accounts_tried,
+                }
+
+            current_code = self.user_code
+            accounts_tried += 1
+            params = [("userCode", current_code)] + self._build_query(
+                conditions, databases, case_type, patent_type, fields, fmt, num, skip
+            )
+            # GPSS field names contain '/' (TI/AB) and the +/- combinators ride in
+            # the KEY; httpx's param encoder would percent-encode those and break
+            # the query. Build the query string by hand: keys literal, values
+            # url-encoded.
+            qs = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params)
+            url = f"{GPSS_API_URL}?{qs}"
+            try:
+                resp = await self._client.get(url)
+                resp.raise_for_status()
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"GPSS request failed: {e}")
+                # Transport/HTTP errors are not quota exhaustion (DD-6) — return
+                # as-is without rotating.
+                return {"success": False, "error": str(e)}
+
+            text = resp.text
+            if fmt != "json":
+                return {"success": True, "format": "xml", "raw": text}
+
             data = _parse_gpss_json(text)
             if data is None:
                 logger.error(
@@ -191,16 +320,29 @@ class GPSSClient:
                     "sanitize (len=%d, skip=%s)", len(text), skip,
                 )
                 return {"success": False, "error": "Expected JSON but parse failed", "raw": text[:500]}
-            
+
             if not isinstance(data, dict):
                 return {"success": False, "error": f"Expected JSON object but got {type(data).__name__}", "raw": text[:500]}
-            
+
             api = data.get("gpss-API") or data
             if not isinstance(api, dict):
                 return {"success": False, "error": f"Expected JSON object inside gpss-API but got {type(api).__name__}", "raw": text[:500]}
-                
+
             status = api.get("status")
             message = api.get("message")
+
+            # Time-window quota exhausted (DD-2): rotate to the next account and
+            # retry the SAME request. Strictly distinct from "no record found".
+            if _is_quota_exhausted(message):
+                logger.warning(
+                    "GPSS account #%d quota exhausted (%r), rotating to next",
+                    self._cursor, message,
+                )
+                if self._advance_account():
+                    continue
+                # Pool now fully exhausted — loop head returns the fail-fast.
+                continue
+
             # status=success with a message means "no record found" / error string.
             return {
                 "success": status == "success" and not message,
@@ -210,7 +352,6 @@ class GPSSClient:
                 "qty": api.get("qty-rec"),
                 "data": data,
             }
-        return {"success": True, "format": "xml", "raw": text}
 
     async def close(self):
         await self._client.aclose()

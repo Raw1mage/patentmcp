@@ -96,6 +96,9 @@ services:
       GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT:-}"
       BIGQUERY_MAX_RESULTS: "${BIGQUERY_MAX_RESULTS:-1000}"
       BIGQUERY_MAX_BYTES_BILLED: "${BIGQUERY_MAX_BYTES_BILLED:-}"
+      # GPSS REST API userCode account pool (comma-separated; rotates on
+      # time-window quota exhaustion). Back-compat single GPSS_USER_CODE kept.
+      GPSS_USER_CODES: "${GPSS_USER_CODES:-}"
       GPSS_USER_CODE: "${GPSS_USER_CODE:-}"
       EPO_CONSUMER_KEY: "${EPO_CONSUMER_KEY:-}"
       EPO_CONSUMER_SECRET: "${EPO_CONSUMER_SECRET:-}"

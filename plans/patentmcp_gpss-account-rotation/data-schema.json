@@ -1,0 +1,31 @@
+{
+  "schemas": [
+    {
+      "name": "GPSS_USER_CODES",
+      "kind": "config",
+      "fields": [
+        { "name": "GPSS_USER_CODES", "type": "string (comma-separated)", "notes": "帳號池 userCode 清單，逗號分隔，依序 rotate。去空去重保序。優先於 GPSS_USER_CODE。" },
+        { "name": "GPSS_USER_CODE", "type": "string", "notes": "舊單碼，向後相容。GPSS_USER_CODES 為空時退讀此值為單帳號池。" }
+      ]
+    },
+    {
+      "name": "GPSSClient rotation state",
+      "kind": "config",
+      "fields": [
+        { "name": "user_codes", "type": "List[str]", "notes": "解析後的帳號池（保序）" },
+        { "name": "_cursor", "type": "int", "notes": "當前帳號索引" },
+        { "name": "_exhausted", "type": "set[int]", "notes": "本次 process 已判定額度用盡的帳號索引集合" }
+      ]
+    },
+    {
+      "name": "GPSS_ALL_ACCOUNTS_EXHAUSTED",
+      "kind": "message",
+      "fields": [
+        { "name": "success", "type": "bool", "notes": "固定 false" },
+        { "name": "error_code", "type": "str", "notes": "GPSS_ALL_ACCOUNTS_EXHAUSTED" },
+        { "name": "error", "type": "str", "notes": "人類可讀說明（含時段重置提示）" },
+        { "name": "accounts_tried", "type": "int", "notes": "本次已嘗試並用盡的帳號數" }
+      ]
+    }
+  ]
+}

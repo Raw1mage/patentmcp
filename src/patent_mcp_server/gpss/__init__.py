@@ -6,8 +6,11 @@ and more) filtered by a search formula. Unlike Google Patents it is an official,
 ToS-clean API; unlike BigQuery it bills by quota, not bytes scanned. It supports
 CPC/IPC anchoring and full-text claims search, and returns JSON.
 
-Auth is a single `userCode` (API 驗證碼) issued by TIPO after approval — read from
-the GPSS_USER_CODE environment variable.
+Auth is a `userCode` (API 驗證碼) issued by TIPO after approval. The client holds
+an ORDERED POOL of userCodes (GPSS_USER_CODES, comma-separated) and rotates to
+the next account when one's time-window quota is exhausted; when all are spent it
+fails fast with GPSS_ALL_ACCOUNTS_EXHAUSTED. The legacy single GPSS_USER_CODE is
+still honoured when GPSS_USER_CODES is unset.
 """
 
 from patent_mcp_server.gpss.client import GPSSClient

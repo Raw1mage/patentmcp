@@ -1,0 +1,96 @@
+{
+  "diagram_title": "GPSS 多帳號額度輪替檢索",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "選取當前有效帳號",
+      "description": "從帳號池中依游標取一個未用盡的 userCode；全部用盡則發出用盡訊號",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "發送 GPSS 檢索請求",
+      "description": "以當前 userCode 組 query 呼叫 GPSS REST API 並解析回應",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "判讀額度用盡訊號並輪替",
+      "description": "偵測回應 message 是否含額度用盡訊號；是則標記帳號用盡並移游標，否則回傳結果",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    {
+      "id": "AR1",
+      "source": "EXTERNAL",
+      "target": "A1:input",
+      "type": "input",
+      "label": "檢索條件 conditions"
+    },
+    {
+      "id": "AR2",
+      "source": "EXTERNAL",
+      "target": "A1:control",
+      "type": "control",
+      "label": "帳號池 GPSS_USER_CODES + 本次用盡集合"
+    },
+    {
+      "id": "AR3",
+      "source": "EXTERNAL",
+      "target": "A1:mechanism",
+      "type": "mechanism",
+      "label": "rotation 游標"
+    },
+    {
+      "id": "AR4",
+      "source": "A1:output",
+      "target": "A2:input",
+      "type": "output",
+      "label": "當前 userCode + 條件"
+    },
+    {
+      "id": "AR5",
+      "source": "EXTERNAL",
+      "target": "A2:control",
+      "type": "control",
+      "label": "GPSS REST API 契約 (userCode + expFld/expFmt)"
+    },
+    {
+      "id": "AR6",
+      "source": "EXTERNAL",
+      "target": "A2:mechanism",
+      "type": "mechanism",
+      "label": "httpx AsyncClient"
+    },
+    {
+      "id": "AR7",
+      "source": "A2:output",
+      "target": "A3:input",
+      "type": "output",
+      "label": "解析後回應 (status/message/data)"
+    },
+    {
+      "id": "AR8",
+      "source": "EXTERNAL",
+      "target": "A3:control",
+      "type": "control",
+      "label": "額度用盡訊號 over download quantity"
+    },
+    {
+      "id": "AR9",
+      "source": "A3:mechanism",
+      "target": "A1:mechanism",
+      "type": "mechanism",
+      "label": "標記用盡 + 移游標 (輪替回饋)"
+    },
+    {
+      "id": "AR10",
+      "source": "A3:output",
+      "target": "EXTERNAL",
+      "type": "output",
+      "label": "檢索結果 或 GPSS_ALL_ACCOUNTS_EXHAUSTED"
+    }
+  ]
+}

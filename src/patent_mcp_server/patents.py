@@ -5253,6 +5253,7 @@ async def gpss4_advanced_search(
     subject_id: str = "",
     csv_rel: str = "pool.csv",
     csv_path: str = "",
+    response_format: str = "full",
 ) -> Dict[str, Any]:
     """Harvest the TIPO GPSS4 web 進階檢索 (advanced search) result list into a
     pubno-granularity patent pool, delivered via patentmcp's standard file rails.
@@ -5311,7 +5312,9 @@ async def gpss4_advanced_search(
     """
     import csv as _csv
     import io as _io
-    from patent_mcp_server.gpss4.adv_search import harvest, GPSS4AdvSearchError
+    from patent_mcp_server.gpss4.adv_search import (
+        harvest, GPSS4AdvSearchError, GPSS4DbScopeError,
+    )
 
     def _csv_bytes(result: Dict[str, Any]) -> bytes:
         """Render the pool as UTF-8-BOM CSV bytes (same cols as write_csv)."""
@@ -5374,6 +5377,16 @@ async def gpss4_advanced_search(
     if csv_path:  # legacy escape hatch, additive
         from patent_mcp_server.gpss4.adv_search import write_csv
         out["csv_path"] = write_csv(res, csv_path)
+
+    # response_format="handle": drop the inline patents[] from the JSON envelope
+    # (the rows already landed in the CSV handle). Bulk-enrich callers that only
+    # need the file handle avoid accumulating tens-of-KB inline row arrays per
+    # batch into their context. Requires a file delivery (token/cache); with
+    # delivery="none" there is no handle to fall back on, so patents[] is kept.
+    if response_format == "handle" and delivery in ("token", "cache"):
+        out["patents_count"] = len(out.get("patents", []))
+        out.pop("patents", None)
+        out["response_format"] = "handle"
     return out
 
 

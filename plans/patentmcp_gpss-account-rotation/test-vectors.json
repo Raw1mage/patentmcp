@@ -1,0 +1,49 @@
+[
+  {
+    "id": "TV-1",
+    "description": "GPSS_USER_CODES 逗號分隔解析：去空白、去重、保序",
+    "input": { "GPSS_USER_CODES": " c2d198B6924a37D6 , f77fB093dfdb34FD ,c2d198B6924a37D6, " },
+    "expected": { "user_codes": ["c2d198B6924a37D6", "f77fB093dfdb34FD"] }
+  },
+  {
+    "id": "TV-2",
+    "description": "GPSS_USER_CODES 為空時退讀 GPSS_USER_CODE 單碼（向後相容）",
+    "input": { "GPSS_USER_CODES": "", "GPSS_USER_CODE": "f77fB093dfdb34FD" },
+    "expected": { "user_codes": ["f77fB093dfdb34FD"] }
+  },
+  {
+    "id": "TV-3",
+    "description": "首帳號額度用盡 → 換第二帳號重試成功",
+    "input": {
+      "user_codes": ["A1", "A2"],
+      "responses": [
+        { "userCode": "A1", "message": "Over download quantity" },
+        { "userCode": "A2", "status": "success", "data": { "total-rec": 5 } }
+      ]
+    },
+    "expected": { "success": true, "used_userCode": "A2", "total": 5 }
+  },
+  {
+    "id": "TV-4",
+    "description": "全部帳號用盡 → GPSS_ALL_ACCOUNTS_EXHAUSTED fail-fast",
+    "input": {
+      "user_codes": ["A1", "A2"],
+      "responses": [
+        { "userCode": "A1", "message": "Over download quantity" },
+        { "userCode": "A2", "message": "Over download quantity" }
+      ]
+    },
+    "expected": { "success": false, "error_code": "GPSS_ALL_ACCOUNTS_EXHAUSTED", "accounts_tried": 2 }
+  },
+  {
+    "id": "TV-5",
+    "description": "查無資料 message 不觸發 rotation（防誤判 DD-2）",
+    "input": {
+      "user_codes": ["A1", "A2"],
+      "responses": [
+        { "userCode": "A1", "status": "success", "message": "no record found" }
+      ]
+    },
+    "expected": { "rotated": false, "used_userCode": "A1" }
+  }
+]

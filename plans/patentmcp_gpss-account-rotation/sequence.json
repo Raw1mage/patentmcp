@@ -1,0 +1,25 @@
+[
+  {
+    "title": "GPSS 額度用盡輪替至下一帳號",
+    "participants": ["Caller", "GPSSClient", "GPSS REST API"],
+    "messages": [
+      { "from": "Caller", "to": "GPSSClient", "label": "search(conditions)" },
+      { "from": "GPSSClient", "to": "GPSS REST API", "label": "GET gpss_api?userCode=A1&..." },
+      { "from": "GPSS REST API", "to": "GPSSClient", "label": "message: Over download quantity" },
+      { "from": "GPSSClient", "to": "GPSSClient", "label": "標記 A1 用盡, 游標→A2" },
+      { "from": "GPSSClient", "to": "GPSS REST API", "label": "GET gpss_api?userCode=A2&... (重試)" },
+      { "from": "GPSS REST API", "to": "GPSSClient", "label": "status:success, data" },
+      { "from": "GPSSClient", "to": "Caller", "label": "檢索結果" }
+    ]
+  },
+  {
+    "title": "全部帳號用盡 fail-fast",
+    "participants": ["Caller", "GPSSClient", "GPSS REST API"],
+    "messages": [
+      { "from": "Caller", "to": "GPSSClient", "label": "search(conditions)" },
+      { "from": "GPSSClient", "to": "GPSS REST API", "label": "GET userCode=A1 → Over download quantity" },
+      { "from": "GPSSClient", "to": "GPSS REST API", "label": "GET userCode=A2 → Over download quantity" },
+      { "from": "GPSSClient", "to": "Caller", "label": "GPSS_ALL_ACCOUNTS_EXHAUSTED (fail-fast)" }
+    ]
+  }
+]
