@@ -1249,8 +1249,18 @@ async def patent_get_claim1(publication_number: Optional[str] = None, full: bool
     # ── 1. TIPO GPSS (First Priority for TW, US, CN) ──
     if gpss_client.configured():
         db = None
+        gpss_axis = "PN"  # 公開/公告號 axis (default)
         if pat_upper.startswith("TW"):
             db = ["TWA", "TWB"]
+            # BR_20260718: a TW *application* number (TW + 9 digits, 民國年格式,
+            # e.g. TW092110119) is NOT a publication number. Querying it on the
+            # @PN axis silently misses and the call falls through to the gpatents
+            # scraper ("Failed to fetch from gpatents"). Route it to @AN (申請號)
+            # so GPSS REST resolves it directly — NOT a data/API limit, a routing
+            # defect (mirrors the ppubs_batch old-pubno wall RCA). Validation is
+            # deferred to the next GPSS quota window (weekend wide-window spent).
+            if re.match(r'^TW\d{9}$', pat_upper):
+                gpss_axis = "AN"
         elif pat_upper.startswith("US"):
             db = ["USA", "USB"]
         elif pat_upper.startswith("CN"):
@@ -1259,9 +1269,15 @@ async def patent_get_claim1(publication_number: Optional[str] = None, full: bool
         if db is not None:
             try:
                 gpss_res = await gpss_client.search(
-                    conditions=[GPSSCondition("PN", pat)],
+                    conditions=[GPSSCondition(gpss_axis, pat)],
                     databases=db,
-                    fields="PN,CL"
+                    fields="PN,CL",
+                    num=1,  # BR_20260718: a PN/AN single-number lookup is unique;
+                            # the default num=30 requested 30 output rows for EACH
+                            # single-patent claim1 fetch = up to 30x quota burn
+                            # against the GPSS time-window output cap (this is what
+                            # exhausted the 2-account weekend wide-window). num=1
+                            # is the correct request size for a by-number lookup.
                 )
                 if gpss_res.get("success") and gpss_res.get("data"):
                     api = gpss_res["data"].get("gpss-API", {})
@@ -1475,15 +1491,42 @@ async def ppubs_batch_get_claims(publication_numbers: Optional[List[str]] = None
     if len(pubs) > 100:
         return {"success": False, "error": "Batch size limit exceeded. Maximum allowed is 100."}
         
+    import os as _os
+    import time as _time
+    # BR_20260718: the old loop had NO wall-clock budget and NO per-item
+    # timeout, so a batch of OLD pubnos (each ~1.2s via the GPSS-REST first hop
+    # in patent_get_claim1) x 50 ~= 60s silently blew the MCP call timeout
+    # window, completing only the first ~40 and losing the tail. This is a TOOL
+    # defect, NOT an API/data limit (one old pubno returns full claim1 in ~1s).
+    # Fix: (1) per-item timeout so a single hung pub can't stall the batch;
+    # (2) an overall wall-clock budget that returns EARLY with a resumable
+    # `remaining_publication_numbers` list, so any batch size completes within
+    # the MCP window and the caller resumes deterministically.
+    _PER_ITEM_TIMEOUT = float(_os.environ.get("PPUBS_BATCH_ITEM_TIMEOUT", "12"))
+    # Wall budget 50s: the MCP call timeout window is ~60s, so 50s leaves a ~10s
+    # margin for JSON serialization/transport while letting a batch drain far
+    # more per call (~40 old pubnos @ ~1.2s vs the old 25s/~32). Any excess still
+    # returns via resumable remaining_publication_numbers.
+    _WALL_BUDGET = float(_os.environ.get("PPUBS_BATCH_WALL_BUDGET", "50"))
     results = {}
-    for pub in pubs:
-        pub = pub.strip()
+    remaining = []
+    _cleaned = [p.strip() for p in pubs if p and p.strip()]
+    _start = _time.monotonic()
+    for _idx, pub in enumerate(_cleaned):
+        if _time.monotonic() - _start >= _WALL_BUDGET:
+            remaining = _cleaned[_idx:]
+            break
         if not pub:
             continue
             
         try:
-            res = await patent_get_claim1(pub, full=True)
+            res = await asyncio.wait_for(
+                patent_get_claim1(pub, full=True), timeout=_PER_ITEM_TIMEOUT)
             results[pub] = res
+        except asyncio.TimeoutError:
+            results[pub] = {"success": False, "publication_number": pub,
+                            "error": "PER_ITEM_TIMEOUT",
+                            "detail": f"patent_get_claim1 exceeded {_PER_ITEM_TIMEOUT}s"}
         except Exception as e:
             results[pub] = {"success": False, "publication_number": pub, "error": str(e)}
 
@@ -1498,7 +1541,18 @@ async def ppubs_batch_get_claims(publication_numbers: Optional[List[str]] = None
     handle = _handle(entry)
     # Merge the full handle so gateway_download_path / download_url_note
     # (BR_20260715 #02) ride along instead of being dropped by cherry-picking.
-    return {**handle, "claims": results}
+    out = {**handle, "claims": results}
+    if remaining:
+        out["remaining_publication_numbers"] = remaining
+        out["remaining_count"] = len(remaining)
+        out["note"] = (
+            f"Wall-clock budget {_WALL_BUDGET}s reached after "
+            f"{len(results)}/{len(_cleaned)} items; resume by calling again "
+            f"with remaining_publication_numbers (BR_20260718: old sequential "
+            f"loop had no time budget and silently truncated large/old-pubno "
+            f"batches)."
+        )
+    return out
 
 
 @mcp.tool()
@@ -3426,6 +3480,222 @@ async def patent_family_backfill_status(
         return out
     finally:
         conn.close()
+
+
+@mcp.tool()
+async def patent_enrich_backfill(
+    pubnos: Optional[List[str]] = None,
+    from_pool_missing: bool = False,
+    fields: Optional[List[str]] = None,
+    cursor: int = 0,
+    max_calls: Optional[int] = None,
+    time_budget_sec: float = 0,
+) -> Dict[str, Any]:
+    """Server-side enrich loop: fill missing abstract/claim1 for a pubno list
+    DIRECTLY into patentdb — returns ONLY statistics, never the text bodies.
+
+    BR_20260718 (context-bomb root fix): ppubs_batch_get_claims returns the
+    full claim texts through the MCP channel (~40KB/batch), so orchestrating a
+    10k-pubno enrich through subagents blows their context. This tool moves the
+    loop SERVER-SIDE: fetch -> upsert patentdb -> count. The caller only ever
+    sees counters, making an arbitrarily large enrich a handful of MCP calls.
+
+    Two phases per run (both quota-aware, resumable):
+      1. biblio phase — patent_search(pub_number=<chunk of 50>) per chunk; the
+         built-in inline-absorb lands abstract/title/ipc etc. (1 GPSS query per
+         chunk; output quota ~= hits).
+      2. claim1 phase — per pubno still lacking claim1, patent_get_claim1
+         (GPSS-REST first; ~1.2s/item) then _pdb.put(claim1). 12s per-item cap.
+
+    Args:
+        pubnos: explicit publication numbers. Ignored if from_pool_missing.
+        from_pool_missing: sweep patentdb rows missing any requested field.
+        fields: subset of ["abstract", "claim1"]; default both.
+        cursor: 0-based resume offset into the (stable, sorted) target list.
+        max_calls: optional cap on claim1 fetch calls this invocation.
+        time_budget_sec: optional wall budget; 0 = run to completion. The loop
+            stops early and returns next_cursor when exceeded.
+
+    Returns:
+        {success, total_targets, biblio_queries, biblio_absorbed,
+         claim1_filled, claim1_failed, skipped, next_cursor, exhausted,
+         elapsed_sec, error_counts, sample_errors[]} — counters only.
+
+    Early-exit: 8 consecutive identical failures (e.g. GPSS quota exhausted)
+    aborts the run with exhausted=false + the failure signature, instead of
+    burning the whole target list against a dead backend.
+    """
+    import asyncio
+    import time as _time
+    from collections import Counter as _Counter
+
+    want = [f for f in (fields or ["abstract", "claim1"])
+            if f in ("abstract", "claim1")]
+    if not want:
+        return {"success": False, "error": "INVALID_PARAMS",
+                "detail": "fields must include abstract and/or claim1"}
+
+    # ── build the stable target list ──────────────────────────────
+    if from_pool_missing:
+        conds = []
+        if "abstract" in want:
+            conds.append("(abstract IS NULL OR LENGTH(TRIM(abstract)) < 25)")
+        if "claim1" in want:
+            conds.append("(claim1 IS NULL OR LENGTH(TRIM(claim1)) < 25)")
+        conn = _pdb._connect()
+        try:
+            rows = conn.execute(
+                "SELECT pubno FROM patents WHERE " + " OR ".join(conds) +
+                " ORDER BY pubno").fetchall()
+            targets = [r["pubno"] for r in rows]
+        finally:
+            conn.close()
+    else:
+        targets = [p.strip() for p in (pubnos or []) if p and p.strip()]
+
+    total = len(targets)
+    if not targets or cursor >= total:
+        return {"success": True, "total_targets": total, "biblio_queries": 0,
+                "biblio_absorbed": 0, "claim1_filled": 0, "claim1_failed": 0,
+                "skipped": 0, "next_cursor": cursor, "exhausted": True,
+                "elapsed_sec": 0.0, "error_counts": {}, "sample_errors": [],
+                "note": "no targets at/after cursor"}
+
+    start_t = _time.monotonic()
+
+    def _over_budget() -> bool:
+        return time_budget_sec > 0 and (
+            _time.monotonic() - start_t) >= time_budget_sec
+
+    err_counter: _Counter = _Counter()
+    sample_errors: List[Dict[str, Any]] = []
+    consec_fail = 0
+    consec_sig = ""
+    _CONSEC_ABORT = 8
+
+    def _note_err(pub: str, sig: str) -> bool:
+        """Record an error; return True if the consecutive-failure fuse blew."""
+        nonlocal consec_fail, consec_sig
+        err_counter[sig] += 1
+        if len(sample_errors) < 10:
+            sample_errors.append({"pubno": pub, "error": sig})
+        if sig == consec_sig:
+            consec_fail += 1
+        else:
+            consec_sig, consec_fail = sig, 1
+        return consec_fail >= _CONSEC_ABORT
+
+    idx = cursor
+    biblio_queries = biblio_absorbed = 0
+    claim1_filled = claim1_failed = skipped = 0
+    calls_made = 0
+    aborted = False
+
+    # helper: current DB completeness for one pubno
+    def _row_state(pub: str) -> Dict[str, bool]:
+        conn = _pdb._connect()
+        try:
+            r = conn.execute(
+                "SELECT LENGTH(TRIM(COALESCE(abstract,''))) AS a, "
+                "LENGTH(TRIM(COALESCE(claim1,''))) AS c "
+                "FROM patents WHERE pubno=?", (pub,)).fetchone()
+        finally:
+            conn.close()
+        if not r:
+            return {"abstract": False, "claim1": False}
+        return {"abstract": (r["a"] or 0) >= 25, "claim1": (r["c"] or 0) >= 25}
+
+    # ── phase 1: biblio (abstract) via chunked pub_number search ──
+    if "abstract" in want:
+        _CHUNK = 50
+        j = idx
+        while j < total and not aborted:
+            if _over_budget():
+                break
+            chunk = [p for p in targets[j:j + _CHUNK]
+                     if not _row_state(p)["abstract"]]
+            j += _CHUNK
+            if not chunk:
+                continue
+            try:
+                env = await patent_search(pub_number=chunk, num=len(chunk))
+                biblio_queries += 1
+                if env.get("success"):
+                    ab = env.get("patentdb_absorb") or {}
+                    biblio_absorbed += (ab.get("imported", 0)
+                                        + ab.get("updated", 0))
+                    consec_fail = 0
+                else:
+                    sig = str(env.get("error_code") or env.get("error")
+                              or "SEARCH_MISS")[:120]
+                    if _note_err(chunk[0], sig):
+                        aborted = True
+            except Exception as e:  # noqa: BLE001
+                if _note_err(chunk[0], str(e)[:120]):
+                    aborted = True
+
+    # ── phase 2: claim1 per-item loop ─────────────────────────────
+    if "claim1" in want and not aborted:
+        for k in range(idx, total):
+            if _over_budget() or (max_calls and calls_made >= max_calls):
+                idx = k
+                break
+            pub = targets[k]
+            if _row_state(pub)["claim1"]:
+                skipped += 1
+                idx = k + 1
+                continue
+            try:
+                res = await asyncio.wait_for(
+                    patent_get_claim1(pub, full=True), timeout=12)
+                calls_made += 1
+                if res.get("success") and (res.get("claim1") or "").strip():
+                    _pdb.put(pub, fields={"claim1": res["claim1"].strip()},
+                             acquisition_cost="low")
+                    claim1_filled += 1
+                    consec_fail = 0
+                else:
+                    claim1_failed += 1
+                    sig = str(res.get("error") or "CLAIM1_EMPTY")[:120]
+                    if _note_err(pub, sig):
+                        aborted = True
+            except asyncio.TimeoutError:
+                calls_made += 1
+                claim1_failed += 1
+                if _note_err(pub, "PER_ITEM_TIMEOUT"):
+                    aborted = True
+            except Exception as e:  # noqa: BLE001
+                calls_made += 1
+                claim1_failed += 1
+                if _note_err(pub, str(e)[:120]):
+                    aborted = True
+            idx = k + 1
+            if aborted:
+                break
+        else:
+            idx = total
+
+    exhausted = (idx >= total) and not aborted
+    out: Dict[str, Any] = {
+        "success": True,
+        "total_targets": total,
+        "biblio_queries": biblio_queries,
+        "biblio_absorbed": biblio_absorbed,
+        "claim1_filled": claim1_filled,
+        "claim1_failed": claim1_failed,
+        "skipped": skipped,
+        "next_cursor": idx,
+        "exhausted": exhausted,
+        "elapsed_sec": round(_time.monotonic() - start_t, 1),
+        "error_counts": dict(err_counter),
+        "sample_errors": sample_errors,
+    }
+    if aborted:
+        out["aborted_reason"] = (
+            f"{_CONSEC_ABORT} consecutive failures with signature "
+            f"'{consec_sig}' — backend/quota likely down; resume at "
+            f"next_cursor when recovered.")
+    return out
 
 
 @mcp.tool()

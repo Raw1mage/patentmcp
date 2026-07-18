@@ -55,8 +55,15 @@ _UA = (
 # ID / SECU / TPHC as hidden inputs (unquoted attribute values, e.g.
 # `<input type=hidden name=SECU value=2010841088>`). These per-session hidden
 # values — NOT the TTSSECU cookie, NOT a hardcoded ID — are what the POST needs.
+# Anchored on the stable discriminator PAGE=login (NOT the full param order):
+# the home page also carries a PAGE=register accserver link with the same
+# ID/SECU prefix, so param order / extra params must not be assumed. Matching
+# `accserver?...PAGE=login...` is resilient to TIPO reordering query params
+# while still excluding the register link (BR_20260718: the hardcoded
+# ID=\d+&SECU=...&PAGE=login&RETURN param-order regex was brittle; a home page
+# that renders params in any other order would silently miss the login link).
 _LOGIN_LINK_RE = re.compile(
-    r'href="(/gpss4/gpsskmc/accserver\?ID=\d+&SECU=-?\d+&PAGE=login&RETURN=[^"]*)"',
+    r'href="(/gpss4/gpsskmc/accserver\?[^"]*\bPAGE=login\b[^"]*)"',
     re.I,
 )
 _HIDDEN_RE = re.compile(
@@ -181,7 +188,18 @@ class GPSS4Session:
         home = await self._client.get(f"{ENTRY}?@@{random.randint(1, 9_999_999)}")
         link_m = _LOGIN_LINK_RE.search(home.text)
         if not link_m:
-            raise GPSS4LoginError("login link not found on home page")
+            # Fail LOUD with a DOM snapshot (BR_20260718): the home page
+            # occasionally returns a non-standard page (throttle interstitial,
+            # error page, or a polluted-jar redirect) instead of the real
+            # 16KB home page. Without the actual title/URL/status/len the next
+            # RCA cannot tell "TIPO changed the DOM" from "we got a wrong page".
+            title_m = re.search(r"<title[^>]*>(.*?)</title>", home.text, re.I | re.S)
+            title = title_m.group(1).strip()[:120] if title_m else "(no <title>)"
+            raise GPSS4LoginError(
+                "login link not found on home page "
+                f"[status={home.status_code} final_url={home.url} "
+                f"len={len(home.text)} title={title!r}]"
+            )
         login_url = BASE + link_m.group(1)
         page = await self._client.get(login_url, headers={"Referer": str(home.url)})
         html = page.text
