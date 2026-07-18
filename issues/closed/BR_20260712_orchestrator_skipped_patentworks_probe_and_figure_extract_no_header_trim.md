@@ -1,7 +1,7 @@
 # BR: 取代表圖走錯觸達機制 — RCA（軸B 主因：orchestrator 未載 patentworks → 對 live MCP tool 用 raw-socket curl / 軸A 殘餘：figure_extract.py 無頁首帶狀裁切）
 
 **Date**: 2026-07-12
-**Status**: Open（軸A 已修，僅軸B 待閉環）
+**Status**: Closed in patentmcp (2026-07-19)——軸A ✅ + B-1 ✅ 已落地；B-2 已 handoff 至 opencode repo（`~/projects/opencode/issues/BR_20260719_domain_entry_probe_code_gate_handoff.md`），patentmcp 側無剩餘工作
 **Priority**: High（軸B 流程缺陷）+ ~~Medium（軸A 工具增補）~~ **軸A DONE**
 
 > **狀態更新（2026-07-18，open-BR 清理盤查）**：

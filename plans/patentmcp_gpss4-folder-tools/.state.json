@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "state": "proposed",
+  "state": "implementing",
   "profile": [],
   "history": [
     {
@@ -10,6 +10,14 @@
       "by": "pkcs12",
       "mode": "new",
       "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "implementing",
+      "at": "2026-07-18T18:08:23.246Z",
+      "by": "pkcs12",
+      "mode": "migration",
+      "reason": "drift reconcile 2026-07-19: implementation landed long ago (46 MCP tools incl gpss4_advanced_search; e2e verified tasks 4.1/5.9); task 1.6 captcha resilience still open; modeling scaffolds unfilled tracked as debt"
     }
   ]
 }

@@ -181,6 +181,7 @@
 
 ## Architecture Sync Note
 
+- 2026-07-19: patentdb 擁有權對齊上線(issue_20260706 F1)。容器以 root 跑(compose 無 `user:`)、`_save_local_patent_cache` 容器側 mkdir/write 產 root-owned 案目錄,host 側 landing scripts(figure_extract.py 等)寫回撞 EACCES。修法:`patentdb_store.py` 新增 `align_db_ownership()`(僅 euid=0 生效;以 bind-mount root(`/patentdb`)的 stat uid/gid 為對齊目標;fail-open 絕不阻斷寫入路徑),`patents.py _save_local_patent_cache` 三寫入點(案目錄/figures/metadata.json)接線。存量 255 個 root-owned 檔/目錄已一次 `chown -R 1000:1000` 修復。容器內功能實測:新建案目錄+檔案落地後 uid=1000。附註:`friction.sqlite`/`observability.sqlite` 為容器側 lazy-init,新建仍可能 root-owned,但僅容器讀寫、不影響 host 落地路徑。
 - 2026-06-15: 已將架構 SSOT 從舊八階段 prompt pipeline 重構為 PatentWorks MCP + skill 現況；新增 analysis 作為資料來源無關的 planned boundary。
 - 2026-06-26: 獨立分析技能流程 `skills/patentworks/flows/analysis.md` 實作完成，並已同步更新 `SKILL.md` 路由表，以及 `screening.md` 與 `drafting.md` 的銜接說明。
 - 2026-07-03: 單一檢索入口上線(plan `patentmcp_search-dispatcher`)。新增 `search_dispatcher.py` + `patent_search` tool;`gpss_search`/`epo_search`/`gpatents_search`/`uspto_patents` search methods 下架;`build_screening_table` 改接 dispatcher;mcp.json 0.3.0;README/skill 文件同步。Critical File Index 舊 `PatentDrafter`/`vendor/patents-mcp` 失效路徑同步修正為現行 repo 佈局。詳見 Debug/Observability Map dispatcher 段。

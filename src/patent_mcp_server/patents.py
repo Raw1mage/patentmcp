@@ -1066,17 +1066,21 @@ def _save_local_patent_cache(
     db_root = _get_db_root()
     target_dir = db_root / country / norm_pat
     rel_path = None
+    from .patentdb_store import align_db_ownership as _align_own
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
+        _align_own(db_root / country, target_dir)
         if file_type == "figure":
             fig_dir = target_dir / "figures"
             fig_dir.mkdir(parents=True, exist_ok=True)
             fname = figure_name or "representative.png"
             (fig_dir / fname).write_bytes(data)
+            _align_own(fig_dir, fig_dir / fname)
             rel_path = f"{country}/{norm_pat}/figures/{fname}"
         else:
             filename = f"specification.{file_type}"
             (target_dir / filename).write_bytes(data)
+            _align_own(target_dir / filename)
             rel_path = f"{country}/{norm_pat}/{filename}"
 
         # metadata.json — enrich with full biblio when provided, else keep/seed stub
@@ -1100,6 +1104,7 @@ def _save_local_patent_cache(
                 if v and not meta_data.get(k):
                     meta_data[k] = v
         meta_path.write_text(json.dumps(meta_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        _align_own(meta_path)
     except Exception as e:
         logger.warning(f"Failed to save local patent cache for {country}/{norm_pat}: {e}")
         return None
@@ -3531,6 +3536,7 @@ async def patent_family_backfill_status(
 @mcp.tool()
 async def patent_enrich_backfill(
     pubnos: Optional[List[str]] = None,
+    pubnos_file: Optional[str] = None,
     from_pool_missing: bool = False,
     fields: Optional[List[str]] = None,
     cursor: int = 0,
@@ -3555,6 +3561,9 @@ async def patent_enrich_backfill(
 
     Args:
         pubnos: explicit publication numbers. Ignored if from_pool_missing.
+        pubnos_file: path (visible inside the container, e.g. /patentdb/x.txt)
+            to a newline-separated pubno list — use this for large target sets
+            so the list never rides the MCP context. Ignored if pubnos given.
         from_pool_missing: sweep patentdb rows missing any requested field.
         fields: subset of ["abstract", "claim1"]; default both.
         cursor: 0-based resume offset into the (stable, sorted) target list.
@@ -3596,8 +3605,17 @@ async def patent_enrich_backfill(
             targets = [r["pubno"] for r in rows]
         finally:
             conn.close()
+    elif pubnos:
+        targets = [p.strip() for p in pubnos if p and p.strip()]
+    elif pubnos_file:
+        try:
+            with open(pubnos_file, "r", encoding="utf-8") as _f:
+                targets = [ln.strip() for ln in _f if ln.strip()]
+        except OSError as _e:
+            return {"success": False, "error": "PUBNOS_FILE_UNREADABLE",
+                    "detail": str(_e)}
     else:
-        targets = [p.strip() for p in (pubnos or []) if p and p.strip()]
+        targets = []
 
     total = len(targets)
     if not targets or cursor >= total:
@@ -3674,11 +3692,77 @@ async def patent_enrich_backfill(
                 else:
                     sig = str(env.get("error_code") or env.get("error")
                               or "SEARCH_MISS")[:120]
+                    if sig == "SCRAPING_REQUIRED":
+                        # GPSS quota-latched / officials all missed for the
+                        # chunk search — no point burning the remaining chunks;
+                        # fall through to the per-item EPO biblio fallback
+                        # (phase 1b) which has its own official quota.
+                        err_counter[sig] += 1
+                        break
                     if _note_err(chunk[0], sig):
                         aborted = True
             except Exception as e:  # noqa: BLE001
                 if _note_err(chunk[0], str(e)[:120]):
                     aborted = True
+
+    # ── phase 1b: EPO OPS biblio per-item fallback (official, GPSS-free) ──
+    # When GPSS is quota-latched the chunked pub_number search cannot land
+    # abstracts (SCRAPING_REQUIRED). EPO OPS biblio is an official per-item
+    # source with its own throttle and NO GPSS quota; sweep the still-missing
+    # rows through it. TW pubnos are skipped (EPO coverage gap — found=false
+    # in probes); they wait for the next GPSS window.
+    epo_filled = epo_miss = 0
+    if "abstract" in want and not aborted and epo_client.configured():
+        consec_sig, consec_fail = "", 0
+        for k in range(idx, total):
+            if _over_budget() or (max_calls and calls_made >= max_calls):
+                idx = k
+                break
+            pub = targets[k]
+            if pub.upper().startswith("TW") or _row_state(pub)["abstract"]:
+                skipped += 1
+                idx = k + 1
+                continue
+            try:
+                res = await asyncio.wait_for(epo_biblio(pub), timeout=20)
+                calls_made += 1
+                if (res.get("success") and res.get("found")
+                        and len((res.get("abstract") or "").strip()) >= 25):
+                    up: Dict[str, Any] = {"abstract": res["abstract"].strip()}
+                    if (res.get("title") or "").strip():
+                        up["title_en"] = res["title"].strip()
+                    if res.get("applicants"):
+                        up["applicants"] = "; ".join(
+                            str(a) for a in res["applicants"])
+                    if res.get("ipc"):
+                        up["ipc_codes"] = "; ".join(
+                            " ".join(str(i).split()) for i in res["ipc"])
+                    _pdb.put(pub, fields=up, acquisition_cost="low")
+                    epo_filled += 1
+                    consec_fail = 0
+                else:
+                    epo_miss += 1
+                    sig = ("EPO_NOT_FOUND" if res.get("success")
+                           else str(res.get("error") or "EPO_ERROR")[:120])
+                    # A legit not-found (e.g. unpublished app) must NOT blow
+                    # the fuse; only real errors count as consecutive fails.
+                    if sig != "EPO_NOT_FOUND" and _note_err(pub, sig):
+                        aborted = True
+            except asyncio.TimeoutError:
+                calls_made += 1
+                epo_miss += 1
+                if _note_err(pub, "EPO_TIMEOUT"):
+                    aborted = True
+            except Exception as e:  # noqa: BLE001
+                calls_made += 1
+                epo_miss += 1
+                if _note_err(pub, str(e)[:120]):
+                    aborted = True
+            idx = k + 1
+            if aborted:
+                break
+        else:
+            idx = total
 
     # ── phase 2: claim1 per-item loop ─────────────────────────────
     if "claim1" in want and not aborted:
@@ -3727,6 +3811,8 @@ async def patent_enrich_backfill(
         "total_targets": total,
         "biblio_queries": biblio_queries,
         "biblio_absorbed": biblio_absorbed,
+        "epo_biblio_filled": epo_filled,
+        "epo_biblio_miss": epo_miss,
         "claim1_filled": claim1_filled,
         "claim1_failed": claim1_failed,
         "skipped": skipped,

@@ -1,7 +1,9 @@
 {
   "schema_version": 1,
-  "state": "implementing",
-  "profile": [],
+  "state": "verified",
+  "profile": [
+    "docs"
+  ],
   "history": [
     {
       "from": null,
@@ -34,6 +36,22 @@
       "by": "pkcs12",
       "mode": "promote",
       "reason": "All 5 phases complete, tasks.md 8/8 checked. search_audit.py + patents.py tool wired (FastMCP registry 28 tools); 7/7 unit tests green incl. two key regressions (missing-USPC→FAIL, single-word-dragnet→FAIL); regression-proven on this session's actual iSafe20 thin search → verdict=FAIL with all 6 gaps listed. priorsearch.md rewritten (matrix-log.jsonl schema, §1.5 rigor floor contract, USPC promoted to first-class axis, review-gate semantics reversed, pre-delivery audit gate); SKILL.md Data Tree collapsed to a pointer (single source of truth in priorsearch.md §0); skill republished to XDG projection (ALL SYNCED). designed-gate's software-SSDLC artifacts intentionally skipped per established pattern (skill+doc+stateless-validator task). git commit deferred to user."
+    },
+    {
+      "from": "implementing",
+      "to": "implementing",
+      "at": "2026-07-18T18:05:53.704Z",
+      "by": "pkcs12",
+      "mode": "sync",
+      "reason": "set lifecycle profile software → docs (drives plan-validate artifact requirements)"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-18T18:06:03.498Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "all 34 tasks checked incl DD-7 amend; unit tests PASS + audit verdict=PASS recorded in tasks 2.x/6.4"
     }
   ]
 }

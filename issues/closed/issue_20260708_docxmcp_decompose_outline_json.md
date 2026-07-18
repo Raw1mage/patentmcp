@@ -46,3 +46,9 @@ assemble / pack。
 
 - decompose 產出 outline.json,結構樹層級正確、stable_id 可追、img/tbl count 守恆。
 - AI 可直接用 outline.json 做章塊搬移/合併推理,無需自寫 splitter。
+
+---
+
+## Handoff 紀錄(2026-07-19)
+
+本 FR 屬 docxmcp 元件,已 handoff 至 `~/projects/docxmcp/issues/FR_20260719_decompose_outline_json_handoff.md`,patentmcp 側關閉追蹤。

@@ -26,6 +26,14 @@
 統籌修復三份 BR 中所有「本 repo 可改」的點,跨 code(工具層 + gpss)與 skill 文件,
 逐項實作 + 驗證,並對需先查規格的點(uspc/family)做偵查後決策。
 
+## Capabilities
+
+- 工具層顯式爬蟲 gate（`fetch_patent_pdf allow_scraping`）+ 參數命名統一（`publication_number(s)` canonical + alias）
+- `extract_representative_figure` 失敗分級 + `ppubs_get_full_document` 便利包裝
+- GPSS `claim1_empty` 旗標（US 案空 claim1 偵測）
+- patentworks SKILL.md §5 來源梯窮舉門檻 + 工具清單更新 + 爬蟲天條重寫
+- D1/D2 偵查後決策（USPC 軸 / INPADOC family 落 skill 文件記載）
+
 ## Scope
 
 ### IN

@@ -1,7 +1,7 @@
 # ISSUE (工具層): 取圖落地路徑兩個 friction — patentdb 目錄 root 擁有權 + WO 純掃描件無 OCR fallback
 
 **Date**: 2026-07-06
-**Status**: Open
+**Status**: Closed (2026-07-19)
 **Priority**: Medium
 **Target**: `skills/patentworks/scripts/figure_extract.py` + patentdb 目錄佈建流程
 **Reporter**: AI Agent(驗證 A 取圖子代理揭出)
@@ -38,3 +38,17 @@
 
 ## 關聯
 - 揭出來源:BR_20260628 驗證 A(委派契約回歸,3/3 取圖通過)。這兩個 friction 不影響委派契約正確性,是取圖工具鏈的獨立缺陷。
+
+---
+
+## 閉環紀錄(2026-07-19)
+
+**Friction 1 — 已修** ✅:
+- 根因確認:容器以 root 跑(compose 無 `user:`、Dockerfile 無 `USER`),`_save_local_patent_cache` 容器側 mkdir/write 產 root-owned 目錄。實測 `patentdb/CN|US` 新目錄 uid=0、`patentdb/WO/2018151004A1/` root-owned 皆吻合。
+- 修法:`patentdb_store.py` 新增 `align_db_ownership()`(僅 euid=0 時生效,對齊 bind-mount root 擁有者,fail-open),`patents.py _save_local_patent_cache` 三個寫入點(case dir/figures/metadata.json)接線。
+- 存量修復:`docker compose exec patentmcp chown -R 1000:1000 /patentdb`,255 個 root-owned 檔/目錄 → 0(`find patentdb -uid 0 | wc -l` = 0)。
+- 附帶:`friction.sqlite`/`observability.sqlite`(容器側 lazy-init sqlite)一併轉正;後續新建仍可能 root-owned,但 sqlite 僅容器讀寫,不影響 host 落地路徑。
+
+**Friction 2 — 已由 BR_20260715 #04 修復,本次功能驗證通過** ✅:
+- `figure_extract.py` 已內建 image-projection fallback(純像素列投影分類 text/figure 頁,免 OCR、免文字層;fitz 或 poppler+Pillow 引擎)。
+- 驗證(本 issue §4 指定手段):對 WO2018151004A1(純掃描 33 頁)實跑 → `{"success": true, "page": 27, "method": "image_projection"}`,回非空候選代表圖,無需人工視覺。

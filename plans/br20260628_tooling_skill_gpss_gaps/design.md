@@ -22,7 +22,7 @@
 - **DD-6**: D1(uspc)/ D2(family)需先查 TIPO GPSS API 規格。**無本機規格文件**(refs/ 無 GPSS 文件)。決策:Phase 5 先以 webfetch 查 TIPO GPSS API 官方文件確認有無 US 分類欄位代碼;確認支援才加 `uspc` 參數,否則落 skill 文件樣板。**未確認不得臆造欄位代碼(反幻覺)**。
 - **DD-7**: DD-7 (Phase 6 偵查結論): 無法取得 TIPO GPSS API 官方欄位規格(webfetch 只回 usage stub / gpss_doc 404 / 規格 PDF 需 userCode 認證,本機無)。GPSS 已確認欄位碼僅 PN/ID/TI/IN/PA/AB/CS(CPC)/CL/IC(IPC),無 US 分類欄位證據。依反幻覺原則,不臆造 uspc 欄位碼。決策:D1(uspc)與 D2(family)皆落 skill 文件——USPC 軸走 uspto_patents PPUBS CCL 樣板;family 記載「GPSS 去重=公開號級,epo_family 補家族」(後者既有 skill 已載,grounded)。gpss_search 不加 uspc 參數。
 
-## Risks
+## Risks / Trade-offs
 
 - **R1**: `fetch_patent_pdf` 預設行為改變 → 既有呼叫端(`extract_representative_figure`、batch figures)若沒同步傳 `allow_scraping=True`,TW 案抓圖會壞。緩解:Phase 1 同步改所有內部呼叫端,加測試。
 - **R2**: 參數 alias 若處理不全 → validation error。緩解:逐工具加 alias + 測試兩種參數名都通。

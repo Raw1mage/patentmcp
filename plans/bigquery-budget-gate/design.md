@@ -4,13 +4,15 @@
 
 BigQuery client (`src/patent_mcp_server/google/bigquery_client.py`) 目前每次查詢只套 `maximum_bytes_billed=10GB`（單次封頂），無月累積感知。`patents.py` 暴露 8 個 `google_*` 工具，其中 5 個是全表 LIKE 掃描（燒錢），3 個是單號取文（安全）。
 
-## Goals
+## Goals / Non-Goals
+
+### Goals
 
 - 月用量可查、可作為使用/拒用 BQ 的依據
 - 移除所有 BQ 專屬燒錢工具
 - 超額硬擋全部 BQ（fail-fast，無 silent fallback）
 
-## Non-Goals
+### Non-Goals
 
 - 不重建檢索能力到 BQ（走 GPSS/EPO）
 - 不串即時帳單 API
@@ -25,7 +27,7 @@ BigQuery client (`src/patent_mcp_server/google/bigquery_client.py`) 目前每次
 - **DD-6**: 收斂 `google_get_patent` 的 `SELECT *`。BigQuery 按 SELECT 欄位計費，`SELECT *` 對 publications 表掃所有欄位最貴。改為明確列出書目欄位集（與 search_patents 既有欄位集一致），避免掃 claims/description 等巨大 nested 欄位。
 - **DD-7**: 新增 config：`BIGQUERY_MONTHLY_BUDGET_BYTES`（預設 1 TiB = 1099511627776）、`BIGQUERY_USAGE_DB_PATH`（本地記帳 sqlite 路徑）、`BIGQUERY_RECONCILE_TTL_SECONDS`（預設 900）。
 
-## Risks
+## Risks / Trade-offs
 
 - **R1**: INFORMATION_SCHEMA 需 `bigquery.jobs.list`，service account 可能沒有 → 降級本地快取（DD-2），不阻斷。
 - **R2**: 移除 5 工具是破壞性 API 變更 → skill 已標註不該用，影響面小；event log + skill 同步。

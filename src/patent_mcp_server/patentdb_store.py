@@ -40,6 +40,30 @@ def _db_path() -> Path:
     return root / "patentdb.sqlite"
 
 
+def align_db_ownership(*paths) -> None:
+    """Align ownership of container-created patentdb entries to the bind-mount
+    root's owner (issue_20260706 F1).
+
+    The container runs as root while the host user owns ./patentdb; without this,
+    case dirs minted container-side are root-owned and host-side landing scripts
+    (figure_extract.py etc.) hit EACCES. No-op unless running as root; fail-open
+    (ownership alignment must never block the write path)."""
+    import os
+    try:
+        if os.geteuid() != 0:
+            return
+        st = os.stat(_resolve_db_root())
+        if st.st_uid == 0:
+            return  # bind-mount root itself is root-owned: nothing to align to
+        for p in paths:
+            try:
+                os.chown(p, st.st_uid, st.st_gid)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 # ---- pubno 正規化（與 patents.py _get_patent_country_and_normalized_no 對齊）----
 
 # ISO-3166 alpha-2 country codes that appear as publication-number prefixes in
