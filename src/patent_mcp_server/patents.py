@@ -2937,6 +2937,26 @@ def _gpss_web_parse_totals(watch_text: str) -> Dict[str, int]:
     return totals
 
 
+def _gpss_web_parse_result_count(html: str) -> Optional[int]:
+    """Parse the result page's human-readable MAIN count line — the true
+    per-expression hit count (issue_20260716 totals誤導):
+
+        檢索結果： 共 359 筆，第 1/8 頁， 每頁 50 筆
+
+    The number may be wrapped in markup (gpss4 wraps it in a numfmt font/span),
+    so tags between 「共」 and 「筆」 are tolerated. Returns None when the line
+    is absent (e.g. zero-hit page without a result list)."""
+    import re
+    m = re.search(
+        r'共[\s:：]*(?:<[^>]+>\s*)*([\d,]+)\s*(?:</[^>]+>\s*)*\s*筆', html)
+    if not m:
+        return None
+    try:
+        return int(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+
+
 def _gpss_web_is_too_broad(html: str, ptmp: str = "") -> bool:
     """Detect a genuine >30萬母數 overflow (DD-4) — fail-fast rather than poll
     an infinite母數.
@@ -3090,8 +3110,19 @@ async def _gpss_web_search_impl(
                         "provenance": provenance,
                     }
 
-                # A4b: poll ttsserv_watch for per-db exact counts (t7)
+                # A4a2: the result page's 「共 N 筆」 main line IS the true
+                # per-expression hit count (issue_20260716) — parse it up front,
+                # independent of the per-db watch poll below.
+                result_count = _gpss_web_parse_result_count(res.text)
+
+                # A4b: poll ttsserv_watch for per-db exact counts (t7).
+                # Readiness needs TWO consecutive identical rounds: round 1
+                # often returns the residual whole-library母數 before the
+                # per-db counters refresh (issue_20260716 — rounds=1 break was
+                # exactly the stale-totals bug), so a single "looks numeric"
+                # round is NOT proof of readiness.
                 totals: Dict[str, int] = {}
+                prev_totals: Optional[Dict[str, int]] = None
                 pending = False
                 if ptmp:
                     kmtmp = ptmp.split("/", 1)[0]
@@ -3107,11 +3138,14 @@ async def _gpss_web_search_impl(
                         # A db still counting shows a countdown, not a number
                         if totals and "countdown" not in wres.text.lower() \
                                 and "reclock" not in wres.text.lower():
-                            break
+                            if prev_totals == totals:
+                                break  # stable across two rounds → ready
+                            prev_totals = totals
                     else:
                         pending = True
                     provenance.append({"step": "poll", "ok": not pending,
-                                       "rounds": attempt + 1})
+                                       "rounds": attempt + 1,
+                                       "stable": prev_totals == totals})
 
                 # A5: parse result-list bibliography (reuse existing helper)
                 records: List[Dict[str, str]] = []
@@ -3121,9 +3155,15 @@ async def _gpss_web_search_impl(
                     records.append({"pubno_core": core, "doc_type": doc_type,
                                     "harder_path": path})
 
-                grand_total = sum(totals.values()) if totals else len(records)
+                # result_count (「共 N 筆」 main line) is the authoritative
+                # per-expression hit count; per-db totals are advisory and only
+                # trustworthy when the poll reached stability (issue_20260716).
+                grand_total = (result_count if result_count is not None
+                               else (sum(totals.values()) if totals
+                                     else len(records)))
                 result = {
                     "success": True,
+                    "result_count": result_count,
                     "totals": totals,
                     "grand_total": grand_total,
                     "records": records,
@@ -3174,10 +3214,16 @@ async def gpss_web_search(
             omit for the site default. Narrow by country to avoid >30萬母數.
         num: max result-list bibliography rows to return (NOT the母數 cap).
 
-    Returns {success, totals:{db:count}, grand_total, records[], query_applied,
-    databases_queried, provenance[]}. On >30萬母數 returns success=false /
-    GPSS_WEB_RESULT_TOO_BROAD with a narrowing hint (never records). This tool
-    NEVER touches the gpss_api REST path.
+    Returns {success, result_count, totals:{db:count}, grand_total, records[],
+    query_applied, databases_queried, provenance[]}.
+    *** result_count is the AUTHORITATIVE per-expression hit count *** — parsed
+    from the result page's 「共 N 筆」 main line (issue_20260716). totals are
+    per-database advisory counts from the watch poll; they can lag behind (a
+    not-yet-refreshed poll shows residual whole-library母數) — trust them only
+    when provenance shows poll stable=true. grand_total prefers result_count.
+    On >30萬母數 returns success=false / GPSS_WEB_RESULT_TOO_BROAD with a
+    narrowing hint (never records). This tool NEVER touches the gpss_api REST
+    path.
     """
     return await _gpss_web_search_impl(
         expr=expr, date_from=date_from, date_to=date_to,
@@ -4009,6 +4055,7 @@ async def patent_bulk(
     num: int = 100,
     skip: int = 0,
     slice_plan: bool = False,
+    return_records: bool = True,
 ) -> Dict[str, Any]:
     """Unified BULK harvest — exhaustively pull a result set from ONE explicitly
     chosen source in a single call, with server-side auto-pagination (and, for
@@ -4097,11 +4144,19 @@ async def patent_bulk(
             return a date-slice plan (zero records / zero absorb) so a >2000
             query can be harvested slice-by-slice. gpss+slice_plan →
             INVALID_PARAMS.
+        return_records: default True (back-compat). Set False for the SLIM
+            envelope (issue_20260710): records are STILL absorbed into patentdb
+            in full, but the response replaces `records[]` with `pubnos[]`
+            (membership/provenance only) — use this when driving a page-loop
+            whose goal is landing patentdb rows, so multi-thousand-row pulls
+            don't flood the caller's context with biblio bodies it never reads
+            (full text is queryable from patentdb afterwards).
 
     Returns {success, records[], source, provenance[], gaps[], total, next_skip,
     exhausted, patentdb_absorb, error_code?}. error_code is INVALID_PARAMS
     (bad/missing source or axis) / GPSS_NOT_CONFIGURED / GPSS_ERROR /
-    EPO_NOT_CONFIGURED / EPO_ERROR.
+    EPO_NOT_CONFIGURED / EPO_ERROR. With return_records=false, `records` is
+    replaced by `pubnos[]` (records_returned=false marker added).
     """
     spec = _sd.normalize_query(
         ipc=ipc, cpc=cpc, uspc=uspc, keyword=keyword, keyword_field=keyword_field,
@@ -4142,7 +4197,7 @@ async def patent_bulk(
                 and _total > _sd._EPO_SKIP_WALL and not envelope.get("exhausted")):
             envelope["slice_hint"] = (
                 "total exceeds OPS skip wall; use slice_plan=true")
-        return envelope
+        return _bulk_slim(envelope, return_records)
 
     # gpss (or invalid source → INVALID_PARAMS from _sd.bulk, zero backend calls).
     envelope = await _sd.bulk(
@@ -4155,6 +4210,20 @@ async def patent_bulk(
         except Exception as e:  # noqa: BLE001 — absorb must never break harvest
             logger.warning(f"patentdb absorb failed for patent_bulk: {e}")
             envelope["patentdb_absorb"] = {"error": "absorb_failed", "detail": str(e)}
+    return _bulk_slim(envelope, return_records)
+
+
+def _bulk_slim(envelope: Dict[str, Any], return_records: bool) -> Dict[str, Any]:
+    """issue_20260710: with return_records=false, strip biblio bodies AFTER the
+    absorb already landed them — keep pubnos for membership/provenance so a
+    page-loop caller's context isn't flooded by record bodies it never reads.
+    Trims ONLY successful envelopes; error envelopes pass through untouched."""
+    if return_records or not envelope.get("success"):
+        return envelope
+    records = envelope.pop("records", None) or []
+    envelope["pubnos"] = [
+        p for p in ((r.get("pubno") or "").strip() for r in records) if p]
+    envelope["records_returned"] = False
     return envelope
 
 

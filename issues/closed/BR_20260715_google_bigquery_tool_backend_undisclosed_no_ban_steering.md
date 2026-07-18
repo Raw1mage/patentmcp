@@ -58,3 +58,23 @@ opencode 端核對原始碼後確認：
 - 來源／重歸屬自：opencode `issues/BR_20260713_central_dispatcher_no_policy_gate_for_mcp_app_tools.md`
 - 同族（MCP app 工具治理缺口，opencode 側）：`BR_20260705_mcp_app_tools_not_autoloaded_subagent_silent_kill`、`BR_20260706_invalid_sink_no_did_you_mean_for_mcp_app_tools`
 - 本 repo companion skill：`skills/patentworks/SKILL.md`
+
+---
+
+## Resolution（2026-07-18，fixed）
+
+**現況核對，兩條主修法皆落地**：
+1. **（主）工具後端揭露**：`src/patent_mcp_server/patents.py:752 / 794 / 834` 三工具
+   （`google_get_patent` / `google_get_patent_claims` / `google_get_patent_description`）
+   description 開頭已加
+   `[BigQuery-BILLED backend — subject to environment-level BigQuery ban]`。存在性訊號
+   與計費/禁令屬性已對齊——讀 description 即可辨識，不必等 500。
+2. **（主）patentworks skill 導向**：`skills/patentworks/SKILL.md:30` 已加 **R17 後端分流
+   紀律**——書目/claims/description 查核預設 TIPO GPSS（`patent_search` /
+   `ppubs_batch_get_claims` / `patent_get_claim1`，`source:tipo`）、EPO OPS、USPTO PPUBS；
+   `google_*` BigQuery 路徑列為受禁/需明示授權，非反射預設。
+
+驗收（BR §驗收）達成：description 自述後端 + 禁令；skill 載入後反射預設走官方梯。
+
+**輔項（§3 companion 宣告）**：屬 opencode enablement 側的 registry 補全，跨 repo；
+patentmcp 域內兩條主修法已足以恢復「不誤選 BigQuery」的契約，本 BR close。

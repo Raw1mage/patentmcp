@@ -52,22 +52,29 @@ def _fail(code: str, message: str, **extra) -> None:
 
 # ── pubno normalization (vendored from patentdb_store.py) ─────────────
 
+_KNOWN_CC = (
+    "TW", "US", "EP", "WO", "CN", "KR", "JP", "CA", "AU", "DE", "GB",
+    "FR", "ES", "FI", "PL", "MX", "IT", "NL", "SE", "CH", "AT", "BE",
+    "DK", "NO", "RU", "IN", "BR", "SG", "IL", "HK", "MO", "CZ", "GR", "TR",
+)
+
+
 def normalize_pubno(publication_number: str) -> Tuple[str, str]:
     pat = re.sub(r"[\s/\-,\.]+", "", publication_number or "").upper()
     country = "US"
-    if pat.startswith("TW"):
-        country, pat = "TW", pat[2:]
-    elif pat.startswith("US"):
-        country, pat = "US", pat[2:]
-    elif pat.startswith("EP"):
-        country, pat = "EP", pat[2:]
-    elif pat.startswith("WO"):
-        country, pat = "WO", pat[2:]
-    elif pat.startswith("CN"):
-        country, pat = "CN", pat[2:]
-    elif re.match(r"^[IMD]\d+", pat):
+    # A pubno leads with its own 2-letter ISO country code. Match the FULL known
+    # set (not just TW/US/EP/WO/CN) so foreign numbers are split correctly and
+    # never get a spurious default-US prefix stacked on top
+    # (issue_20260710_pubno_normalize_us_prefix_misattach; mirrors
+    # patentdb_store.py fix, commit b66b387).
+    matched_cc = False
+    for cc in _KNOWN_CC:
+        if pat.startswith(cc):
+            country, pat, matched_cc = cc, pat[len(cc):], True
+            break
+    if not matched_cc and re.match(r"^[IMD]\d+", pat):
         country = "TW"
-    elif re.match(r"^\d{9}$", pat):
+    elif not matched_cc and re.match(r"^\d{9}$", pat):
         country = "TW"
     m_cert = re.match(r"^([IMD]\d+)[A-Za-z]*$", pat)
     if m_cert:

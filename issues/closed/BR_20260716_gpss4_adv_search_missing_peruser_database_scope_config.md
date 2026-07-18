@@ -63,3 +63,22 @@
 
 - `closed/BR_20260716_gpss_web_paths_cn_database_zero_coverage.md`（已撤回）：那份誤判 gpss4 對 CN 有 bug，真因就是本 BR 的設定範圍問題——本 BR 是它的正確版根因 + 修法。
 - `issue_20260716_gpss_web_patdb_country_narrowing.md`（observing）、`issue_20260716_gpss_web_search_totals_missing_main_count_line.md`（open）：那兩個是 `gpss_web_search`(gpss3) 路徑的限縮/解析問題，與本 BR（gpss4 進階檢索的 per-user 庫範圍設定）正交。
+
+---
+
+## Resolution（2026-07-18，fixed）
+
+**現況核對**：core 修法已 live 驗證並 graduate 成 KB spec
+`specs/patentmcp_gpss-web-login-db-scope/`（software profile，已離開 /plans/）。
+證據：
+- `src/patent_mcp_server/gpss4/adv_search.py:400-497` 已實作 `set_search_databases()`
+  + `GPSS4DbScopeError`（未知碼/表單 action 缺失/存檔失敗 → typed，fail-fast 不靜默）。
+- `patents.py:5322` `gpss4_advanced_search` 加 `databases` 參數；`patents.py:5439`
+  獨立 tool `gpss4_set_search_scope` 已上線。
+- BR 自述 `dbscope_verify.html` 已證帳號檢索庫精確鎖成 `_20_1_S_CA`+`_20_1_S_CB`。
+
+對應 BR §治理 plan 的 DD-3 / DD-6 / tasks §1-2 全數落地。fail-fast 無 fallback（天條）達成。
+
+**殘留（正交，不阻擋本 close）**：CN 結果頁 pat_no parser 缺陷由
+`observing/issue_20260716_gpss4_adv_cn_result_page_patno_in_ajax.md` 追蹤；gpss3
+路徑的兩個 issue 亦正交（見上）。核心「per-user 庫範圍」能力已完整交付，本 BR close。

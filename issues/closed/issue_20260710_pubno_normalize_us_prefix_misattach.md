@@ -23,3 +23,18 @@
 ## Workaround（現行）
 
 落地後手動 UPDATE pubno/country；本案 v3 已修 3 件。
+
+---
+## 結案（2026-07-19）
+
+**修法落地（三件套）**：
+1. **container SSOT**（`src/patent_mcp_server/patentdb_store.py`）：`_KNOWN_CC` 已於 commit b66b387 修為全國別碼先剝離；本次補 `CZ/GR/TR`（庫內實證出現的髒號國別）。
+2. **host vendored copy**（`skills/patentworks/scripts/patentdb_local.py`）：原本仍是舊版五前綴 + `country="US"` 預設——**髒號持續產生的實際源頭**。已同步為 `_KNOWN_CC` 全碼剝離版，並以 10 case parity test 證實 host==container。
+3. **一次性 migration**（patentdb.sqlite，62706 rows）：
+   - 備份 `patentdb/.history/patentdb.pre-pubno-migration-20260719.sqlite`
+   - 刪 1 筆 collision dup（`USDE102025140339A1`，乾淨版 `DE102025140339A1` 已在庫且資料完整度相同）
+   - UPDATE 1113 筆 `US<CC>…` 髒號 → 剝 US 前綴、修 `country`/`normalized_no`（KR506/DE333/JP133/AU37/FR16/GB15/TW/CN/TR/CZ/GR 等）
+   - 補修 17 筆 `normalized_no` 殘留雙前綴
+   - FTS rebuild + `PRAGMA integrity_check` = ok；髒號殘留掃描 = 0
+
+**注**：`RE\d+`（US reissue）正確保留 US 歸屬，不在 `_KNOWN_CC`。

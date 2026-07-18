@@ -51,7 +51,7 @@ def _db_path() -> Path:
 _KNOWN_CC = (
     "TW", "US", "EP", "WO", "CN", "KR", "JP", "CA", "AU", "DE", "GB",
     "FR", "ES", "FI", "PL", "MX", "IT", "NL", "SE", "CH", "AT", "BE",
-    "DK", "NO", "RU", "IN", "BR", "SG", "IL", "HK", "MO",
+    "DK", "NO", "RU", "IN", "BR", "SG", "IL", "HK", "MO", "CZ", "GR", "TR",
 )
 
 

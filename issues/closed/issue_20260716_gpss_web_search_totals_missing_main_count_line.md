@@ -43,3 +43,11 @@
 
 需要檢索式真命中母數 + pubno 池時，改用 `gpss4_advanced_search`（回 `total`/`hit_count` + pubno 逐筆）；
 `gpss_web_search` 目前僅適合快速存在性探針，其 totals 不可作召回母數。
+
+---
+## 結案（2026-07-19）
+
+三項建議修法全部落地（`src/patent_mcp_server/patents.py`）：
+1. **主計數行解析**：新增 `_gpss_web_parse_result_count()`（容忍「共」與「筆」之間的 markup 包裹，如 gpss4 的 numfmt font/span），回傳新欄位 `result_count`；`grand_total` 改為優先取 `result_count`。5 case 單元 sanity 通過（含千分位、markup 包裹、零命中、行缺失→None）。
+2. **poll 就緒判斷加碼**：改為「連續兩輪 totals 完全相同」才 break（two-consecutive-identical-rounds stability check），杜絕 rounds=1 讀到殘留全庫母數即返回；provenance 補 `stable` 欄位。
+3. **docstring 標註**：`gpss_web_search` 回傳說明明示 `result_count` = 檢索式權威命中數、`totals` = 各庫 advisory（僅 poll stable=true 時可信）。

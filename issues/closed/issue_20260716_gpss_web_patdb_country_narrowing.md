@@ -35,3 +35,7 @@
 
 回應的 `totals` 已把各庫命中數分開列出（`{美國公開: 7870, 美國公告: 10537, ...}`），
 呼叫端可自行加總目標國別欄位，不需依賴 patDB 限縮。
+
+---
+## 結案（2026-07-19）
+已被 DD-3（BR_20260716）取代：gpss3 web 表單根本無 patDB 欄位，`patents.py:2999-3010` 現對 `databases` 參數 fail-fast 回 `GPSS_WEB_DBSCOPE_UNSUPPORTED`；scope 限縮正解走登入態 `gpss4_set_search_scope`（已實作並 live 驗證，見 closed BR_20260716_gpss4_adv_search_missing_peruser_database_scope_config）。→ closed。

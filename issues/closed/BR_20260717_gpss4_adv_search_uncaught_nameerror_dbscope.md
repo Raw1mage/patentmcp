@@ -58,3 +58,23 @@ adv_search.py 內不應 NameError。嫌疑指向 `patents.py` 某條 fallback/�
   顯式報錯、保留證據)。裸 NameError 讓呼叫方無法程式化辨識失敗類別。
 - 本 POC 查證未受阻(改用 `gpss4_set_search_scope` 先建 scope 即繞過),但記錄在案
   供工具層修正。
+
+---
+
+## Resolution（2026-07-18，fixed — 重複件，已由 issue_20260717 修復）
+
+**現況核對**：`src/patent_mcp_server/patents.py:5322` 的 `gpss4_advanced_search`
+function-local import 現已為 `harvest, GPSS4AdvSearchError, GPSS4DbScopeError`（三名字
+齊備）；`except GPSS4DbScopeError`（5354）落在該 import 作用域內，NameError 冒泡路徑已消除。
+
+**根因與本 BR §「根因(嫌疑)」一致**：BR_20260716 db-scope 新增 code 時，
+`gpss4_advanced_search` 的 except 子句引用 `GPSS4DbScopeError` 但 local import 漏補
+→ error-path latent regression。**契約恢復**：owning spec
+`specs/patentmcp_gpss-web-login-db-scope` tasks §3.1（庫範圍設定失敗 → typed
+`GPSS4_DBSCOPE_FAILED`，不靜默降級不崩潰）。
+
+**重複關係**：本 BR 與 `closed/issue_20260717_gpss4_advanced_search_nameerror.md`
+為同一缺陷的兩份回報；後者已含完整 RCA + AST 驗證。本 BR 併入 close，不重複修。
+
+**次要建議（§修復方向 2，非法欄碼 `@IC` 入口驗證）**：屬可用性增補、非契約破裂，
+未在本次 scope；如需可另開 issue 追蹤。

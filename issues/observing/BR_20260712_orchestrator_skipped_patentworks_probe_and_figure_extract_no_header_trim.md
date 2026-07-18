@@ -1,8 +1,28 @@
 # BR: 取代表圖走錯觸達機制 — RCA（軸B 主因：orchestrator 未載 patentworks → 對 live MCP tool 用 raw-socket curl / 軸A 殘餘：figure_extract.py 無頁首帶狀裁切）
 
 **Date**: 2026-07-12
-**Status**: Open
-**Priority**: High（軸B 流程缺陷）+ Medium（軸A 工具增補）
+**Status**: Open（軸A 已修，僅軸B 待閉環）
+**Priority**: High（軸B 流程缺陷）+ ~~Medium（軸A 工具增補）~~ **軸A DONE**
+
+> **狀態更新（2026-07-18，open-BR 清理盤查）**：
+> - **軸A（figure_extract header-trim）已修** ✅：`skills/patentworks/scripts/figure_extract.py`
+>   已實作 `_trim_header_band()`（:394）+ `_autocrop_to_png(trim_header=...)`（:441）+
+>   CLI `--trim-header`/`--no-trim-header`（:480-487）+ `_crop_render_png(trim_header=...)`
+>   （:356），docstring 標記 `BR_20260712 軍A`。§3 軸A 修法 3 已落地。
+> - **軸B（orchestrator 領域盤查強制性 + GPSS 首選圖工具命名曝光）待閉環** 🟡：
+>   屬跨層紀律問題（AGENTS.md 領域進入點盤查仍是 prose 反射、無 code 閘；
+>   `gpss_download_representative_figure` 在 README 產物段命名曝光不足）。
+>
+> **2026-07-18 驗證後細分**（軸B 拆兩塊，必要性不同）：
+> - **B-1 patentmcp 域內（README 命名曝光）已閉環** ✅：`README.md:13` 產物段原只列
+>   `gpatents_download_pdf/figure`（爬蟲尾級），現已改為首選
+>   `gpss_download_representative_figure`（country-agnostic 官方乾淨代表圖）/ TW·CN 走
+>   `patentmcp_batch_download_figures`，`gpatents_*` 降為尾級 fallback（對齊 §3 修法 5a）。
+>   注：SKILL.md:235-236 早已有強 GPSS-first 取圖鐵律，故域內殘留僅 README 這一處。
+> - **B-2 opencode harness 域（orchestrator 領域盤查 code 閘）待處理** 🟡：跨 repo，
+>   非 patentmcp 責任（AGENTS.md 領域進入點盤查仍是 prose 反射、無 code 閘；屬
+>   opencode companion-binding 機制）。本 BR 在 patentmcp 側的實質工作已全數落地，
+>   保持 open 僅為追蹤 opencode 側的 harness 修法。
 **Target**:
 - 軸B（主因）：orchestrator 領域進入點盤查（AGENTS.md「領域進入點盤查」反射）→ 未載 skill 導致看不到 R13 兩平面圖 → 對 container-plane live MCP tool 反射用 raw `curl --unix-socket` + 手拼 JSON-RPC，而非 MCP toolcall
 - 軸A（殘餘）：`skills/patentworks/scripts/figure_extract.py` 無 header-trim

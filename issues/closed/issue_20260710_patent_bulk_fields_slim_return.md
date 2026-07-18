@@ -33,3 +33,13 @@ context。大 total（1000+ 筆 = 50+ 頁）的逐頁驅動迴圈，caller conte
 
 - `patent_bulk(..., return_records=false)` 回傳無 records 內文、有 pubnos + absorb 統計
 - 預設行為不變（向後相容）
+
+---
+## 結案（2026-07-19）
+
+以 `return_records: bool = True`（預設向後相容）落地於 `patent_bulk` MCP wrapper 層（`src/patent_mcp_server/patents.py` `_bulk_slim()`），dispatcher 層 untouched（DD-7 精神）：
+- `return_records=false` 時：absorb 照常全量落地 patentdb → 回傳把 `records[]` 換成 `pubnos[]`（membership/provenance 保留）+ `records_returned: false` 標記；`total`/`next_skip`/`exhausted`/`patentdb_absorb`/`sharding` 等驅動欄位全數保留。
+- 只裁剪 success envelope；error envelope 原樣通過（不遮 debug 證據）。
+- 驗證：`_bulk_slim` 3 case 單元測試（slim/back-compat/error passthrough）+ 既有 store/slice 測試 20 passed。
+
+**Scope 註**：GPSS 側大池（萬行級）正解仍是 `gpss4_advanced_search` 的 token/file delivery rail；本修法解的是 `patent_bulk` 逐頁驅動迴圈（EPO 或中等 GPSS slice）的 caller context 灌爆問題。

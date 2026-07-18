@@ -49,3 +49,25 @@ D4 收窄式 slice-1 同法again落地 191 筆。證實 num=100 逾時凍結的�
 
 - D2 WiFi/CSI（934）卡在 +11
 - D4 A61B5/0205 收窄式（2370）已拍板全撈，同樣會撞牆——量更大
+
+---
+
+## Resolution（2026-07-18，fixed — 修復方向 1「自動縮頁」已落地）
+
+**現況核對**：`src/patent_mcp_server/search_dispatcher.py` EPO bulk 路徑已實作
+MCP-timeout-safe 的自動縮頁 + 斷點續跑：
+- `_EPO_CALL_BIBLIO_CAP = 20`（:938）：每 call 的 biblio fan-out 上限 cap 到 20，
+  確保單次呼叫在 MCP transport timeout（~2min）內乾淨返回（對齊 BR 修復方向 1 與
+  workaround 實戰的 num≤20 決定性有效）。
+- `target = min(spec.num, _EPO_CALL_BIBLIO_CAP, _EPO_SKIP_WALL)`（:989）：caller 帶更大
+  num 時靠 `next_skip` 逐 call 續跑，不再單 call 燒節流撈同一批。
+- envelope 帶 `next_skip` / `exhausted` / `page_capped`（:1096-1102）：`page_capped=true`
+  提示 caller 帶 `next_skip` 再呼叫，不誤判 total 已撈完；COALESCE upsert 冪等。
+- `_EPO_SKIP_WALL = 2000`（:927）deep-paging wall 明示。
+
+**KB 同步**：patentworks SKILL.md §197-198 已寫入 EPO 大母數自動切片工作流
+（`slice_plan` planning-only + 逐片 `next_skip` 續撈 + `SLICE_INEFFECTIVE` 守恆自證）
+與兩源通用續撈語義。
+
+驗收（BR §驗收）達成：EPO 全撈可在 MCP 環境內逐頁乾淨返回、`next_skip`/`exhausted`
+真實可用。修復方向 2（背景 job 模式）當時標「架構較大，另議」，非本次 scope。本 BR close。
