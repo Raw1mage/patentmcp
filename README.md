@@ -10,7 +10,7 @@
 專利資料檢索與檔案交付。fork 自 openpharma/patents-mcp(MIT)並擴充:
 - **檢索**:`patent_search`(**單一檢索入口**,來源梯內建:TIPO GPSS 官方 API 首選 → EPO OPS → USPTO PPUBS → gated Google Patents 爬蟲;依憑證與查詢軸自動路由,每級嘗試記入 `provenance`;爬蟲尾級須 `allow_scraping=true` 明確授權,否則官方全 miss 即 `SCRAPING_REQUIRED` fail-fast)。
   - 舊分散檢索工具已下架:`gpss_search`、`epo_search`、`gpatents_search`、`uspto_patents` 的 `ppubs_search_*` methods → 一律改用 `patent_search`。單號取文工具(`epo_family`/`epo_biblio`/`gpatents_get`/`ppubs_batch_get_claims`/PPUBS 全文)保留。
-- **取文/產物**:`gpatents_get`(完整摘要+claims)、`gpatents_download_pdf/figure`(代表圖/PDF)。
+- **取文/產物**:`gpatents_get`(完整摘要+claims)。代表圖**首選** `gpss_download_representative_figure`(GPSS headless,country-agnostic,直出官方乾淨代表圖、無頁首帶狀)/ TW·CN 批量走 `patentmcp_batch_download_figures`;`gpatents_download_pdf/figure` 是 Google Patents 爬蟲**尾級** fallback(BR_20260712:命名別讓爬蟲尾級擋在檯面誤導反射選用)。
 - **R13 compute/landing 兩平面(2026-07, plan `patentmcp_webdav-r13-refactor`)**:依 `mcp-integration-standard` §R13,container tool 只管**網路/憑證取得**(compute plane);確定性後處理落地為 **repo-local skill scripts**(landing plane)。
   - **建表**:`patent_search` 取 records JSON → 本地 `skills/patentworks/scripts/screening_build.py`(家族去重→切 Claim1→欄位隨選 CSV;>300 擋下)。舊 `build_screening_table` 已下架為 `TOOL_LANDED` redirect。
   - **其他 landing scripts**:`claims_tools.py`/`search_audit.py`/`figure_extract.py`/`pool_charts.py`/`patentdb_local.py`(皆 `python3 <script> --help`)。`search_audit`/`patentdb_*`/`extract_representative_figure`/`patentmcp_analyze_pool` 同步下架為 redirect;新增 `pool_fetch`(pool 取數半段)。
