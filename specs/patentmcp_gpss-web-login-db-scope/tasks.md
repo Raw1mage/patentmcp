@@ -25,3 +25,11 @@
 - [x] 4.1 端到端（live）：`set_search_databases(["CNA","CNB"])` 存檔驗證通過——`dbscope_verify.html` 證實帳號檢索庫精確鎖成 `_20_1_S_CA`+`_20_1_S_CB`（大陸公開+公告），CN 池擈回 total=68/hit=50。庫範圍設定機制端到端生效。（pat_no=null 為 CN 結果頁 parser 正交缺陷，另立 `issue_20260716_gpss4_adv_cn_result_page_patno_in_ajax`，不屬本庫範圍 BR。）
 - [x] 4.2 回歸：非 CN 軸（TW/US）檢索行為不退化——live 驗證完成 2026-07-17（簡詳目並列修法上）：CN(radar@TI) 150/150、TW 100/100 (total=155)、US 100/100 (total=1625) pat_no 全覆蓋；pytest test_gpss_query_slice + test_gpss_session_batch 17 passed。pat_no=null 正交 issue 已修復（issue_20260716_gpss4_adv_cn_result_page_patno_in_ajax，closed）。
 - [x] 4.3 BR_20260716 標 fixed（庫範圍核心）；新開正交 issue `gpss4_adv_cn_result_page_patno_in_ajax`；交叉引用已更新。
+
+## 5. BR_20260718 TW 公告號抽號 regex 吃T/漏抓（amend，正交於庫範圍）
+
+- [x] 5.1 根因：四條抽號 regex 各自硬寫 `[A-Z]{2}\d{6,}` 國碼段，TW grant 公告號 `TW`+kind letter(I/M/D)+數字破壞假設 → 無 lookbehind 舊版吐 `WI…`(吃T、427筆殘號)、有 lookbehind 現版(BR_20260716)完全漏抓 `[]`。
+- [x] 5.2 抽 shared 模組 `gpss4/patno.py`：國碼段 `(?:TW[IMD]|[A-Z]{2})`（TW[IMD] 優先）；`PAT_NO_RE`/`KINDED_RE`/`APPLYNO_RE`/`TW_NO_RE` 集中一處，杜絕同構復發（BR §7.2）。
+- [x] 5.3 套用四 call site：`adv_search.py` L87/L287/L291（_PAT_NO_RE/_KINDED/_APPLYNO）+ `folder.py` L48（_TW_NO_RE）改 import shared。
+- [x] 5.4 迴歸測試 `tests/test_gpss4_patno.py`（BR §5 向量表）：TWI930018B/TWM683169U/TWD/TW公開號/US/CN 全正確；不吐 WI/WM 殘號；figure-path mid-token guard 仍有效。
+- [x] 5.5 驗證：27 passed(15 subtests)，含 patno + login_rotation + br20260718_fixes + tool_stubs，零回歸；grep 確認無其他同構 `[A-Z]{2}\d{6,}` 抽號路徑漏改。

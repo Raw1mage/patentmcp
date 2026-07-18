@@ -27,3 +27,12 @@
 - [x] 4.3 全部用盡 → GPSS_ALL_ACCOUNTS_EXHAUSTED fail-fast
 - [x] 4.4 查無資料 message 不觸發 rotation（防誤判，DD-2）
 - [x] 4.5 全套既有測試不回歸（`pytest tests/`）
+
+## 5. BR_20260718 時窗維度 + 跨 process 共享（DD-7/DD-8，amend）
+
+- [x] 5.1 `gpss/quota_state.py`：`window_key(now)` GPSS 額度重置邊界量化（平日 08–18 narrow / 下班+週末 wide，overnight 不裂於午夜、週末錨定週五）
+- [x] 5.2 `QuotaStateStore`：sqlite sidecar `patentdb/gpss_quota_state.sqlite`，schema `(account, window_key, exhausted_at)` PK(account,window_key)；落點複用 `patentdb_store._resolve_db_root()`；讀失敗不阻斷 search（graceful degrade）
+- [x] 5.3 `GPSSClient` 重構：`_exhausted` process-local index set → 帳號級+時窗鍵跨 process sidecar；`_is_idx_exhausted`/`_seek_live_cursor`/`user_code`/`_advance_account` 改走 sidecar；`quota_store` 可注入
+- [x] 5.4 隱式復活：跨 window_key 邊界舊記錄自動失配 → 帳號重新可用，無需顯式 clear
+- [x] 5.5 tests：`TestWindowKey`（量化 5 案）+ `TestWindowRevival`（同窗跳過→跨窗復活）+ `TestCrossProcessSharing`（兩實例共享 sidecar 擠兌隔離）；TV-1~TV-5 + exhausted_skipped 保綠（改注入隔離 sidecar）
+- [x] 5.6 驗證：70 tests 綠（client + dispatcher + bulk + 重構受影響模組），零回歸

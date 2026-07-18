@@ -44,8 +44,9 @@ _CHECKBOX_RE = re.compile(
 # clickselect ajax url token: gpssbkm?<HEXTOK>^S^
 _SELECT_TOK_RE = re.compile(r'gpssbkm\?([0-9A-Fa-f]+)\^S\^', re.I)
 _COUNT_RE = re.compile(r'檢索結果[：:]\s*共\s*(\d+)\s*筆')
-# mark-list table rows: patent-number tokens
-_TW_NO_RE = re.compile(r'\b([A-Z]{2}\d{6,}[A-Z]?\d?)\b')
+# mark-list table rows: patent-number tokens. Shared TW[IMD]-aware country
+# segment (gpss4/patno.py, BR_20260718).
+from patent_mcp_server.gpss4.patno import TW_NO_RE as _TW_NO_RE
 
 
 class GPSS4FolderError(RuntimeError):

@@ -16,8 +16,8 @@ GPSS REST 配額按輸出筆數計、時段制重置；額度用盡時 GPSS 回�
 
 **Non-Goals**
 
-- 跨 process 持久化用盡狀態（時段重置本就會恢復，process 內記憶足矣）。
-- 剩餘額度精算 / 主動負載平衡（GPSS 不回剩餘額度）。
+- ~~跨 process 持久化用盡狀態（時段重置本就會恢復，process 內記憶足矣）。~~ **[SUPERSEDED 2026-07-18, BR_20260718]** ——長駐 process 跨時窗不重啟、並行 subagent 各自 process 兩個場景讓「process 內記憶」不足；現改為跨 process sqlite sidecar（DD-8）。
+- 剩餘額度精算 / 主動負載平衡（GPSS 不回剩餘額度）——proactive budget 仍列 Non-Goal（BR §3.4 optional 加值，本次不做）。
 
 ## Decisions
 
@@ -25,13 +25,17 @@ GPSS REST 配額按輸出筆數計、時段制重置；額度用盡時 GPSS 回�
 
 - **DD-2: 額度用盡偵測 = 回應 message 含 `Over download quantity`（大小寫不敏感）。** 這是官方時段配額用盡的確切訊號（SKILL.md:117 官方實證）。**必須與「查無資料」message 區分**：GPSS 對查無資料也回非空 message，若一律當用盡會誤觸發 rotation 燒光所有帳號。故用子字串比對 `over download quantity`，只認額度訊號。保守起見同時認 `over search quantity`（時段輸出上限的另一種表述）。拒絕方案：把所有非空 message 當用盡（會誤判查無資料）。
 
-- **DD-3: 用盡狀態記於本次 process（`_exhausted: set[int]` 帳號索引）。** 額度用盡的帳號在本 process 內不再嘗試；重啟後清空重新開始。理由：GPSS 時段制重置，重啟時多半已跨時段或即將重置，process 級記憶足以在單次執行內避免重撞已知用盡帳號，且無需引入 state 檔與日期邊界處理（KISS）。使用者已於澄清中選定「記憶於本次 process」。
+- **DD-3: 用盡狀態記於本次 process（`_exhausted: set[int]` 帳號索引）。** 額度用盡的帳號在本 process 內不再嘗試；重啟後清空重新開始。理由：GPSS 時段制重置，重啟時多半已跨時段或即將重置，process 級記憶足以在單次執行內避免重撞已知用盡帳號，且無需引入 state 檔與日期邊界處理（KISS）。使用者已於澄清中選定「記憶於本次 process」。 **[SUPERSEDED by DD-7 / DD-8, 2026-07-18, BR_20260718]**：此 DD 的兩個前提在長駐 MCP server 場景破裂——(1)「重啟時多半已跨時段」假設運維會重啟，長駐 process 跨 18:00 窗口翻新後**不會**重啟，帳號白廢整個時段；(2)「process 級記憶足矣」在並行 subagent 各起獨立 process 時失效（DD-97 擠兌）。用盡狀態改記 `(account, window_key)` 二維（帳號級 × 時窗級），落跨 process sqlite sidecar。
 
 - **DD-4: 帳號池設定 `GPSS_USER_CODES`（逗號分隔）優先，相容 `GPSS_USER_CODE`（單碼）。** 解析順序：先讀 `GPSS_USER_CODES` split(',') strip 去空白去重保序；為空則退讀 `GPSS_USER_CODE` 單碼。新增帳號只需在 `GPSS_USER_CODES` 尾部加碼。拒絕方案：編號式 `GPSS_USER_CODE_1/2`（要掃描動態變數名、新增需匯入新變數名），JSON 檔（多一層檔案 IO 與讀取還輯）——使用者已選定逗號分隔單變數。
 
 - **DD-5: 全帳號用盡 → fail-fast 結構化錯誤，不 fallback。** 回 `{success:False, error_code:"GPSS_ALL_ACCOUNTS_EXHAUSTED", error:"...", accounts_tried:N}`。不靜默回空、不偽裝查無資料（no-fallback 天條）。
 
 - **DD-6: rotation 迴圈只針對「額度用盡」訊號換帳號。** 其他失敗（HTTP error、JSON parse 失敗、查無資料、condition length）維持原行為原樣回傳——那些與帳號額度無關，換帳號無助益，且 condition-length 有既有分片機制處理。
+
+- **DD-7: exhausted latch 加時窗維度 `window_key(now)`，隱式復活（BR_20260718）。** 用盡記錄鍵從「帳號索引（int）」改為 `(account_code, window_key)`。`window_key(now)` 將 GPSS 額度重置邊界量化成時窗鍵：平日 08:00–18:00 為窧窗、其餘（下班 18:00–隔日 08:00 、週末整段）為寬窗，同一窗內同鍵。跨邊界後 `window_key` 自然改變 → 舊時窗的 exhausted 記錄自動失配 → 帳號**隱式復活**，無需顯式 clear。過度復活自癒：真沒恢復的帳號下次擞 `Over download quantity` 立即以新 `window_key` 重標。保留 DD-2 訊號辨識 / DD-5 全用盡 fail-fast / DD-6 只對額度訊號輪替不變。**行為契約保留**：同一 `window_key` 內，被標 exhausted 的帳號仍跨 search 跳過（原 DD-3 同窗跳過行為，`test_exhausted_account_skipped_on_next_search` 須綠）。
+
+- **DD-8: exhausted 狀態提升至 `patentdb/` 內 sqlite sidecar，跨 process 共讀共寫（BR_20260718 DD-97 擠兌根治）。** 新檔 `patentdb/gpss_quota_state.sqlite`，schema `(account TEXT, window_key TEXT, exhausted_at INT, PRIMARY KEY(account, window_key))`。落點複用 `patentdb_store._resolve_db_root()`（反向 import 安全：patentdb_store 未 import gpss），`patentdb/` 已 rw bind-mount + WAL side files 天然可行、跨 `--force-recreate` 存活。並行 subagent 各自 MCP 連線共讀共寫 sidecar → 一組被撞穿，其他 process 下次 search 前讀 sidecar 立即看到、直接跳，根治 DD-97 擠兌。sqlite 存在即 in-memory 快取；讀失敗不阻斷 search（偵測仍 reactive，擞 `Over download quantity` 會重標）。拒絕方案：圖檔 / Redis（多一層服務依賴，patentdb sqlite 已在手）。
 
 ## Architecture
 

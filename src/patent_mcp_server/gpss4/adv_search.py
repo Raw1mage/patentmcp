@@ -59,6 +59,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from patent_mcp_server.gpss4.session import GPSS4Session, BASE
+from patent_mcp_server.gpss4.patno import PAT_NO_RE, KINDED_RE, APPLYNO_RE
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +80,10 @@ _PAGE_RE = re.compile(
 _FAMILY_COUNT_RE = re.compile(r'專利家族數量.*?numfmt[^>]*>\s*(\d+)\s*<', re.S)
 # per-row selection: clickselect(this,db,rec,group) — group is a row ordinal
 _CLICKSELECT_RE = re.compile(r'clickselect\(this,\s*(\d+),\s*(\d+),\s*(\d+)\)')
-# patent-number-looking token. Appears embedded in figure-image paths like
-# `.../0066/US20160373797A1_001.png`, so we must NOT anchor the tail with \b
-# (A1 is followed by `_`, both \w -> no boundary). Country(2 alpha)+digits+
-# optional kind-code (letter + optional digit). Leading (?<![A-Z0-9]) avoids
-# matching mid-token.
-_PAT_NO_RE = re.compile(r'(?<![A-Z0-9])([A-Z]{2}\d{6,}(?:[A-Z]\d?)?)')
+# patent-number-looking token. Country segment handles TW grant 3-letter
+# prefixes (TW[IMD]) as well as generic 2-letter codes — see gpss4/patno.py
+# (BR_20260718: shared so the country-segment assumption lives in one place).
+_PAT_NO_RE = PAT_NO_RE
 
 
 class GPSS4AdvSearchError(RuntimeError):
@@ -284,11 +283,10 @@ class AdvResultPage:
             #       digits with a check-digit dot.
             # pat_no: a country-prefixed token that ENDS in a kind code
             # (letter[+optional digit]) at token end.
-            _KINDED = re.compile(r'^[A-Z]{2}\d{6,}[A-Z]\d?$')
+            _KINDED = KINDED_RE  # shared TW[IMD]-aware country segment (BR_20260718)
             # apply_no candidates: country+digits w/o kind code, OR dotted CN/TW
             # application numbers, OR a bare all-digit case number (>=7 digits).
-            _APPLYNO = re.compile(
-                r'^(?:[A-Z]{2}\d{6,}(?:\.\d+)?|\d{7,}(?:\.\d+)?)$')
+            _APPLYNO = APPLYNO_RE
             pat_candidates = [c for c in cells if _KINDED.fullmatch(c or "")]
             if pat_candidates:
                 p.pat_no = pat_candidates[0]

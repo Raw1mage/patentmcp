@@ -20,6 +20,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from patent_mcp_server.gpss.quota_state import QuotaStateStore
+
 logger = logging.getLogger(__name__)
 
 GPSS_API_URL = "https://tiponet.tipo.gov.tw/gpss1/gpsskmc/gpss_api"
@@ -151,10 +153,21 @@ class GPSSClient:
     """Async client for the TIPO GPSS REST API.
 
     Holds an ORDERED POOL of userCode accounts and rotates through them when a
-    time-window quota is exhausted (DD-1..DD-6). Rotation is internal to
+    time-window quota is exhausted (DD-1..DD-8). Rotation is internal to
     search() so every caller sharing the module-level instance benefits
-    transparently. An account marked exhausted stays skipped for the lifetime
-    of this process (DD-3); a restart clears it (the GPSS window resets anyway).
+    transparently.
+
+    Exhausted-account state is keyed by (account_code, window_key) and persisted
+    in a cross-process sqlite sidecar (owning plan DD-7/DD-8, BR_20260718),
+    superseding the old process-local cursor-index set (DD-3):
+
+    - **Implicit revival**: crossing a GPSS quota-reset boundary changes
+      window_key, so an account exhausted in an earlier window is automatically
+      considered live again — no restart needed (the resident MCP process never
+      restarts, so the old "a restart clears it" assumption was broken).
+    - **Cross-process sharing**: parallel subagent processes share one sidecar,
+      so an account one process marks exhausted is immediately skipped by the
+      others (roots out the DD-97 stampede).
     """
 
     def __init__(
@@ -162,6 +175,7 @@ class GPSSClient:
         user_code: Optional[str] = None,
         user_codes: Optional[List[str]] = None,
         timeout: float = 40.0,
+        quota_store: Optional[QuotaStateStore] = None,
     ):
         # Back-compat: a single positional user_code seeds a 1-account pool.
         explicit: Optional[List[str]] = None
@@ -171,7 +185,9 @@ class GPSSClient:
             explicit = [user_code]
         self.user_codes: List[str] = _load_user_codes(explicit)
         self._cursor: int = 0
-        self._exhausted: set = set()
+        # Cross-process, window-keyed exhausted-state store (DD-7/DD-8). Kept
+        # injectable so tests can pass an isolated on-disk sidecar.
+        self._quota_store: QuotaStateStore = quota_store or QuotaStateStore()
         # GPSS sits behind Cloudflare (resp headers carry cf-ray). In a
         # long-lived MCP-server process the single client's pool holds
         # keep-alive connections that Cloudflare silently drops after an idle
@@ -186,25 +202,48 @@ class GPSSClient:
             limits=httpx.Limits(max_keepalive_connections=0),
         )
 
+    def _is_idx_exhausted(self, idx: int) -> bool:
+        """True IFF the account at cursor `idx` is on record as exhausted for the
+        CURRENT window (DD-7). Records from an older window_key don't match, so
+        an account revives implicitly once the window rolls over."""
+        if idx < 0 or idx >= len(self.user_codes):
+            return True
+        return self._quota_store.is_exhausted(self.user_codes[idx])
+
+    def _seek_live_cursor(self) -> bool:
+        """Move the cursor to the first account not exhausted in the current
+        window. Returns True if a live account exists, False if the whole pool
+        is exhausted this window (DD-5/DD-7/DD-8)."""
+        if self.user_codes and not self._is_idx_exhausted(self._cursor):
+            return True
+        for idx in range(len(self.user_codes)):
+            if not self._is_idx_exhausted(idx):
+                self._cursor = idx
+                return True
+        return False
+
     @property
     def user_code(self) -> Optional[str]:
         """The current-cursor userCode (back-compat: external refs still read this).
 
-        Returns None when the pool is empty. Rotation advances the cursor via
-        _advance_account(); this always reflects the account search() will use
-        next.
+        Returns None when the pool is empty OR every account is exhausted in the
+        current window. Reflects the account search() will use next.
         """
-        if not self.user_codes or self._cursor >= len(self.user_codes):
+        if not self.user_codes:
             return None
-        return self.user_codes[self._cursor]
+        if self._seek_live_cursor():
+            return self.user_codes[self._cursor]
+        return None
 
     def _advance_account(self) -> bool:
-        """Mark the current account exhausted and move the cursor to the next
-        not-yet-exhausted account. Returns True if such an account exists,
-        False if the whole pool is now exhausted (DD-3/DD-5)."""
-        self._exhausted.add(self._cursor)
+        """Mark the current account exhausted (in the sidecar, keyed by the
+        current window) and move the cursor to the next account not exhausted
+        this window. Returns True if such an account exists, False if the whole
+        pool is now exhausted (DD-5/DD-7/DD-8)."""
+        if 0 <= self._cursor < len(self.user_codes):
+            self._quota_store.mark_exhausted(self.user_codes[self._cursor])
         for idx in range(len(self.user_codes)):
-            if idx not in self._exhausted:
+            if not self._is_idx_exhausted(idx):
                 self._cursor = idx
                 return True
         return False
