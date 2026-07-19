@@ -7,7 +7,7 @@
 - [x] 1.3 固化 session.py:單 slot 鏈 + md5 OCR + SSO meta-refresh 跟進
 - [x] 1.4 認證訊號修正(DD-4):以 SSO 落地頁會員標記判斷,非 TTSUID cookie
 - [x] 1.5 實測登入成功(GPSS4Session().login() 第 1 次即 success)
-- [ ] 1.6 補齊模板庫缺字(Z)+ 未知 glyph 重試新 slot 的韌性驗證
+- [~] 1.6 韌性驗證完成（`tests/test_gpss4_captcha_retry.py` 4 pass：unknown glyph→重抓新 slot 不 submit '?'／中途 slot 可解則登入成功／全 unknown 耗盡 retry budget fail-fast／happy path 零額外開銷）。**缺字 Z 標 deferred**：md5_table.json 現涵蓋 `0-9 + A-Y`（35/36），唯一缺 Z；補 Z 字模需真登入抽到含 Z 的 CAPTCHA（隨機 + TIPO 帳號鎖定風險，離線無法產出）。影響極低：單次登入含 Z 機率 ~13.6%，且 login() loop 已自動重抓新 slot 重試（max 6），連 6 次全含 Z 機率微乎其微，缺 Z 幾乎不致登入失敗。
 
 ## 2. 資料夾/標記清單端點
 
@@ -29,6 +29,8 @@
 - [x] 4.1 end-to-end 驗證(登入→檢索→標記→列清單,實測 TW201729166A count=1)
 - [x] 4.2 event log 收尾 + architecture.md sync
 - [x] 4.3 清 scratch(XDG),確認無 secret 落檔
+
+**Validation evidence**: 全套 gpss4 測試 **34 pass / 0 fail**（含 login_rotation + captcha_retry 4 新增 + patno + session_keepalive）+ 15 subtests，零回歸；adv_search scraper end-to-end 實測 total=24 / family_count=12 / abstract 24/24 / CSV 落地；folder end-to-end 實測 TW201729166A count=1。**Remaining（deferred）**：1.6 缺字 Z 字模需真登入抽到含 Z 的 CAPTCHA（隨機 + TIPO 帳號鎖定風險，離線無法產出；影響極低，login loop 已自動重試涵蓋）。
 
 ## 5. 進階檢索 scraping(SCOPE PIVOT — 主線)
 
