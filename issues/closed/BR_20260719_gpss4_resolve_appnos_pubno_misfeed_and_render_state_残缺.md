@@ -1,6 +1,7 @@
 # BR: gpss4_resolve_appnos 對公開號誤入 + hits>0 卻 result-list 不 render（追加）
 
-- **狀態**: open
+- **狀態**: closed (resolved, 2026-07-20)
+- **修復**: spec `patentmcp_gpss4-number-query-adv-route` amend DD-8/DD-9。缺陷A: `pubno_convert.tw_number_kind` SSOT 純函式 + `gpss4_resolve_appnos` 入口 fail-fast 分流（已公開/公告識別號→`already_identifier` passthrough，不投 adv、不計 consecutive error）。缺陷B: 新增 `GPSS4AdvRenderPending`，hits>0-no-render 降級為 recoverable `render_pending` 不中斷整批（取代誤導的 `retry the query` 硬 error）。驗證 40 pass/0 fail。缺陷B 完整 in-batch 解號 deferred（tasks 7.6 [~]，live 無法必現 hits>0-no-render 窗口；缺陷A 分流後公開號不再誤入 @AN 軸，生產故障已根除）。
 - **回報者**: 前案檢索案（異常偵測 non-contact priorart）消費端
 - **回報日**: 2026-07-19 晚
 - **關聯**: BR_20260719_gpss4_folder_search_missing_dbscope_and_output_field_activation（已 closed，resolved）；其 §5 綠燈為真但**未覆蓋本 BR 兩個生產場景**

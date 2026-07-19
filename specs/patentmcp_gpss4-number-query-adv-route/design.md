@@ -86,6 +86,23 @@ scope 分岐（已設→復用 / 未設→設定）、batch loop（同 session �
   類，非 grep cmdline 避免 shell 自匹配假影）作一致性校驗依據。gate 狀態可查
   （持有者/空閒/上次釋放時間）。
 
+- **DD-8（BR_20260719 追加 §缺陷A：號碼形態 fail-fast 分流，2026-07-20）**：`gpss4_resolve_appnos`
+  入口對每筆做號碼形態判別（SSOT `pubno_convert.tw_number_kind`）。已公開/公告識別號
+  （西元年公開號 `TW(19|20)\d{7}`、憑證號 `TW[IMD]\d+`、帶 kind 尾碼號）= `identifier`
+  → passthrough 標 `already_identifier`，**不投 adv 查詢、不計 consecutive error**。杜絕
+  「乾淨民國年 appno 輸入被誤入的公開號拖垮整批 CONSECUTIVE_ERRORS」。判別邏輯收斂進
+  `pubno_convert.py`（純函式 SSOT，DD-1/DD-2 沿用），非散在 caller。
+- **DD-9（BR_20260719 追加 §缺陷B：hits>0-no-render 降級為 recoverable，2026-07-20）**：
+  `_submit_query` 遇 search-form watcher shell + DB_OK + total>0（引擎 async race「前次
+  檢索還沒好」，非 zero-hit、非硬 error）→ 改 raise `GPSS4AdvRenderPending`（subclass
+  `GPSS4AdvSearchError`，攜 counts + shell HTML）。caller `gpss4_resolve_appnos` 捕捉它標
+  `render_pending`、**不計 CONSECUTIVE_ERRORS**、續跑整批。把「搜到了卻抽不到號」從
+  批次殺手降為單筆可回收（BR §缺陷B 核心訴求）。
+  誠實邊界（code-thinker）：完整 shell→result-list re-navigation（讓 render_pending 當批
+  解出號）需要可必現的 hits>0-no-render 窗口，當前資料狀態不提供（live recon 2026-07-20：
+  @PN 直 render、@AN 為真 zero-hit）。故本次僅降級不中斷，不憑猜測寫未驗證的 render-retry；
+  絕不捏造號碼。
+
 ## Risks / Trade-offs
 
 - **adv 單號查詢比 folder 慢**（多 dual-view + 家族收合步驟）— mitigation: `resolve_one`

@@ -208,5 +208,33 @@ class VendorDriftGuardTest(unittest.TestCase):
             )
 
 
+class TwNumberKindTest(unittest.TestCase):
+    """BR_20260719 缺陷A: 號碼形態判別 (resolve_appnos 入口分流)。"""
+
+    def test_seireki_pubno_is_identifier(self):
+        # 西元年公開號 TW20xx/TW19xx (9位, 前綴 19|20) = 已公開識別號
+        for n in ("TW200644333", "TW201021598", "TW201607443", "TW202242807",
+                  "TW199912345"):
+            self.assertEqual(pc.tw_number_kind(n), "identifier", n)
+
+    def test_minguo_appno_is_apply(self):
+        # 民國年申請號 (百位 < 西元千位) = appno→pubno 解析軸
+        for n in ("TW109112770", "TW087209080", "TW080203372", "TW113141212"):
+            self.assertEqual(pc.tw_number_kind(n), "apply", n)
+
+    def test_cert_number_is_identifier(self):
+        for n in ("TWI684433", "TWM578729", "TWD123456",
+                  "TW578729U", "TWI684433B"):
+            self.assertEqual(pc.tw_number_kind(n), "identifier", n)
+
+    def test_non_tw_or_malformed_is_unknown(self):
+        for n in ("US11213256B2", "CN119230141A", "TW12345", "", "109112770"):
+            self.assertEqual(pc.tw_number_kind(n), "unknown", n)
+
+    def test_separators_tolerated(self):
+        self.assertEqual(pc.tw_number_kind("TW-200644333"), "identifier")
+        self.assertEqual(pc.tw_number_kind("tw 109112770"), "apply")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -5699,10 +5699,12 @@ async def gpss4_resolve_appnos(
     import time as _time
     from patent_mcp_server.gpss4.adv_search import (
         resolve_one, _ensure_query_ready, GPSS4AdvSearchError, GPSS4DbScopeError,
+        GPSS4AdvRenderPending,
     )
     from patent_mcp_server.gpss4.session_manager import (
         shared_session, GPSS4LoginBusyError,
     )
+    from patent_mcp_server.pubno_convert import tw_number_kind
 
     try:
         with open(appnos_file, "r", encoding="utf-8") as fh:
@@ -5716,7 +5718,7 @@ async def gpss4_resolve_appnos(
 
     t0 = _time.monotonic()
     stats = {"resolved": 0, "not_found": 0, "unmatched": 0, "error": 0,
-             "via_adv": 0}
+             "via_adv": 0, "already_identifier": 0, "render_pending": 0}
     consecutive_errors = 0
     i = cursor
     effective_scope: List[str] = []
@@ -5731,6 +5733,22 @@ async def gpss4_resolve_appnos(
             end = min(total, cursor + max_items)
             while i < end and (_time.monotonic() - t0) < time_budget_sec:
                 raw = nums[i]
+                # BR_20260719 缺陷A: 號碼形態 fail-fast 分流。已公開/公告識別號
+                # (西元年公開號 TW20xx/TW19xx、憑證號 TWI/TWM/TWD、帶 kind 尾碼號)
+                # 本就不該進 appno→pubno 軸。passthrough 回傳該號,**不投 adv 查詢、
+                # 不計入 consecutive error**，避免乾淨輸入被污染輸入拖垮整批。
+                if tw_number_kind(raw) == "identifier":
+                    pn = raw.upper()
+                    row = {"appno": raw,
+                           "pubno": pn if pn.startswith("TW") else f"TW{pn}",
+                           "apply_date": None, "pub_date": None,
+                           "status": "already_identifier"}
+                    stats["already_identifier"] += 1
+                    consecutive_errors = 0
+                    with open(out_file, "a", encoding="utf-8") as out:
+                        out.write(_json.dumps(row, ensure_ascii=False) + "\n")
+                    i += 1
+                    continue
                 num = raw[2:] if raw.upper().startswith("TW") else raw
                 row: Dict[str, Any] = {"appno": raw, "pubno": None,
                                        "apply_date": None, "pub_date": None,
@@ -5757,6 +5775,14 @@ async def gpss4_resolve_appnos(
                     # scope failure is fatal to the whole batch (DD-6 fail-fast):
                     # every subsequent query would false-unmatch. Re-raise.
                     raise
+                except GPSS4AdvRenderPending as e:
+                    # BR_20260719 缺陷B: 搜尋命中(hits>0)但結果列因引擎 async
+                    # race 未 render。這是可回收狀態——標 render_pending 繼續整批，
+                    # **不計入 CONSECUTIVE_ERRORS**(避免單一 race 拖垮乾淨輸入)。
+                    row["status"] = "render_pending"
+                    row["error"] = f"{type(e).__name__}: {e}"[:200]
+                    stats["render_pending"] += 1
+                    consecutive_errors = 0
                 except (GPSS4AdvSearchError, Exception) as e:  # noqa: BLE001
                     row["error"] = f"{type(e).__name__}: {e}"[:200]
                     stats["error"] += 1

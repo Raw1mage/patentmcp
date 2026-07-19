@@ -89,6 +89,42 @@ def normalize_pubno(publication_number: str) -> Tuple[str, str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A2: 號碼形態判別 (TW appno vs 已公開識別號) —— resolve_appnos 入口分流
+# ─────────────────────────────────────────────────────────────────────────────
+
+def tw_number_kind(raw: str) -> str:
+    """判別 TW 號碼形態,供 resolve_appnos 入口 fail-fast 分流 (BR_20260719 缺陷A)。
+
+    回傳:
+    - 'apply'      : 民國年申請號 (TW + 3位民國年 + 6位流水,如 TW109112770)。
+                     民國年 3 位數落 1xx/09x/0xx (民 100+/9x/早期),即百位 < 西元千位。
+    - 'identifier' : 已是對外公開/公告號 (識別號最終形態),不應投入 appno→pubno 解析:
+                       * 西元年公開號 TW20xx/TW19xx (9位,前綴 19|20,如 TW200644333)
+                       * 憑證號 TWI/TWM/TWD + 數字 (如 TWI684433 / TWM578729)
+                       * 帶 kind 尾碼的公告號 (如 TW578729U/TWI684433B)
+    - 'unknown'    : 無法判別號形 (非 TW、位數不符),交呼叫端既有路徑處理,不猜。
+
+    設計約束沿用本模組 DD-1 (純函式 re-only) / DD-2 (不猜號,無法判別回 unknown)。
+    判別依 SSOT: 西元年公開號 TW\\d{9} 且前綴 19|20 = 已公開識別號 (BR §缺陷A 坐實
+    TW200644333/TW201021598/… 8 件全 TW20xx 被誤入 apply 軸拖垮整批)。
+    """
+    up = re.sub(r"[\s/\-,\.]+", "", raw or "").upper()
+    if not up.startswith("TW"):
+        return "unknown"
+    body = up[2:]
+    # 憑證號: TW[IMD] + 數字 (± kind 尾碼) = 已核准公告識別號
+    if re.match(r"^[IMD]\d+[A-Z]*$", body):
+        return "identifier"
+    # 純 9 位數字: 西元年 (19|20 前綴) = 公開號; 否則民國年申請號
+    if re.match(r"^\d{9}$", body):
+        return "identifier" if body[:2] in ("19", "20") else "apply"
+    # 帶 kind 尾碼的數字號 (如 578729U) = 已公告識別號
+    if re.match(r"^\d+[A-Z]+$", body):
+        return "identifier"
+    return "unknown"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # to_<db> 目標函式
 # ─────────────────────────────────────────────────────────────────────────────
 

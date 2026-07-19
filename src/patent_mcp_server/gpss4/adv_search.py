@@ -107,6 +107,36 @@ class GPSS4AdvZeroHits(Exception):
         self.html = html
 
 
+class GPSS4AdvRenderPending(GPSS4AdvSearchError):
+    """BR_20260719 缺陷B: the engine reported the search READY with hits>0 in a
+    scoped DB, but the response is the search-FORM watcher shell (chkURL contract,
+    '前次檢索還沒好' async race) and NOT the result-page — so the result LIST never
+    rendered and no patent number can be extracted yet.
+
+    This is a RECOVERABLE condition, distinct from a hard adv error: the query DID
+    match; the DOM race just left the list un-rendered on this hop. A batch caller
+    (gpss4_resolve_appnos) should mark the item render_pending and CONTINUE the
+    batch WITHOUT counting it toward CONSECUTIVE_ERRORS (BR §缺陷B: 把「搜到卻抽不
+    到號」從 error 降為可回收，避免污染整批). Carries per-DB counts + shell HTML so
+    the caller keeps the slot-anchor chain alive.
+
+    NOTE (code-thinker honesty): the full shell→result-list re-navigation (making
+    a render_pending item actually resolve its number in-batch) requires a
+    reliably reproducible hits>0-no-render window, which the current data state
+    does not provide. Until then this exception DOWNGRADES the failure to
+    recoverable rather than silently masking it — never a fabricated number."""
+
+    def __init__(self, counts: Dict[str, int], html: str = ""):
+        total = counts.get("全部", sum(counts.values()))
+        super().__init__(
+            f"search matched {total} hit(s) but the result list did not render "
+            f"(search-form watcher shell; engine async race; per-DB counts={counts}) "
+            "— recoverable, re-queue this item"
+        )
+        self.counts = counts
+        self.html = html
+
+
 @dataclass
 class AdvPatent:
     """One row in the 進階檢索 簡目 result list."""
@@ -889,11 +919,12 @@ async def _submit_query(s: "GPSS4Session", adv_tab_url: str, query: str,
             total_all = counts.get("全部", sum(counts.values()))
             if total_all == 0:
                 raise GPSS4AdvZeroHits(counts, result_html)
-            raise GPSS4AdvSearchError(
-                f"search completed with {total_all} hits but the result list "
-                f"did not render (search-ready shell; per-DB counts={counts}) "
-                "— retry the query"
-            )
+            # BR_20260719 缺陷B: hits>0 但 result-list 未 render = 引擎 async race
+            # (search-form watcher shell, NOT result-page)。降級為 recoverable
+            # render-pending (carry counts + shell HTML 供 batch caller 保 anchor
+            # 鏈 + 標 render_pending 不中斷整批)，不再用誤導的 "retry the query"
+            # 文字直接當硬 error 累計 CONSECUTIVE_ERRORS。
+            raise GPSS4AdvRenderPending(counts, result_html)
     _dump(dump_dir, "post_resp.html", result_html)
     # the result form's own action/INFO (for 家族收合 / JPAGE POSTs)
     rfm = _ADV_FORM_ACTION_RE.search(result_html)

@@ -161,5 +161,119 @@ class EnsureQueryReadyScopeTest(unittest.TestCase):
         _run(run())
 
 
+class ResolveAppnosDispatchTest(unittest.TestCase):
+    """BR_20260719 缺陷A/B: gpss4_resolve_appnos 入口分流 + render_pending 降級。
+
+    Mock resolve_one / _ensure_query_ready / shared_session so the whole batch
+    loop runs WITHOUT hitting GPSS4. Asserts:
+      A. 公開/公告識別號 passthrough (already_identifier, 不進 adv)
+      B. hits>0-no-render 降為 render_pending, 不中斷整批、不計 consecutive error
+    """
+
+    def _run_resolve(self, nums, resolve_side_effect):
+        import tempfile
+        import json
+        import importlib
+        from patent_mcp_server.gpss4 import adv_search, session_manager
+
+        patents = importlib.import_module("patent_mcp_server.patents")
+
+        # ---- stub the three injected dependencies -------------------------
+        calls = {"resolve_one": 0}
+
+        async def _fake_resolve_one(s, num, axis="apply", country="TW",
+                                    dump_dir=None):
+            calls["resolve_one"] += 1
+            return resolve_side_effect(num)
+
+        async def _fake_ensure_query_ready(s, country):
+            return ["TWA", "TWB"]
+
+        class _FakeSharedSession:
+            def __init__(self, holder):
+                pass
+
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, *a):
+                return None
+
+        orig = (adv_search.resolve_one, adv_search._ensure_query_ready,
+                session_manager.shared_session)
+        adv_search.resolve_one = _fake_resolve_one
+        adv_search._ensure_query_ready = _fake_ensure_query_ready
+        session_manager.shared_session = _FakeSharedSession
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".txt",
+                                             delete=False) as tf:
+                tf.write("\n".join(nums) + "\n")
+                appnos_file = tf.name
+            with tempfile.NamedTemporaryFile("w", suffix=".jsonl",
+                                             delete=False) as of:
+                out_file = of.name
+            res = _run(patents.gpss4_resolve_appnos(
+                appnos_file=appnos_file, out_file=out_file, max_items=100))
+            rows = [json.loads(ln) for ln in open(out_file, encoding="utf-8")
+                    if ln.strip()]
+            return res, rows, calls
+        finally:
+            (adv_search.resolve_one, adv_search._ensure_query_ready,
+             session_manager.shared_session) = orig
+            for p in (appnos_file, out_file):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+    def test_identifier_passthrough_not_dispatched(self):
+        """缺陷A: 西元年公開號不進 resolve_one, 標 already_identifier。"""
+        from patent_mcp_server.gpss4.adv_search import AdvPatent
+
+        def side(num):
+            return AdvPatent(pat_no="TW999999", apply_no=num)
+
+        nums = ["TW200644333", "TW202242807"]  # 兩件都是公開號
+        res, rows, calls = self._run_resolve(nums, side)
+        self.assertEqual(calls["resolve_one"], 0, "公開號不該投 adv")
+        self.assertTrue(res.get("success"))
+        self.assertEqual([r["status"] for r in rows],
+                         ["already_identifier", "already_identifier"])
+        self.assertEqual(rows[0]["pubno"], "TW200644333")
+
+    def test_mixed_batch_render_pending_does_not_break_batch(self):
+        """缺陷B: 民國年申請號中 render_pending 不中斷整批、不計 consecutive。"""
+        from patent_mcp_server.gpss4.adv_search import (
+            AdvPatent, GPSS4AdvRenderPending,
+        )
+
+        def side(num):
+            # 10 件民國年申請號，每一件都 render_pending (若計 consecutive 就會
+            # 在第 8 件中斷)。驗證降級後整批跑完。
+            raise GPSS4AdvRenderPending(
+                {"全部": 2, "本國公開": 0, "本國公告": 2}, "<shell/>")
+
+        nums = [f"TW1091{i:05d}" for i in range(10)]  # 10 件民國年申請號
+        res, rows, calls = self._run_resolve(nums, side)
+        self.assertEqual(calls["resolve_one"], 10, "每件都該進 adv")
+        self.assertTrue(res.get("success"), "render_pending 不該中斷整批")
+        self.assertNotEqual(res.get("error_code"), "CONSECUTIVE_ERRORS")
+        self.assertEqual(sum(r["status"] == "render_pending" for r in rows), 10)
+        self.assertEqual(res["stats"]["render_pending"], 10)
+        self.assertEqual(res["stats"]["error"], 0)
+
+    def test_hard_error_still_counts_consecutive(self):
+        """回歸防護: 真硬 error 仍累計 consecutive 並在第 8 件中斷。"""
+        from patent_mcp_server.gpss4.adv_search import GPSS4AdvSearchError
+
+        def side(num):
+            raise GPSS4AdvSearchError("adv form not reachable")
+
+        nums = [f"TW1091{i:05d}" for i in range(10)]
+        res, rows, calls = self._run_resolve(nums, side)
+        self.assertFalse(res.get("success"))
+        self.assertEqual(res.get("error_code"), "CONSECUTIVE_ERRORS")
+
+
 if __name__ == "__main__":
     unittest.main()

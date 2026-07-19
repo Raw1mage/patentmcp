@@ -38,3 +38,16 @@
 - [x] 6.1 container 重啟載入新 code + smoke（`docker compose restart patentmcp`→healthy；uv-venv smoke 綠：login_gate._LoginGate / GPSS4LoginBusyError / adv_search.resolve_one / _ensure_query_ready 皆存在，GPSS4Session import OK，log 無 error）。
 - [x] 6.2 event_record 收尾（`event_2026-07-19_gpss4-number-query-adv-route...`）+ BR_20260719 §4/§4A 標 resolved（BR 文首狀態 + §5 live 驗證 + §4/§4A→實作對照表已落地）。
 - [x] 6.3 architecture.md sync（specs/architecture.md L89–98：number-query adv 路徑 + resolve_one + per-session scope + login gate + session-keepalive + 4 進入點改接 + 測試/live 驗證，已同步）。
+
+## 7. BR_20260719 追加 §缺陷A/B（amend，2026-07-20）
+
+> 前身 BR closed 後消費端實測仍卡 CONSECUTIVE_ERRORS：8 件 `TW20xx` 公開號被誤入 @AN 軸拖垮整批（缺陷A）；且 hits>0 卻 result-list 不 render 時直接記硬 error（缺陷B）。DD-8/DD-9。
+
+- [x] 7.1 缺陷A — `pubno_convert.tw_number_kind(raw)` SSOT 純函式：`TW(19|20)\d{7}` / `TW[IMD]\d+` / 帶 kind 尾碼 → `identifier`；民國年 `TW\d{9}`（百位<千位）→ `apply`；非 TW/位數不符 → `unknown`（不猜號，DD-2）。
+- [x] 7.2 缺陷A — `gpss4_resolve_appnos` 入口對每筆判別：`identifier` → passthrough 標 `already_identifier`，不投 adv、不計 consecutive error，續跑整批。stats 加 `already_identifier`。
+- [x] 7.3 缺陷B — 新增 `GPSS4AdvRenderPending(GPSS4AdvSearchError)`（携 counts+shell HTML）；`_submit_query` 於 hits>0-no-render（search-form watcher shell async race）改 raise 它，取代誤導的 `"retry the query"` 硬 error。
+- [x] 7.4 缺陷B — `gpss4_resolve_appnos` 捕捉 `GPSS4AdvRenderPending` → 標 `render_pending`、不計 CONSECUTIVE_ERRORS、續跑整批。stats 加 `render_pending`。
+- [x] 7.5 offline 單元測試：`tw_number_kind` 判別（公開號/民國年/憑證號/unknown/分隔符）；resolve_appnos 分流（identifier passthrough 不進 adv、混合 batch render_pending 不中斷、硬 error 仍中斷）。**test_pubno_convert 27 pass + test_br20260719_adv_route 13 pass = 40 pass / 0 fail 零回歸**。
+- [~] 7.6 **缺陷B 完整 shell→result-list re-navigation deferred**：live recon 2026-07-20（@PN 直 render、@AN 為真 zero-hit）無法必現 hits>0-no-render 窗口；憑猜測寫未驗證 render-retry 違反 code-thinker §5。本次僅降級為 recoverable render_pending 不中斷；完整 in-batch 解號待可必現場景（缺陷A 分流後公開號不再誤入 @AN 軸，BR 生產故障已根除，此為 latent 硬化）。
+
+**Validation evidence (§7)**: `tests/test_pubno_convert.py` 27 pass（含 tw_number_kind 5 類 + vendor-drift guard 未回歸）；`tests/test_br20260719_adv_route.py` 13 pass（原 10 + 缺陷A/B dispatch 3）；合計 **40 pass / 0 fail**。Live recon（`scripts/diag_br20260719b_render.py`，XDG scratch 已清）坐實 @PN 直 render / @AN 真 zero-hit，佐證缺陷A 分流即根除生產故障、缺陷B 為 latent race。
