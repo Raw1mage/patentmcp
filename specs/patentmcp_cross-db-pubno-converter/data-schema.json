@@ -1,0 +1,24 @@
+{
+  "schemas": [
+    {
+      "name": "ParsedPubno",
+      "kind": "json",
+      "fields": [
+        { "name": "country", "type": "str", "notes": "2-letter ISO 國碼 (剝自號碼前綴,_KNOWN_CC 全表比對)" },
+        { "name": "normalized_no", "type": "str", "notes": "去分隔符、去國碼、去尾端 kind 後的號碼主體" },
+        { "name": "kind", "type": "str|null", "notes": "kind code (A1/B2/U/...);CN/TW 剝除,US 數字型保留" }
+      ]
+    },
+    {
+      "name": "ConverterOutput",
+      "kind": "json",
+      "fields": [
+        { "name": "to_patentdb_key", "type": "str", "notes": "country + normalized_no (= 現 canonical_pubno,向後相容)" },
+        { "name": "patentdb_key_variants", "type": "list[str]", "notes": "[stripped_key, original_with_kind] 對帳雙 key" },
+        { "name": "to_gpss_rest", "type": "str", "notes": "完整 pubno (含 kind)" },
+        { "name": "to_gpss4_web", "type": "tuple[str,str]", "notes": "(去國碼數字, axis) axis∈{pub,apply}" },
+        { "name": "to_epo_variants", "type": "list[str]", "notes": "docdb 形式 CC.NUMBER[.KIND];US pre-grant 10↔11 雙變體,主形式在前" }
+      ]
+    }
+  ]
+}

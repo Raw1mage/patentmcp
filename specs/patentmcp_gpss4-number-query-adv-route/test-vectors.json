@@ -1,0 +1,50 @@
+[
+  {
+    "id": "TV-1",
+    "description": "軸別推斷: TW 民國年申請號 → apply/@AN (converter to_gpss4_web)",
+    "input": {"raw": "TW202223848", "axis": null},
+    "expected": {"number": "202223848", "axis": "pub", "note": "9碼非民國年3+6形; known-item 實際 @AN 查; roundtrip 驗"}
+  },
+  {
+    "id": "TV-2",
+    "description": "per-session scope 復用: 同 session 第二次 _ensure_query_ready(TW,apply) 不重設",
+    "input": {"session_scope_set": ["TWA", "TWB"], "need": ["TWA", "TWB"]},
+    "expected": {"set_search_databases_called": false, "reason": "scope 已含所需 (DD-4)"}
+  },
+  {
+    "id": "TV-3",
+    "description": "per-session scope 首次: 空 session 需設定",
+    "input": {"session_scope_set": [], "need": ["TWA", "TWB"]},
+    "expected": {"set_search_databases_called": true, "scope_set_after": ["TWA", "TWB"]}
+  },
+  {
+    "id": "TV-4",
+    "description": "login gate 互斥: gate 被持有時第二 acquire fail-fast",
+    "input": {"gate_held_by": "gpss4_resolve_appnos", "second_acquirer": "gpss4_folder_search"},
+    "expected": {"raises": "GPSS4LoginBusyError", "holder_in_msg": "gpss4_resolve_appnos", "queued": false, "retried": false}
+  },
+  {
+    "id": "TV-5",
+    "description": "login gate finally release: 例外路徑也釋放",
+    "input": {"flow": "acquire → resolve_one raises → finally"},
+    "expected": {"gate_released": true, "holder_after": null}
+  },
+  {
+    "id": "TV-6",
+    "description": "國別→DB codes 推導",
+    "input": {"cases": [{"country": "TW", "axis": "apply"}, {"country": "CN"}, {"country": "US"}]},
+    "expected": {"TW": ["TWA", "TWB"], "CN": ["CNA", "CNB"], "US": ["USA", "USB"]}
+  },
+  {
+    "id": "TV-7",
+    "description": "live roundtrip (等額度窗口): known-item TW202223848 走 adv 路徑抽得到公開公告號",
+    "input": {"number": "202223848", "axis": "apply", "requires_live": true},
+    "expected": {"pub_no_not_null": true, "note": "本 BR 核心驗收; folder 路徑此案 unmatched, adv 路徑應 resolved"}
+  },
+  {
+    "id": "TV-8",
+    "description": "live batch (等額度窗口): pending_tw_99 resolved 率從 0 回升",
+    "input": {"batch": "pending_tw_99", "requires_live": true},
+    "expected": {"resolved_gt_0": true, "unmatched_near_0": true}
+  }
+]

@@ -1,0 +1,69 @@
+{
+  "diagram_title": "跨 DB 專利號碼格式轉換 (pubno_convert SSOT)",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "正規化解析 raw 號碼",
+      "description": "從任意來源格式的 pubno/appno 字串,去分隔符、剝國碼、拆 kind,產出 (country, normalized_no, kind) 三元組",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "投影為目標 DB 格式",
+      "description": "依三元組 + 目標 DB 語義規則,產出該 DB 接受的號碼形式;歧義時回 variants 陣列(主形式在前)",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    {
+      "id": "AR1",
+      "source": "EXTERNAL",
+      "target": "A1:input",
+      "type": "input",
+      "label": "raw pubno/appno 字串"
+    },
+    {
+      "id": "AR2",
+      "source": "EXTERNAL",
+      "target": "A1:control",
+      "type": "control",
+      "label": "_KNOWN_CC 國碼表 + TW 民國年號形規則"
+    },
+    {
+      "id": "AR3",
+      "source": "EXTERNAL",
+      "target": "A1:mechanism",
+      "type": "mechanism",
+      "label": "stdlib re (純函式)"
+    },
+    {
+      "id": "AR4",
+      "source": "A1:output",
+      "target": "A2:input",
+      "type": "output",
+      "label": "(country, normalized_no, kind) 三元組"
+    },
+    {
+      "id": "AR5",
+      "source": "EXTERNAL",
+      "target": "A2:control",
+      "type": "control",
+      "label": "目標 DB 語義規則 (kind-strip / docdb 位數變體 / 軸別推斷)"
+    },
+    {
+      "id": "AR6",
+      "source": "EXTERNAL",
+      "target": "A2:mechanism",
+      "type": "mechanism",
+      "label": "mapping 知識表 (每條附實測依據)"
+    },
+    {
+      "id": "AR7",
+      "source": "A2:output",
+      "target": "EXTERNAL",
+      "type": "output",
+      "label": "DB 接受格式 (str) 或 variants[]"
+    }
+  ]
+}

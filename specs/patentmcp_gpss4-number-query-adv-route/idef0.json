@@ -1,0 +1,45 @@
+{
+  "diagram_title": "GPSS4 登入模式號碼查詢改走 adv_search 路徑 + 登入互斥 gate",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "取得登入互斥 gate",
+      "description": "任何觸發 web 登入的 number-query 進入前,先取得 process 內全局 login gate;拿不到即 fail-fast raise(不排隊不重試不開第二 session)。",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "確保 login session + per-session DB scope",
+      "description": "ensure_logged_in;_ensure_query_ready(country,axis) 依號形/軸推導 DB codes(TW→TWA+TWB / CN→CNA+CNB / US→USA+USB),per-session 設一次 scope(session._scope_set 記錄已設),未設才設,失敗即 GPSS4DbScopeError。",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "adv_search 單號解析 (resolve_one)",
+      "description": "submit (<no>)@AN/@PN query → 家族收合 → _enter_dual_view(簡詳目並列,唯一 render 專利號檢視) → parse 第一筆匹配 row 的 pub_no。復用 _submit_query/_enter_dual_view/parse primitives,不做全軸分頁。",
+      "decomposition": null
+    },
+    {
+      "id": "A4",
+      "title": "釋放 gate + 輸出結果",
+      "description": "session close/finally 釋放 login gate(真進程校驗);回傳 resolved 記錄 + 本次生效 DB scope(可觀測)。",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    {"id": "AR1", "source": "EXTERNAL", "target": "A1:input", "type": "input", "label": "number-query 請求 (appno/pubno, axis)"},
+    {"id": "AR2", "source": "EXTERNAL", "target": "A1:control", "type": "control", "label": "單線天條: 禁並發/禁雙登入 (§4A)"},
+    {"id": "AR3", "source": "EXTERNAL", "target": "A1:mechanism", "type": "mechanism", "label": "in-memory login gate (asyncio.Lock + holder)"},
+    {"id": "AR4", "source": "A1:output", "target": "A2:input", "type": "output", "label": "gate 持有權"},
+    {"id": "AR5", "source": "EXTERNAL", "target": "A2:control", "type": "control", "label": "fail-fast 天條: scope 設定失敗即中止 (無 silent fallback)"},
+    {"id": "AR6", "source": "EXTERNAL", "target": "A2:mechanism", "type": "mechanism", "label": "GPSS4Session + set_search_databases + _DB_CODE_TO_FIELD"},
+    {"id": "AR7", "source": "A2:output", "target": "A3:input", "type": "output", "label": "authed session + 已設 scope"},
+    {"id": "AR8", "source": "EXTERNAL", "target": "A3:control", "type": "control", "label": "軸別路由: TW\\d{9}→@AN, 否則@PN (DD-4 converter)"},
+    {"id": "AR9", "source": "EXTERNAL", "target": "A3:mechanism", "type": "mechanism", "label": "adv_search: _submit_query / _enter_dual_view / parse"},
+    {"id": "AR10", "source": "A3:output", "target": "A4:input", "type": "output", "label": "解析出的 pub_no (或 not_found)"},
+    {"id": "AR11", "source": "EXTERNAL", "target": "A4:control", "type": "control", "label": "gate release 必在 finally + 真進程一致性校驗"},
+    {"id": "AR12", "source": "EXTERNAL", "target": "A4:mechanism", "type": "mechanism", "label": "session.close() + login gate release"},
+    {"id": "AR13", "source": "A4:output", "target": "EXTERNAL", "type": "output", "label": "resolved 記錄 + 生效 scope (可觀測) + gate 釋放"}
+  ]
+}

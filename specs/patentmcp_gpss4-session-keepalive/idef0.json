@@ -1,0 +1,102 @@
+{
+  "diagram_title": "治理跨呼叫共享 GPSS4 登入 session (in-memory SSOT)",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "借用 session (acquire / reuse-or-mint)",
+      "description": "登入模式進入點向 SessionManager 借共享 session。有 live+健康+未逾 TTL → 復用不重登;否則 close 舊的、mint 新 session 登入一次。已有 in-use holder → fail-fast GPSS4LoginBusyError (§4A)。",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "使用 session 做登入模式工作",
+      "description": "caller (resolve_one 迴圈 / folder 操作) 在借到的 session 上執行;SessionManager 標記 in-use + 更新 last-used 時戳。",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "歸還 session (release, keep-alive)",
+      "description": "工作結束 release：標回 idle + 不 close，留在 SSOT 供下次復用。真 close 僅由顯式 gpss4_session_close 或 A4 reaper 觸發。",
+      "decomposition": null
+    },
+    {
+      "id": "A4",
+      "title": "回收 session (reap: idle+absolute TTL / health-fail)",
+      "description": "lazy-on-acquire 為主 (可選背景 task 為輔)：idle 逾時 / absolute 壽命逾時 (<90min) / 健康檢查失敗 → close() 清出 SSOT。",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    {
+      "id": "AR1",
+      "source": "EXTERNAL",
+      "target": "A1:input",
+      "type": "input",
+      "label": "登入模式呼叫 (holder 名 + 需求國別)"
+    },
+    {
+      "id": "AR2",
+      "source": "EXTERNAL",
+      "target": "A1:control",
+      "type": "control",
+      "label": "§4A 禁並發/禁雙登入天條 + TTL 上限(<90min)"
+    },
+    {
+      "id": "AR3",
+      "source": "EXTERNAL",
+      "target": "A1:mechanism",
+      "type": "mechanism",
+      "label": "SessionManager singleton + GPSS4Session.login + _healthy()"
+    },
+    {
+      "id": "AR4",
+      "source": "A1:output",
+      "target": "A2:input",
+      "type": "output",
+      "label": "已 authed 共享 session (in-use)"
+    },
+    {
+      "id": "AR5",
+      "source": "EXTERNAL",
+      "target": "A2:mechanism",
+      "type": "mechanism",
+      "label": "resolve_one / folder 操作 primitives"
+    },
+    {
+      "id": "AR6",
+      "source": "A2:output",
+      "target": "A3:input",
+      "type": "output",
+      "label": "工作完成 (查詢結果 + 用畢 session)"
+    },
+    {
+      "id": "AR7",
+      "source": "A3:control",
+      "target": "A1:control",
+      "type": "control",
+      "label": "idle session 留存供復用 (keep-alive 回饋邊)"
+    },
+    {
+      "id": "AR8",
+      "source": "EXTERNAL",
+      "target": "A4:control",
+      "type": "control",
+      "label": "顯式 close tool / idle+absolute TTL 逾時 / health-fail"
+    },
+    {
+      "id": "AR9",
+      "source": "A3:output",
+      "target": "A4:input",
+      "type": "output",
+      "label": "idle session (候回收)"
+    },
+    {
+      "id": "AR10",
+      "source": "A4:output",
+      "target": "EXTERNAL",
+      "type": "output",
+      "label": "session 關閉 + SSOT 清空 (可觀測 status)"
+    }
+  ]
+}

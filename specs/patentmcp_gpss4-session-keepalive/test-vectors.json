@@ -1,0 +1,62 @@
+[
+  {
+    "id": "TV-1",
+    "description": "第二次 acquire 復用不重登 (核心 keep-alive 保證)",
+    "input": {"seq": ["acquire(A)", "release(A)", "acquire(A)"], "session_healthy": true, "within_ttl": true},
+    "expected": {"login_count": 1, "same_session_object": true}
+  },
+  {
+    "id": "TV-2",
+    "description": "SSOT 空閒時首次 acquire mint 一次",
+    "input": {"seq": ["acquire(A)"], "initial_session": null},
+    "expected": {"login_count": 1, "live": true, "busy": true}
+  },
+  {
+    "id": "TV-3",
+    "description": "並發第二 acquire fail-fast (§4A 禁並發)",
+    "input": {"seq": ["acquire(A)", "acquire(B) [A 未 release]"]},
+    "expected": {"raises": "GPSS4LoginBusyError", "live_session_count": 1, "holder": "A"}
+  },
+  {
+    "id": "TV-4",
+    "description": "release 為 keep-alive 不 close",
+    "input": {"seq": ["acquire(A)", "release(A)"]},
+    "expected": {"live": true, "busy": false, "session_closed": false}
+  },
+  {
+    "id": "TV-5",
+    "description": "idle TTL 逾時 → 下次 acquire 重建",
+    "input": {"seq": ["acquire(A)", "release(A)", "advance_clock(IDLE_TTL+1)", "acquire(A)"], "session_healthy": true},
+    "expected": {"login_count": 2, "old_session_closed": true}
+  },
+  {
+    "id": "TV-6",
+    "description": "absolute TTL 逾時強制重建 (不論 idle)",
+    "input": {"seq": ["acquire(A)", "release(A)", "advance_clock(ABSOLUTE_TTL+1)", "acquire(A)"]},
+    "expected": {"login_count": 2, "reason": "absolute_ttl"}
+  },
+  {
+    "id": "TV-7",
+    "description": "復用前健康檢查失敗 → close + mint",
+    "input": {"seq": ["acquire(A)", "release(A)", "acquire(A)"], "session_healthy": false, "within_ttl": true},
+    "expected": {"login_count": 2, "old_session_closed": true}
+  },
+  {
+    "id": "TV-8",
+    "description": "顯式 gpss4_session_close 清空 SSOT",
+    "input": {"seq": ["acquire(A)", "release(A)", "gpss4_session_close()"]},
+    "expected": {"closed": true, "live_after": false}
+  },
+  {
+    "id": "TV-9",
+    "description": "release 保證在例外路徑 (finally) 仍歸還",
+    "input": {"seq": ["acquire(A)", "work_raises_exception", "release(A) [via finally]"]},
+    "expected": {"busy_after": false, "live": true}
+  },
+  {
+    "id": "TV-10",
+    "description": "4 進入點 GPSS4_LOGIN_BUSY 對外 typed error 契約相容 (不回歸)",
+    "input": {"seq": ["gpss4_resolve_appnos [A holds]", "gpss4_folder_list [B concurrent]"]},
+    "expected": {"error_code": "GPSS4_LOGIN_BUSY", "success": false}
+  }
+]

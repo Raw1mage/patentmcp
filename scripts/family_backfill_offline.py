@@ -39,14 +39,15 @@ MIN_INTERVAL = float(os.environ.get("EPO_MIN_INTERVAL", "4.2"))  # 15/min safe
 MAX_RETRIES = 3
 
 
-# ── pubno helpers (ported verbatim from verified tool logic) ─────────────
-def to_docdb(pub: str) -> Optional[str]:
-    p = re.sub(r"[\s\-]", "", pub or "").upper()
-    m = re.match(r"^([A-Z]{2})([0-9A-Z]+?)([A-Z][0-9]?)?$", p)
-    if not m:
-        return None
-    cc, num, kind = m.group(1), m.group(2), m.group(3)
-    return f"{cc}.{num}.{kind}" if kind else f"{cc}.{num}"
+# ── pubno helpers — number-format logic owned by the converter SSOT ───────
+# (pubno_convert.py, BR_20260719). This host-local script runs outside the MCP
+# process, so inject src/ onto sys.path and import the canonical to_docdb rather
+# than re-porting a simplified copy (the old inline version had NO US pre-grant
+# 10↔11 variant support — a scatter regression this convergence removes).
+_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+from patent_mcp_server.pubno_convert import to_docdb  # noqa: E402  (SSOT re-use)
 
 
 def fam_key(pn: str) -> str:

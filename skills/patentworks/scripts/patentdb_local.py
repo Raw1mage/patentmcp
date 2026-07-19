@@ -50,7 +50,14 @@ def _fail(code: str, message: str, **extra) -> None:
     sys.exit(2)
 
 
-# ── pubno normalization (vendored from patentdb_store.py) ─────────────
+# ── pubno normalization ──────────────────────────────────────────────
+# VENDORED from src/patent_mcp_server/pubno_convert.py (canonical SSOT, BR_20260719).
+# This host-side landing plane deliberately does NOT import from src/ (R13.6 —
+# runs on host uid, no container / token round-trip). The functions below MUST
+# stay byte-for-byte identical to pubno_convert.normalize_pubno / to_patentdb_key
+# (== canonical_pubno). A pytest vendor-drift guard compares the two function
+# bodies and FAILS on drift — if you change the canonical version in src, mirror
+# the edit here (and vice-versa); do not let the two definitions diverge.
 
 _KNOWN_CC = (
     "TW", "US", "EP", "WO", "CN", "KR", "JP", "CA", "AU", "DE", "GB",

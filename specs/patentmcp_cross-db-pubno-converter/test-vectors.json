@@ -1,0 +1,50 @@
+[
+  {
+    "id": "TV-1",
+    "description": "to_patentdb_key CN 剝尾端 kind",
+    "input": { "fn": "to_patentdb_key", "raw": "CN119230141A" },
+    "expected": "CN119230141"
+  },
+  {
+    "id": "TV-2",
+    "description": "to_patentdb_key US 保留數字型 kind",
+    "input": { "fn": "to_patentdb_key", "raw": "US11213256B2" },
+    "expected": "US11213256B2"
+  },
+  {
+    "id": "TV-3",
+    "description": "patentdb_key_variants CN 對帳雙 key（stripped 在前）",
+    "input": { "fn": "patentdb_key_variants", "raw": "CN119230141A" },
+    "expected": ["CN119230141", "CN119230141A"]
+  },
+  {
+    "id": "TV-4",
+    "description": "to_epo_variants US pre-grant 10↔11 位雙變體（主形式在前）",
+    "input": { "fn": "to_epo_variants", "raw": "US20230053201A1" },
+    "expected": ["US.20230053201.A1", "US.2023053201.A1"]
+  },
+  {
+    "id": "TV-5",
+    "description": "to_gpss4_web TW 申請號號形推斷 → apply 軸",
+    "input": { "fn": "to_gpss4_web", "raw": "TW109112770", "axis": null },
+    "expected": ["109112770", "apply"]
+  },
+  {
+    "id": "TV-6",
+    "description": "to_gpss4_web TW 公開號 → 預設 pub 軸",
+    "input": { "fn": "to_gpss4_web", "raw": "TW202138759A", "axis": null },
+    "expected": ["202138759", "pub"]
+  },
+  {
+    "id": "TV-7",
+    "description": "to_gpss_rest 保留完整 pubno（含 kind）",
+    "input": { "fn": "to_gpss_rest", "raw": "US-11213256-B2" },
+    "expected": "US11213256B2"
+  },
+  {
+    "id": "TV-8",
+    "description": "canonical_pubno 向後相容：外國碼不誤掛 US 前綴（DD-31 回歸）",
+    "input": { "fn": "to_patentdb_key", "raw": "KR20260067039A" },
+    "expected": "KR20260067039"
+  }
+]

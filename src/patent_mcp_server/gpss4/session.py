@@ -144,6 +144,22 @@ class GPSS4Session:
         # Populated by login(); a browser (playwright) MUST goto THIS url — a
         # bare gpssbkm?@@<n> mints a fresh anonymous slot (member nav absent).
         self.landing_url = ""
+        # BR_20260719 DD-4: per-login-session DB scope tracking. The GPSS4 search
+        # database scope is an account-level per-user server-side config; once set
+        # for this authed session it survives until re-login. _ensure_query_ready
+        # records the REST db codes already applied so a batch sets scope ONCE per
+        # session (not per query) — cutting the request volume that drives TIPO
+        # throttling. Cleared on (re-)login since a fresh slot may not inherit it.
+        self._scope_set: set = set()
+        # BR_20260719 slot-expiry RCA (2026-07-19): the 進階檢索 tab anchor
+        # (slot-key URL) is SINGLE-USE — reusing the login-cached member anchor
+        # for a 2nd query in the same session returns the expired-slot stub
+        # (len=289, "view switch failed"). Every result / form page re-mints a
+        # fresh anchor, so a batch of single-number queries must chain query N+1
+        # off query N's page. This holds the fresh anchor harvested from the last
+        # query; None -> first query of the session uses the login-cached member
+        # anchor. Cleared on (re-)login.
+        self._adv_tab_next: Optional[str] = None
 
     @property
     def username(self) -> Optional[str]:
@@ -308,6 +324,9 @@ class GPSS4Session:
             self._authed = self._page_is_authed(resp.text)
             if self._is_authenticated():
                 self._logged_in = True
+                # fresh login slot: any prior per-session DB scope no longer holds.
+                self._scope_set = set()
+                self._adv_tab_next = None  # fresh slot: prior anchor chain void
                 # Preserve the authenticated SSO-landing URL so a browser can
                 # goto it directly (its slot token is what carries the session).
                 self.landing_url = str(resp.url)

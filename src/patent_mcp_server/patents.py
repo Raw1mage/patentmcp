@@ -1001,36 +1001,11 @@ def _get_db_root():
 
 
 def _get_patent_country_and_normalized_no(publication_number: str) -> tuple[str, str]:
-    import re
-    pat = re.sub(r'\s+', '', publication_number).upper()
-
-    # Determine country. A pubno leads with its own 2-letter ISO country code;
-    # match the FULL known set (see patentdb_store._KNOWN_CC) not just
-    # TW/US/EP/WO/CN — otherwise a foreign number (KR.../JP.../CA...) falls
-    # through to the default "US" and later gets a spurious US prefix stacked
-    # on top, minting double-prefix pubnos (RCA DD-31, 2026-07-14).
-    from .patentdb_store import _KNOWN_CC
-    country = "US"  # Default fallback
-    matched_cc = False
-    for cc in _KNOWN_CC:
-        if pat.startswith(cc):
-            country, pat, matched_cc = cc, pat[len(cc):], True
-            break
-    if not matched_cc and re.match(r'^[IMD]\d+', pat):
-        country = "TW"
-    elif not matched_cc and re.match(r'^\d{9}$', pat):  # TW application number (9 digits)
-        country = "TW"
-        
-    # Normalize patent number
-    m_cert = re.match(r'^([IMD]\d+)[A-Za-z]*$', pat)
-    if m_cert:
-        pat = m_cert.group(1)
-    else:
-        m_app = re.match(r'^(\d+)[A-Za-z]*$', pat)
-        if m_app:
-            pat = m_app.group(1)
-            
-    return country, pat
+    # Number-format logic is now owned by the cross-DB converter SSOT
+    # (pubno_convert.py, BR_20260719). Delegates to pubno_convert.normalize_pubno;
+    # behaviour unchanged (foreign-CC split + DD-31 no double-US-prefix preserved).
+    from patent_mcp_server.pubno_convert import normalize_pubno
+    return normalize_pubno(publication_number)
 
 
 def _find_local_patent_cache(country: str, norm_pat: str, file_type: str):
@@ -3192,7 +3167,16 @@ async def _gpss_web_search_impl(
         }
 
 
-@mcp.tool()
+# RETIRED 2026-07-19 (user ruling): the gpss3 ANONYMOUS boolean-search path is
+# too weak to be worth exposing (no CN library coverage, no db-scope control —
+# it can only reach the anonymous default library set). All web boolean search
+# is unified onto the gpss4 LOGGED-IN path (gpss4_advanced_search), which has
+# full boolean power + per-session db-scope (set_search_databases) + CN coverage.
+# The @mcp.tool() registration is removed so consumers no longer see/misuse this
+# weak entry point; the impl (_gpss_web_search_impl and helpers) is kept intact
+# for reference / possible internal reuse, NOT surfaced as an MCP tool.
+# (Related living spec: patentmcp_gpss-web-login-db-scope already routes gpss3 →
+#  gpss4; this makes that "route to gpss4" an accomplished fact at the tool face.)
 async def gpss_web_search(
     expr: str,
     date_from: Optional[str] = None,
@@ -3200,7 +3184,7 @@ async def gpss_web_search(
     databases: Optional[List[str]] = None,
     num: int = 30,
 ) -> Dict[str, Any]:
-    """Boolean patent search via TIPO GPSS HUMAN login path — NO API quota.
+    """[RETIRED — no longer an MCP tool] Boolean patent search via TIPO GPSS HUMAN login path — NO API quota.
 
     Use when you need TIPO GPSS's full boolean power (field-qualified brackets,
     NOT, proximity, truncation) WITHOUT spending GPSS REST API quota, or when
@@ -5608,18 +5592,26 @@ async def gpss4_folder_list() -> Dict[str, Any]:
     (DD-5 trap). If no marks exist yet, returns an empty list.
     """
     from patent_mcp_server.gpss4.folder import GPSS4Folder, GPSS4FolderError
+    from patent_mcp_server.gpss4.session_manager import (
+        shared_session, GPSS4LoginBusyError,
+    )
 
-    f = GPSS4Folder()
     try:
-        # A same-session marked-list read: mark-list content is produced by the
-        # add-to-marks response; with no pending selection this surfaces the
-        # current list. We expose it via a no-op search+list on the member area.
-        ml = await f.current_marks()
-        return {"success": True, **ml.to_dict()}
-    except GPSS4FolderError as e:
-        return {"success": False, "error_code": "GPSS4_FOLDER", "error": str(e)}
-    finally:
-        await f.close()
+        # keep-alive SSOT: borrow the shared authed session (no re-login across
+        # calls). GPSS4Folder wraps it WITHOUT owning it — do NOT call f.close()
+        # (that would aclose the shared session); release is keep-alive on exit.
+        async with shared_session("gpss4_folder_list") as s:
+            f = GPSS4Folder(session=s)
+            try:
+                # A same-session marked-list read: mark-list content is produced
+                # by the add-to-marks response; with no pending selection this
+                # surfaces the current list.
+                ml = await f.current_marks()
+                return {"success": True, **ml.to_dict()}
+            except GPSS4FolderError as e:
+                return {"success": False, "error_code": "GPSS4_FOLDER", "error": str(e)}
+    except GPSS4LoginBusyError as e:
+        return {"success": False, "error_code": "GPSS4_LOGIN_BUSY", "error": str(e)}
 
 
 @mcp.tool()
@@ -5632,15 +5624,21 @@ async def gpss4_folder_mark(number: str, axis: str = "pub") -> Dict[str, Any]:
     account's marks).
     """
     from patent_mcp_server.gpss4.folder import GPSS4Folder, GPSS4FolderError
+    from patent_mcp_server.gpss4.session_manager import (
+        shared_session, GPSS4LoginBusyError,
+    )
 
-    f = GPSS4Folder()
     try:
-        ml = await f.mark_patent(number, axis=axis)
-        return {"success": True, "marked": number, **ml.to_dict()}
-    except GPSS4FolderError as e:
-        return {"success": False, "error_code": "GPSS4_FOLDER", "error": str(e)}
-    finally:
-        await f.close()
+        # keep-alive SSOT: borrow shared authed session; do NOT f.close() it.
+        async with shared_session("gpss4_folder_mark") as s:
+            f = GPSS4Folder(session=s)
+            try:
+                ml = await f.mark_patent(number, axis=axis)
+                return {"success": True, "marked": number, **ml.to_dict()}
+            except GPSS4FolderError as e:
+                return {"success": False, "error_code": "GPSS4_FOLDER", "error": str(e)}
+    except GPSS4LoginBusyError as e:
+        return {"success": False, "error_code": "GPSS4_LOGIN_BUSY", "error": str(e)}
 
 
 @mcp.tool(annotations=_RO)
@@ -5651,19 +5649,170 @@ async def gpss4_folder_search(number: str, axis: str = "pub") -> Dict[str, Any]:
     and the selectable hits (db/rec/curt tuples). Use gpss4_folder_mark to add.
     """
     from patent_mcp_server.gpss4.folder import GPSS4Folder, GPSS4FolderError
+    from patent_mcp_server.gpss4.session_manager import (
+        shared_session, GPSS4LoginBusyError,
+    )
 
-    f = GPSS4Folder()
     try:
-        res = await f.search_number(number, axis=axis)
-        return {
-            "success": True,
-            "count": res.count,
-            "hits": [{"db": d, "rec": r, "curt": c} for d, r, c in res.hits],
-        }
-    except GPSS4FolderError as e:
-        return {"success": False, "error_code": "GPSS4_FOLDER", "error": str(e)}
-    finally:
-        await f.close()
+        # keep-alive SSOT: borrow shared authed session; do NOT f.close() it.
+        async with shared_session("gpss4_folder_search") as s:
+            f = GPSS4Folder(session=s)
+            try:
+                res = await f.search_number(number, axis=axis)
+                return {
+                    "success": True,
+                    "count": res.count,
+                    "hits": [{"db": d, "rec": r, "curt": c} for d, r, c in res.hits],
+                }
+            except GPSS4FolderError as e:
+                return {"success": False, "error_code": "GPSS4_FOLDER", "error": str(e)}
+    except GPSS4LoginBusyError as e:
+        return {"success": False, "error_code": "GPSS4_LOGIN_BUSY", "error": str(e)}
+
+
+@mcp.tool()
+async def gpss4_resolve_appnos(
+    appnos_file: str,
+    out_file: str = "/patentdb/resolved_tw_appno.jsonl",
+    cursor: int = 0,
+    max_items: int = 40,
+    time_budget_sec: int = 110,
+) -> Dict[str, Any]:
+    """Resolve TW 民國年申請號 -> 公開/公告號 via GPSS4 member web (quota-free, batch).
+
+    Server-side SERIAL loop over a file of application numbers (login-crawler
+    single-thread rule enforced by design + §4A login gate: one authed session,
+    one item at a time).
+
+    BR_20260719 §4/§4A: resolution runs on the **adv_search path** (resolve_one),
+    NOT the folder mark-list path — recon proved the mark-list result page never
+    renders 公開公告號 (folder search_number hits but _extract_rows=0). The adv
+    path's 簡詳目並列 view is the ONLY view that renders patent numbers. DB scope
+    is set ONCE per login session (_ensure_query_ready, DD-4) not per query, and
+    the whole batch runs under the process-wide login gate (§4A, fail-fast on a
+    concurrent login attempt — never a second session).
+
+    Appends one JSONL row per item to out_file IMMEDIATELY (resumable; crash
+    loses nothing). Returns stats + next_cursor for relay-style continuation.
+    """
+    import json as _json
+    import time as _time
+    from patent_mcp_server.gpss4.adv_search import (
+        resolve_one, _ensure_query_ready, GPSS4AdvSearchError, GPSS4DbScopeError,
+    )
+    from patent_mcp_server.gpss4.session_manager import (
+        shared_session, GPSS4LoginBusyError,
+    )
+
+    try:
+        with open(appnos_file, "r", encoding="utf-8") as fh:
+            nums = [ln.strip() for ln in fh if ln.strip()]
+    except OSError as e:
+        return {"success": False, "error": f"appnos_file read failed: {e}"}
+    total = len(nums)
+    if cursor >= total:
+        return {"success": True, "exhausted": True, "next_cursor": cursor,
+                "total": total, "processed": 0}
+
+    t0 = _time.monotonic()
+    stats = {"resolved": 0, "not_found": 0, "unmatched": 0, "error": 0,
+             "via_adv": 0}
+    consecutive_errors = 0
+    i = cursor
+    effective_scope: List[str] = []
+    try:
+        # keep-alive SSOT (patentmcp_gpss4-session-keepalive DD-1/DD-4): borrow the
+        # shared authed session (reuse across calls, no re-login); release on exit
+        # is keep-alive (NOT close) so the next call reuses this authed slot.
+        async with shared_session("gpss4_resolve_appnos") as s:
+            # DD-4: set TWA+TWB scope ONCE for this session (not per query).
+            # (ensure_logged_in already done inside acquire/mint.)
+            effective_scope = await _ensure_query_ready(s, "TW")
+            end = min(total, cursor + max_items)
+            while i < end and (_time.monotonic() - t0) < time_budget_sec:
+                raw = nums[i]
+                num = raw[2:] if raw.upper().startswith("TW") else raw
+                row: Dict[str, Any] = {"appno": raw, "pubno": None,
+                                       "apply_date": None, "pub_date": None,
+                                       "status": "error"}
+                try:
+                    hit = await resolve_one(s, num, axis="apply", country="TW")
+                    if hit is None:
+                        row["status"] = "not_found"
+                        stats["not_found"] += 1
+                    elif hit.pat_no:
+                        pn = hit.pat_no
+                        row.update({
+                            "pubno": pn if pn.upper().startswith("TW") else f"TW{pn}",
+                            "apply_date": hit.apply_date,
+                            "status": "resolved",
+                        })
+                        stats["resolved"] += 1
+                        stats["via_adv"] += 1
+                    else:
+                        row["status"] = "unmatched"
+                        stats["unmatched"] += 1
+                    consecutive_errors = 0
+                except GPSS4DbScopeError:
+                    # scope failure is fatal to the whole batch (DD-6 fail-fast):
+                    # every subsequent query would false-unmatch. Re-raise.
+                    raise
+                except (GPSS4AdvSearchError, Exception) as e:  # noqa: BLE001
+                    row["error"] = f"{type(e).__name__}: {e}"[:200]
+                    stats["error"] += 1
+                    consecutive_errors += 1
+                with open(out_file, "a", encoding="utf-8") as out:
+                    out.write(_json.dumps(row, ensure_ascii=False) + "\n")
+                i += 1
+                if consecutive_errors >= 8:
+                    return {"success": False, "error_code": "CONSECUTIVE_ERRORS",
+                            "next_cursor": i, "total": total,
+                            "processed": i - cursor, "stats": stats,
+                            "effective_scope": effective_scope}
+    except GPSS4LoginBusyError as e:
+        return {"success": False, "error_code": "GPSS4_LOGIN_BUSY",
+                "error": str(e), "next_cursor": i, "total": total,
+                "processed": i - cursor, "stats": stats}
+    except GPSS4DbScopeError as e:
+        return {"success": False, "error_code": "GPSS4_DB_SCOPE",
+                "error": str(e), "next_cursor": i, "total": total,
+                "processed": i - cursor, "stats": stats}
+    return {"success": True, "exhausted": i >= total, "next_cursor": i,
+            "total": total, "processed": i - cursor, "stats": stats,
+            "effective_scope": effective_scope,
+            "elapsed_sec": round(_time.monotonic() - t0, 1)}
+
+
+@mcp.tool()
+async def gpss4_session_close() -> Dict[str, Any]:
+    """Explicitly close the shared GPSS4 login session (keep-alive SSOT).
+
+    The GPSS4 login-mode session is kept alive across MCP calls to avoid
+    re-logging in (TIPO throttles login frequency; patentmcp_gpss4-session-
+    keepalive DD-4). Call this to explicitly hand the session back / close it
+    (e.g. before a long idle period, or to force a fresh login next call). An
+    idle/absolute TTL reaper also closes it automatically, so this is the
+    optional half of the double safety-net — not mandatory.
+
+    Returns {closed: bool (a live session was closed), was_busy: bool (it was
+    still in-use — an anomaly signal, but closed anyway)}.
+    """
+    from patent_mcp_server.gpss4.session_manager import close_shared_session
+    res = await close_shared_session()
+    return {"success": True, **res}
+
+
+@mcp.tool(annotations=_RO)
+async def gpss4_session_status() -> Dict[str, Any]:
+    """Report the shared GPSS4 login session state (keep-alive SSOT). Read-only.
+
+    Observability into the cross-call session: whether a live authed session
+    exists, whether it's in-use (and by whom), its age / idle time / TTL
+    budget, and login_count (the key metric — keep-alive success shows as
+    login_count ≪ number of login-mode calls). No login is triggered.
+    """
+    from patent_mcp_server.gpss4.session_manager import shared_session_status
+    return {"success": True, **shared_session_status()}
 
 
 # ---------------------------------------------------------------------------

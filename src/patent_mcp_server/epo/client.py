@@ -24,22 +24,14 @@ AUTH_URL = "https://ops.epo.org/3.2/auth/accesstoken"
 BASE_URL = "https://ops.epo.org/3.2/rest-services"
 
 
-def to_docdb(pub: str) -> Optional[str]:
-    """Normalize a publication number to OPS docdb format 'CC.NUMBER.KIND'.
-    e.g. US11213256B2 / US-11213256-B2 -> US.11213256.B2; TW-I684433-B -> TW.I684433.B
-    """
-    p = re.sub(r"[\s\-]", "", pub).upper()
-    # kind code is OPTIONAL: many pool pubnos (CN121811579, TW202238300, EP42)
-    # carry no kind suffix. OPS accepts docdb 'CC.NUMBER' without a kind for
-    # family lookup, so a missing kind must NOT fail the parse (else CN+TW —
-    # ~83% of the backfill target set — silently drops out).
-    m = re.match(r"^([A-Z]{2})([0-9A-Z]+?)([A-Z][0-9]?)?$", p)
-    if not m:
-        return None
-    cc, num, kind = m.group(1), m.group(2), m.group(3)
-    if kind:
-        return f"{cc}.{num}.{kind}"
-    return f"{cc}.{num}"
+# Number-format logic is now owned by the cross-DB converter SSOT
+# (pubno_convert.py, BR_20260719). These thin re-exports preserve the existing
+# `from patent_mcp_server.epo.client import to_docdb, docdb_variants` import
+# paths (and the module-internal callers below at lines ~197/237/361/378/444)
+# while the canonical implementation lives in ONE place. Do NOT re-implement
+# docdb formatting here.
+from patent_mcp_server.pubno_convert import to_docdb  # noqa: F401  (re-export)
+from patent_mcp_server.pubno_convert import to_epo_variants as docdb_variants  # noqa: F401
 
 
 def _txt(node: Any) -> str:
@@ -165,15 +157,21 @@ class EPOClient:
         publication numbers across jurisdictions."""
         if not self.configured():
             return {"success": False, "error": "EPO_CONSUMER_KEY/SECRET not set"}
-        docdb = to_docdb(pub)
-        if not docdb:
+        # BR_20260719 reopened: query every docdb variant (US grant/old-A/pre-grant
+        # leading-zero serials 404 on a single form) — same fallback as biblio().
+        variants = docdb_variants(pub)
+        if not variants:
             return {"success": False, "error": f"cannot parse pub number: {pub}"}
-        try:
-            data = await self._get(f"/family/publication/docdb/{docdb}")
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"EPO family failed for {pub}: {e}")
-            return {"success": False, "error": str(e)}
-        if data.get("_status") == 404:
+        data = None
+        for docdb in variants:
+            try:
+                data = await self._get(f"/family/publication/docdb/{docdb}")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"EPO family failed for {pub} ({docdb}): {e}")
+                return {"success": False, "error": str(e)}
+            if data.get("_status") != 404:
+                break
+        if data is None or data.get("_status") == 404:
             return {"success": True, "pub": pub, "count": 0, "members": []}
         fam = (data.get("ops:world-patent-data", {})
                    .get("ops:patent-family", {}))
@@ -205,15 +203,19 @@ class EPOClient:
         """Official bibliographic data + abstract for a publication."""
         if not self.configured():
             return {"success": False, "error": "EPO_CONSUMER_KEY/SECRET not set"}
-        docdb = to_docdb(pub)
-        if not docdb:
+        variants = docdb_variants(pub)
+        if not variants:
             return {"success": False, "error": f"cannot parse pub number: {pub}"}
-        try:
-            data = await self._get(f"/published-data/publication/docdb/{docdb}/biblio")
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"EPO biblio failed for {pub}: {e}")
-            return {"success": False, "error": str(e)}
-        if data.get("_status") == 404:
+        data = None
+        for docdb in variants:
+            try:
+                data = await self._get(f"/published-data/publication/docdb/{docdb}/biblio")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"EPO biblio failed for {pub} ({docdb}): {e}")
+                return {"success": False, "error": str(e)}
+            if data.get("_status") != 404:
+                break
+        if data is None or data.get("_status") == 404:
             return {"success": True, "pub": pub, "found": False}
         try:
             doc = (data["ops:world-patent-data"]["exchange-documents"]["exchange-document"])
@@ -325,15 +327,20 @@ class EPOClient:
         """Check image availability for a publication."""
         if not self.configured():
             return {"success": False, "error": "EPO_CONSUMER_KEY/SECRET not set"}
-        docdb = to_docdb(pub)
-        if not docdb:
+        # BR_20260719 reopened: variant fallback (same as biblio/family/claims).
+        variants = docdb_variants(pub)
+        if not variants:
             return {"success": False, "error": f"cannot parse pub number: {pub}"}
-        try:
-            data = await self._get(f"/published-data/publication/docdb/{docdb}/images")
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"EPO images failed for {pub}: {e}")
-            return {"success": False, "error": str(e)}
-        if data.get("_status") == 404:
+        data = None
+        for docdb in variants:
+            try:
+                data = await self._get(f"/published-data/publication/docdb/{docdb}/images")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"EPO images failed for {pub} ({docdb}): {e}")
+                return {"success": False, "error": str(e)}
+            if data.get("_status") != 404:
+                break
+        if data is None or data.get("_status") == 404:
             return {"success": True, "pub": pub, "count": 0, "images": []}
         return {"success": True, "pub": pub, "data": data}
 
@@ -342,15 +349,20 @@ class EPOClient:
         """Official claims data for a publication."""
         if not self.configured():
             return {"success": False, "error": "EPO_CONSUMER_KEY/SECRET not set"}
-        docdb = to_docdb(pub)
-        if not docdb:
+        # BR_20260719 reopened: variant fallback (same as biblio/family/images).
+        variants = docdb_variants(pub)
+        if not variants:
             return {"success": False, "error": f"cannot parse pub number: {pub}"}
-        try:
-            data = await self._get(f"/published-data/publication/docdb/{docdb}/claims")
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"EPO claims failed for {pub}: {e}")
-            return {"success": False, "error": str(e)}
-        if data.get("_status") == 404:
+        data = None
+        for docdb in variants:
+            try:
+                data = await self._get(f"/published-data/publication/docdb/{docdb}/claims")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"EPO claims failed for {pub} ({docdb}): {e}")
+                return {"success": False, "error": str(e)}
+            if data.get("_status") != 404:
+                break
+        if data is None or data.get("_status") == 404:
             return {"success": True, "pub": pub, "found": False}
         try:
             root = data.get("ops:world-patent-data", {})
@@ -408,11 +420,25 @@ class EPOClient:
         """Download a patent image PDF page range."""
         if not self.configured():
             raise ValueError("EPO_CONSUMER_KEY/SECRET not set")
-        docdb = to_docdb(pub)
-        if not docdb:
+        # BR_20260719 reopened: the image path needs ONE concrete docdb (CC/NUM/KIND),
+        # so it can't take a variants list directly. Probe the variants via images()
+        # first to find the form EPO actually stores, then build the path from THAT
+        # form. Falls back to the primary variant if none probes clean (preserves
+        # prior behaviour on a genuine miss).
+        variants = docdb_variants(pub)
+        if not variants:
             raise ValueError(f"cannot parse pub number: {pub}")
-        # docdb is CC.NUM.KIND
-        cc, num, kind = docdb.split(".")
+        docdb = variants[0]
+        for cand in variants:
+            probe = await self._get(f"/published-data/publication/docdb/{cand}/images")
+            if probe.get("_status") != 404:
+                docdb = cand
+                break
+        # docdb is CC.NUM.KIND (kind may be absent for kindless pubs)
+        parts = docdb.split(".")
+        if len(parts) < 3:
+            raise ValueError(f"image download needs a kind code, got docdb {docdb!r}")
+        cc, num, kind = parts[0], parts[1], parts[2]
         path = f"/published-data/images/{cc}/{num}/{kind}/fullimage.pdf?Range={range_}"
         return await self._get_binary(path, accept="application/pdf")
 

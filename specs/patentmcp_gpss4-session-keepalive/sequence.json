@@ -1,0 +1,32 @@
+[
+  {
+    "title": "跨呼叫 session 復用 (reuse-or-mint + keep-alive)",
+    "participants": ["EntryPoint", "SessionManager", "GPSS4Session", "TIPO"],
+    "messages": [
+      {"from": "EntryPoint", "to": "SessionManager", "label": "acquire(holder, country) [呼叫 #1]"},
+      {"from": "SessionManager", "to": "SessionManager", "label": "無 live session → mint"},
+      {"from": "SessionManager", "to": "GPSS4Session", "label": "GPSS4Session() + ensure_logged_in()"},
+      {"from": "GPSS4Session", "to": "TIPO", "label": "login (CAPTCHA + SSO) — 登入一次"},
+      {"from": "SessionManager", "to": "EntryPoint", "label": "共享 session (in-use)"},
+      {"from": "EntryPoint", "to": "GPSS4Session", "label": "resolve_one / folder 操作"},
+      {"from": "EntryPoint", "to": "SessionManager", "label": "release(holder) [keep-alive, 不 close]"},
+      {"from": "EntryPoint", "to": "SessionManager", "label": "acquire(holder, country) [呼叫 #2]"},
+      {"from": "SessionManager", "to": "GPSS4Session", "label": "_healthy() 健康檢查 (member 頁)"},
+      {"from": "SessionManager", "to": "EntryPoint", "label": "復用同一 session — 不重登"},
+      {"from": "EntryPoint", "to": "SessionManager", "label": "release(holder)"}
+    ]
+  },
+  {
+    "title": "並發 fail-fast + 顯式/TTL 回收",
+    "participants": ["CallerA", "CallerB", "SessionManager", "GPSS4Session"],
+    "messages": [
+      {"from": "CallerA", "to": "SessionManager", "label": "acquire(A) → in-use"},
+      {"from": "CallerB", "to": "SessionManager", "label": "acquire(B) [並發]"},
+      {"from": "SessionManager", "to": "CallerB", "label": "raise GPSS4LoginBusyError (§4A, 不排隊)"},
+      {"from": "CallerA", "to": "SessionManager", "label": "release(A)"},
+      {"from": "CallerA", "to": "SessionManager", "label": "gpss4_session_close() [顯式歸還]"},
+      {"from": "SessionManager", "to": "GPSS4Session", "label": "close() → SSOT 清空"},
+      {"from": "SessionManager", "to": "SessionManager", "label": "或 reaper: idle/absolute TTL 逾時 / health-fail → close"}
+    ]
+  }
+]

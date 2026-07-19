@@ -1,0 +1,14 @@
+[
+  {
+    "title": "查詢點取得目標 DB 號碼形式",
+    "participants": ["QueryPoint", "pubno_convert", "TargetDB"],
+    "messages": [
+      { "from": "QueryPoint", "to": "pubno_convert", "label": "to_<db>(raw[, axis])" },
+      { "from": "pubno_convert", "to": "pubno_convert", "label": "A1 正規化解析 → (country, no, kind)" },
+      { "from": "pubno_convert", "to": "pubno_convert", "label": "A2 投影目標格式 (str 或 variants[])" },
+      { "from": "pubno_convert", "to": "QueryPoint", "label": "回傳格式 / variants[](主形式在前)" },
+      { "from": "QueryPoint", "to": "TargetDB", "label": "逐個 variant 顯式查詢 (fallback)" },
+      { "from": "TargetDB", "to": "QueryPoint", "label": "命中 → 停;全 miss → fail fast" }
+    ]
+  }
+]

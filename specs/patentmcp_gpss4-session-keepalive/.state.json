@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-19T14:01:31.812Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-19T14:10:21.367Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "IDEF0-first artifacts authored: proposal/design(DD-1..7)/idef0/grafcet/spec/sequence/data-schema/test-vectors(TV-1..10)/errors/observability 全填實,三決策(SSOT SessionManager / 顯式close+idle TTL / TTL<90min+health)經 MCP question 拍板"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-19T14:10:34.164Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "tasks.md (6 phases, 20 slices) + handoff.md authored; 實作切片就緒,尚未開工"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-19T14:13:21.408Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "開始實作 SessionManager (mock 單元測試階段不燒登入額度)"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-19T14:36:15.218Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "全部 tasks 完成: SessionManager SSOT + 4 進入點改接 + 2 tool + login_gate deprecated; 11 單元測試全綠 + 全套 gpss4 27 passed 零回歸; live 驗證坐實 keep-alive (login_count=1 reuse_count=2) + _healthy bug RCA+fix + CN/US 跨國驗過"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-19T14:39:24.610Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "使用者明示畢業;keep-alive SSOT 全部驗證通過 (11 單元測試 + 全套 gpss4 27 passed + live login_count=1 reuse_count=2 + CN/US 跨國驗過)"
+    }
+  ]
+}

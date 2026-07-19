@@ -1,0 +1,21 @@
+[
+  {
+    "title": "gpss4_resolve_appnos batch 走 adv 路徑 + login gate + per-session scope",
+    "participants": ["Caller", "gpss4_resolve_appnos", "login_gate", "GPSS4Session", "adv_search", "TIPO GPSS4"],
+    "messages": [
+      {"from": "Caller", "to": "gpss4_resolve_appnos", "label": "appnos_file, axis=apply"},
+      {"from": "gpss4_resolve_appnos", "to": "login_gate", "label": "acquire()"},
+      {"from": "login_gate", "to": "gpss4_resolve_appnos", "label": "granted (或 raise GPSS4LoginBusyError)"},
+      {"from": "gpss4_resolve_appnos", "to": "GPSS4Session", "label": "ensure_logged_in()"},
+      {"from": "GPSS4Session", "to": "TIPO GPSS4", "label": "login (若 session 過期)"},
+      {"from": "gpss4_resolve_appnos", "to": "adv_search", "label": "_ensure_query_ready(TW, apply)"},
+      {"from": "adv_search", "to": "GPSS4Session", "label": "_scope_set 含 TWA+TWB? 未含才 set_search_databases"},
+      {"from": "adv_search", "to": "TIPO GPSS4", "label": "POST 設定頁 scope (per-session 首次, 或跳過)"},
+      {"from": "gpss4_resolve_appnos", "to": "adv_search", "label": "resolve_one(num, apply) [loop over batch]"},
+      {"from": "adv_search", "to": "TIPO GPSS4", "label": "submit (num)@AN → dual-view → parse"},
+      {"from": "adv_search", "to": "gpss4_resolve_appnos", "label": "pub_no (或 not_found)"},
+      {"from": "gpss4_resolve_appnos", "to": "login_gate", "label": "release() [finally]"},
+      {"from": "gpss4_resolve_appnos", "to": "Caller", "label": "stats{resolved, not_found, unmatched, via_adv} + effective_scope"}
+    ]
+  }
+]

@@ -79,37 +79,26 @@ _KNOWN_CC = (
 )
 
 
+# Number-format logic is now owned by the cross-DB converter SSOT
+# (pubno_convert.py, BR_20260719). These thin delegations preserve the existing
+# `from patent_mcp_server.patentdb_store import normalize_pubno, canonical_pubno`
+# import paths and the module-internal callers (put()/get_country_normalized)
+# while the canonical implementation lives in ONE place. `_KNOWN_CC` above is
+# kept as a re-export because patents.py imports it directly.
+from patent_mcp_server import pubno_convert as _pubno_convert
+
+
 def normalize_pubno(publication_number: str) -> Tuple[str, str]:
-    import re
-    # strip whitespace, slashes, hyphens, commas, dots (format separators)
-    pat = re.sub(r"[\s/\-,\.]+", "", publication_number or "").upper()
-    country = "US"
-    # A pubno leads with its own 2-letter ISO country code. Match the FULL known
-    # set (not just TW/US/EP/WO/CN) so foreign numbers are split correctly and
-    # never get a spurious default-US prefix stacked on top.
-    matched_cc = False
-    for cc in _KNOWN_CC:
-        if pat.startswith(cc):
-            country, pat, matched_cc = cc, pat[len(cc):], True
-            break
-    if not matched_cc and re.match(r"^[IMD]\d+", pat):
-        country = "TW"
-    elif not matched_cc and re.match(r"^\d{9}$", pat):
-        country = "TW"
-    m_cert = re.match(r"^([IMD]\d+)[A-Za-z]*$", pat)
-    if m_cert:
-        pat = m_cert.group(1)
-    else:
-        m_app = re.match(r"^(\d+)[A-Za-z]*$", pat)
-        if m_app:
-            pat = m_app.group(1)
-    return country, pat
+    """Delegates to pubno_convert.normalize_pubno (SSOT). Behaviour unchanged."""
+    return _pubno_convert.normalize_pubno(publication_number)
 
 
 def canonical_pubno(publication_number: str) -> str:
-    """正規化後的 canonical key（country + normalized_no），用作 patents.pubno PK。"""
-    country, norm = normalize_pubno(publication_number)
-    return f"{country}{norm}"
+    """正規化後的 canonical key（country + normalized_no），用作 patents.pubno PK。
+
+    Delegates to pubno_convert.to_patentdb_key (SSOT). 向後相容硬闘（DD-3）：
+    對所有既有輸入逐字等同收斂前行為。"""
+    return _pubno_convert.to_patentdb_key(publication_number)
 
 
 # ---- schema ----
@@ -229,7 +218,11 @@ def put(
     try:
         pubno = canonical_pubno(publication_number)
         country, norm = normalize_pubno(publication_number)
-        now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        # BR_20260719: was time.strftime("...+08:00") — container TZ is UTC, so
+        # the hardcoded +08:00 label lied about the value (UTC wall time with a
+        # Taipei suffix). Compute real Taipei time explicitly.
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        now = _dt.now(_tz(_td(hours=8))).strftime("%Y-%m-%dT%H:%M:%S+08:00")
 
         incoming: Dict[str, Any] = {}
         fields = fields or {}

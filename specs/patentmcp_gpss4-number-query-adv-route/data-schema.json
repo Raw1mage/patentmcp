@@ -1,0 +1,46 @@
+{
+  "schemas": [
+    {
+      "name": "LoginGateState",
+      "kind": "config",
+      "fields": [
+        {"name": "_lock", "type": "asyncio.Lock", "notes": "process 內全局互斥鎖 (module-level)"},
+        {"name": "holder", "type": "str|None", "notes": "現持有者 tool 名 (None=空閒)"},
+        {"name": "acquired_at", "type": "float|None", "notes": "取得時間 monotonic (可觀測)"},
+        {"name": "released_at", "type": "float|None", "notes": "上次釋放時間 (可觀測)"},
+        {"name": "holder_pid_exe", "type": "str|None", "notes": "readlink /proc/<pid>/exe 真進程校驗 (DD-7)"}
+      ]
+    },
+    {
+      "name": "GPSS4Session._scope_set (新增欄位)",
+      "kind": "config",
+      "fields": [
+        {"name": "_scope_set", "type": "set[str]", "notes": "本 session 已設 DB codes (per-session scope 復用, DD-4); login/re-login 時清空"}
+      ]
+    },
+    {
+      "name": "resolve_one 回傳",
+      "kind": "json",
+      "fields": [
+        {"name": "number", "type": "str", "notes": "查詢號碼 (去前綴)"},
+        {"name": "axis", "type": "str", "notes": "pub|apply"},
+        {"name": "pub_no", "type": "str|None", "notes": "解析出的公開/公告號 (None=not_found/unmatched)"},
+        {"name": "apply_no", "type": "str|None", "notes": "申請號"},
+        {"name": "title", "type": "str|None", "notes": "專利名稱"},
+        {"name": "status", "type": "str", "notes": "resolved|not_found|unmatched"}
+      ]
+    },
+    {
+      "name": "gpss4_resolve_appnos 回傳 (擴充)",
+      "kind": "json",
+      "fields": [
+        {"name": "resolved", "type": "int", "notes": "成功解析數"},
+        {"name": "not_found", "type": "int", "notes": "0 hit 數"},
+        {"name": "unmatched", "type": "int", "notes": "命中抽不到號數 (本 BR 目標: 趨近 0)"},
+        {"name": "via_adv", "type": "int", "notes": "走 adv 路徑解析成功數"},
+        {"name": "effective_scope", "type": "list[str]", "notes": "本次生效 DB codes (可觀測)"},
+        {"name": "next_cursor", "type": "int", "notes": "relay 續跑游標"}
+      ]
+    }
+  ]
+}

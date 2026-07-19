@@ -1,0 +1,122 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A1",
+    "StepType": "initial",
+    "StepAction": "閒置: 等待 number-query 請求 (gpss4_resolve_appnos / gpss4_folder_search / gpss4_folder_mark)",
+    "LinkInputType": [],
+    "LinkInputNumber": [],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["收到 number-query 請求"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "嘗試取得 in-memory login gate (acquire)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [2, 3],
+    "LinkOutputType": "divergence-or",
+    "Condition": ["gate 空閒 → 取得", "gate 已被持有 → busy"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "fail-fast: raise GPSS4LoginBusyError(帶現持有者+取得時間), 結束 (不排隊不重試不開第二 session)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [9],
+    "LinkOutputType": "track",
+    "Condition": ["錯誤已回報"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "ensure_logged_in (session 有效則復用, 過期則 re-login)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [4],
+    "LinkOutputType": "track",
+    "Condition": ["session authed"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "_ensure_query_ready(country, axis): 檢查 session._scope_set 是否已含所需 DB codes",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [3],
+    "LinkOutputNumber": [5, 6],
+    "LinkOutputType": "divergence-or",
+    "Condition": ["scope 已設 (per-session 復用) → 跳過", "scope 未設 → 需設定"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 5,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "set_search_databases(依國別推導 DB codes) + 記入 session._scope_set; 失敗→raise GPSS4DbScopeError (中止, 無 silent fallback)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [4],
+    "LinkOutputNumber": [6],
+    "LinkOutputType": "track",
+    "Condition": ["scope 設定成功並 verify"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 6,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "resolve_one: submit (<no>)@AN/@PN query (軸別由 converter to_gpss4_web 推斷)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [4, 5],
+    "LinkOutputNumber": [7],
+    "LinkOutputType": "track",
+    "Condition": ["query 提交, 得結果頁"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 7,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "_enter_dual_view(簡詳目並列) → parse 第一筆匹配 row 的 pub_no",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [6],
+    "LinkOutputNumber": [8],
+    "LinkOutputType": "track",
+    "Condition": ["解析出 pub_no 或判定 not_found"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 8,
+    "ModuleRef": "A4",
+    "StepType": "normal",
+    "StepAction": "輸出 resolved 記錄 + 本次生效 DB scope (可觀測); 若為 batch 則游標前進續下一筆",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [7],
+    "LinkOutputNumber": [9],
+    "LinkOutputType": "track",
+    "Condition": ["batch 未竟 → 回 step 6 下一號 (同 session 復用 scope)", "batch 竟 → 收尾"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 9,
+    "ModuleRef": "A4",
+    "StepType": "normal",
+    "StepAction": "session.close() / finally: 釋放 login gate (真進程一致性校驗)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [2, 8],
+    "LinkOutputNumber": [0],
+    "LinkOutputType": "track",
+    "Condition": ["gate 釋放, 回閒置"],
+    "SubGrafcet": []
+  }
+]

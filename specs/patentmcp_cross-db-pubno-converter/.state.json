@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-19T10:18:34.108Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-19T10:24:38.376Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "IDEF0-first design + mapping table + DD-1..5 authored"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-19T10:25:37.956Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "all artifacts filled; ready to implement"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-19T10:25:38.090Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "begin burst implementation"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-19T15:03:05.064Z",
+      "by": "pkcs12",
+      "mode": "migration",
+      "reason": "3.4 實查 roundtrip 全跑命中,tasks 全 [x],純函式+回歸+實查三層驗證齊全"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-19T15:19:04.112Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "使用者明確指示畢業提交;3.4 實查 roundtrip 全命中,verified 齊全"
+    }
+  ]
+}

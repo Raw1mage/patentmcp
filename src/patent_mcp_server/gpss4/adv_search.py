@@ -98,9 +98,13 @@ class GPSS4AdvZeroHits(Exception):
     view-switch failure. Carried as an exception only to unwind the harvest
     flow; harvest() converts it into a structured empty pool."""
 
-    def __init__(self, counts: Dict[str, int]):
+    def __init__(self, counts: Dict[str, int], html: str = ""):
         super().__init__(f"zero hits (per-DB counts={counts})")
         self.counts = counts
+        # BR_20260719 slot-expiry RCA: carry the shell HTML so a batch caller can
+        # harvest the next-query slot anchor from it (a not_found item must not
+        # break the anchor chain — the anchor just used is now spent).
+        self.html = html
 
 
 @dataclass
@@ -213,7 +217,14 @@ class AdvResultPage:
                 p.pat_no = m.group(0)
             ap = fields.get("申請號", "")
             if ap:
-                p.apply_no = ap.split()[0]
+                # BR_20260719 (live-dump RCA 2026-07-19): the 申請號 value renders as
+                # "TW 109112770" — country code and digits separated by whitespace.
+                # The old ap.split()[0] captured only "TW", dropping the digits
+                # (broke the @AN resolve_one match). Extract the full CC+digits
+                # token (tolerating the interior space / dotted CN form), then
+                # normalise out spaces so downstream digit-compare works.
+                am = re.search(r'[A-Z]{2}\s*[0-9][0-9A-Z.\-]*', ap)
+                p.apply_no = re.sub(r'\s+', '', am.group(0)) if am else ap.split()[0]
             p.apply_date = fields.get("申請日") or None
             p.title = fields.get("專利名稱") or None
             p.abstract = fields.get("摘要") or None
@@ -379,6 +390,23 @@ _DB_CODE_TO_FIELD = {
     "EPA": "_20_1_S_EA", "EPB": "_20_1_S_EB", "EPD": "_20_1_S_ED",
     "OA": "_20_1_S_OA", "OB": "_20_1_S_OB",
 }
+
+# BR_20260719 §4.1B (live-dump RCA 2026-07-19): the settings page ALSO gates which
+# OUTPUT COLUMNS the result view renders. The result table shows a patent number
+# ONLY when the matching output-field checkbox is ticked. The page carries two
+# output-field regions — 簡目 `_20_20_S_*` and 詳目 `_20_23_S_*` — and the
+# 簡詳目並列 (dual) view draws from both. `set_search_databases` force-ensures the
+# number / title / date columns are ticked so a fresh or reset account still
+# renders 公開公告號 (the user's explicit 2026-07-19 requirement: 「輸出格式也要
+# 選對」). Field-name suffixes are GPSS's own codes:
+#   簡目: P1=公開公告號 AN=申請號 IDc=公開公告日 ADc=申請日 TI=專利名稱
+#   詳目: PN=公開公告號 AN=申請號 TI=專利名稱
+# Only fields the settings page actually offers are asserted (see the `if f in html`
+# guard in set_search_databases) — so a page without a given box is never forced.
+_REQUIRED_OUTPUT_FIELDS = (
+    "_20_20_S_P1", "_20_20_S_AN", "_20_20_S_IDc", "_20_20_S_ADc", "_20_20_S_TI",
+    "_20_23_S_PN", "_20_23_S_AN", "_20_23_S_TI",
+)
 # 喜好設定 / 環境設定 anchor: slot-key URL whose link text carries 設定/環境.
 _SETTINGS_ANCHOR_RE = re.compile(
     r'<a\s+href=["\']?(/gpss4/gpsskmc/gpsskm\?\.[0-9A-Fa-f][^\s"\'>]+)["\']?'
@@ -466,16 +494,50 @@ async def set_search_databases(
     action = BASE + fm.group(1)
     info = im.group(1) if im else ""
 
-    # 2) build the POST body: preserve every hidden field, set the DB checkboxes
-    #    to EXACTLY `want`. GPSS4 checkboxes are value-less -> a checked box POSTs
-    #    `name=on`; an unchecked box is simply absent. So we include only `want`.
+    # 2) build the POST body as a READ-MODIFY-WRITE of the WHOLE form (BR_20260719
+    #    §4.1B, 2026-07-19 live-dump RCA). The settings page is ONE form and the
+    #    persist-save button saves the ENTIRE page: any checkbox NOT echoed back is
+    #    saved as UNCHECKED. The old body echoed only `_20_1_S_*` (the DB group) +
+    #    hidden fields, silently dropping every OUTPUT-FIELD checkbox
+    #    (`_20_23_S_*` 詳目 / `_20_20_S_*` 簡目: PN/AN/TI/日期…) and the display
+    #    radios — which is exactly the 「命中卻抽不到號碼」 BR root cause (the
+    #    output columns the result view renders are gated by these very boxes).
+    #    So: (a) preserve EVERY hidden field, (b) preserve EVERY currently-checked
+    #    checkbox and EVERY selected radio, (c) override the DB group to EXACTLY
+    #    `want`, (d) force-ensure the number/title/date OUTPUT fields are checked
+    #    so a fresh/resét account still renders 公開公告號 (never assume the account
+    #    happens to have them on — the BR warns against exactly that assumption).
     data: Dict[str, str] = {"INFO": info}
+    # (a) all hidden fields (incl. the @_20_* group markers + ID/SECU/INFO/TPHC)
     for hm in re.finditer(
         r'<input[^>]*type=["\']?hidden["\']?[^>]*name=["\']?([^"\'\s>]+)["\']?'
         r'[^>]*value=["\']?([^"\'\s>]*)', html, re.I):
         data[hm.group(1)] = hm.group(2)
+    # (b) every currently-checked checkbox EXCEPT the DB group (rebuilt in (c)).
+    #     value-less checkbox -> POSTs `name=on`.
+    for cm in re.finditer(
+        r'<input[^>]*type=["\']?checkbox["\']?[^>]*name=["\']?([^"\'\s>]+)["\']?([^>]*)>',
+        html, re.I):
+        name, rest = cm.group(1), cm.group(2)
+        if name.startswith("_20_1_S_"):
+            continue  # DB group handled in (c)
+        if "checked" in (rest or "").lower():
+            data[name] = "on"
+    #     every selected radio (name=value) — display format / number-axis etc.
+    for rm in re.finditer(
+        r'<input[^>]*type=["\']?radio["\']?[^>]*name=["\']?([^"\'\s>]+)["\']?'
+        r'[^>]*value=["\']?([^"\'\s>]*)["\']?([^>]*)>', html, re.I):
+        name, val, rest = rm.group(1), rm.group(2), rm.group(3)
+        if "checked" in (rest or "").lower():
+            data[name] = val
+    # (c) DB group = EXACTLY want
     for f in want:
         data[f] = "on"
+    # (d) force-ensure output fields render the numbers we parse (idempotent —
+    #     already-checked ones were preserved in (b); this adds any missing).
+    for f in _REQUIRED_OUTPUT_FIELDS:
+        if f in html:  # only assert fields this page actually offers
+            data[f] = "on"
     submit = _PERSIST_SAVE_SUBMIT if persist else _SESSION_SAVE_SUBMIT
     data[f"{submit}.x"] = "10"
     data[f"{submit}.y"] = "10"
@@ -508,6 +570,155 @@ async def set_search_databases(
 _RESULT_MARKERS = ("clickselect(this", "outsum", "專利家族數量", "numfmt")
 
 
+# BR_20260719 DD-4: 國別 → 該國「公開+公告」兩庫 REST db codes。number-query 要抽到
+# 公開/公告號,必須把目標國別的公開庫(A)+公告庫(B)都納入 scope(TW DD-96 先例)。
+# 只列已在 _DB_CODE_TO_FIELD 有對應 checkbox 的國別;未知國別 fail-fast(不猜)。
+_COUNTRY_TO_DBS = {
+    "TW": ["TWA", "TWB"],
+    "CN": ["CNA", "CNB"],
+    "US": ["USA", "USB"],
+    "JP": ["JPA", "JPB"],
+    "KR": ["KRA", "KRB"],
+    "EP": ["EPA", "EPB"],
+}
+
+
+def country_to_dbs(country: str) -> List[str]:
+    """國別 → 公開+公告兩庫 REST db codes(BR_20260719 DD-4)。未知國別 raise。"""
+    dbs = _COUNTRY_TO_DBS.get((country or "").upper())
+    if not dbs:
+        raise GPSS4DbScopeError(
+            f"no DB-scope mapping for country {country!r}; "
+            f"known: {sorted(_COUNTRY_TO_DBS)} (BR_20260719 DD-4)"
+        )
+    return dbs
+
+
+async def _ensure_query_ready(
+    s: "GPSS4Session", country: str, dump_dir: Optional[str] = None,
+) -> List[str]:
+    """Per-login-session DB scope 前置閘(BR_20260719 §4 / DD-4)。
+
+    number-query 進入點在送查詢前無條件呼叫本 routine:確保本 login session 的搜尋
+    DB scope 已含目標國別的公開+公告兩庫。**per-session 粒度**——同 session 內第二次
+    起若 scope 已就緒即跳過(session._scope_set 記錄),不每查重設(重設會對 batch 多發
+    設定頁 POST → 升高 TIPO 節流鎖定風險;§4A login gate 已消除並發 → session 設一次
+    即確定性正確,非猜 config)。
+
+    fail-fast(DD-6):scope 設定失敗 raise GPSS4DbScopeError,絕不用可能錯的現有
+    scope 續查而回假 unmatched。
+
+    Returns: 本次生效的 DB codes(可觀測,DD-4)。
+    """
+    need = country_to_dbs(country)
+    already = getattr(s, "_scope_set", set())
+    if set(need).issubset(already):
+        logger.info("GPSS4 scope reused for session (already %s)", sorted(already))
+        return need
+    await set_search_databases(s, need, persist=True, dump_dir=dump_dir)
+    # set_search_databases verifies the save (DD-4); record on the session so the
+    # rest of this batch reuses it.
+    if not hasattr(s, "_scope_set") or s._scope_set is None:
+        s._scope_set = set()
+    s._scope_set.update(need)
+    return need
+
+
+async def resolve_one(
+    s: "GPSS4Session", number: str, axis: str = "apply",
+    country: str = "TW", dump_dir: Optional[str] = None,
+) -> Optional["AdvPatent"]:
+    """單一號碼 → 專利號解析,走 adv_search 路徑(BR_20260719 §4 / DD-3)。
+
+    folder 標記清單路徑不 render 專利號(recon 坐實);adv_search 的 簡詳目並列檢視
+    (_enter_dual_view)是唯一 render 公開公告號的檢視。本 helper 復用 adv primitives
+    做**單號**查詢:submit → dual-view → parse 第一筆匹配 row,不做全軸分頁(harvest
+    是整軸掃,resolve_one 只要第一頁 dual-view 即可)。
+
+    呼叫前提:session 已 login、已 _ensure_query_ready(country)。本函式不自行設 scope
+    (由呼叫端 per-session 統一設,避免每號重設)。
+
+    **slot-chaining(BR_20260719 slot-expiry RCA 2026-07-19)**:進階檢索 tab anchor
+    (slot-key URL)是**單次消耗**——同 session 重用同一 anchor 查第二次即回過期 stub
+    (len=289)。故首查用 login-cached member anchor,之後用上一查的結果頁 re-mint 的
+    新鮮 anchor(存於 s._adv_tab_next);本查結束再從結果頁 harvest 一個新鮮 anchor 存回,
+    供下一筆(batch chaining)。zero-hit / 例外路徑也會盡量 capture,避免 not_found
+    佔多數時 chain 斷掉。
+
+    axis: 'apply'(@AN 申請號)/ 'pub'(@PN 公開公告號)。
+    Returns: 匹配的 AdvPatent(含 pat_no/apply_no/title),或 None(not_found/unmatched)。
+    """
+    suffix = {"apply": "@AN", "pub": "@PN"}.get(axis)
+    if not suffix:
+        raise GPSS4AdvSearchError(f"unknown axis {axis!r} (use apply|pub)")
+    query = f"({number}){suffix}"
+    # slot-chaining: prefer the fresh anchor harvested from the previous query;
+    # fall back to the login-cached member anchor for the FIRST query only.
+    adv_tab_url = getattr(s, "_adv_tab_next", None)
+    if not adv_tab_url:
+        member = s._refresh_chain[-1][1] if s._refresh_chain else ""
+        adv_tab_url = _extract_adv_tab_url(member)
+
+    def _harvest_next_anchor(*htmls: str) -> None:
+        """Re-mint the single-use anchor for the NEXT query from any page that
+        carries a fresh 進階檢索 tab anchor. Consume-then-refresh: clear first so
+        a page without an anchor forces the next call back to the member anchor
+        (via re-login path) rather than silently reusing a spent slot."""
+        s._adv_tab_next = None
+        for h in htmls:
+            m = _ADV_TAB_RE.search(h or "")
+            if m:
+                href = m.group(1)
+                s._adv_tab_next = href if href.startswith("http") else BASE + href
+                return
+
+    try:
+        result_html, form_action, info = await _submit_query(
+            s, adv_tab_url, query, dump_dir)
+    except GPSS4AdvZeroHits as z:
+        # 真 zero-hit → not_found. Harvest the next-query anchor from the zero-hit
+        # shell if it carries one, so the batch chain survives a not_found item.
+        _harvest_next_anchor(getattr(z, "html", ""))
+        return None
+    # slot-chaining: harvest the next-query anchor from the RAW post-submit result
+    # page — BEFORE the collapse / dual-view slot transitions. Evidence
+    # (2026-07-19 diagnostic): result-page 進階檢索 anchors chain reliably ≥3 deep
+    # (GET len≈30k, _3_10_X present), whereas anchors harvested from the dual view
+    # (reached via collapse + view-switch + page-size slot advances) go stale by
+    # the 3rd query (len=289 "view switch failed"). Harvesting the raw result-page
+    # anchor here is what makes a long batch survive past 2 items.
+    # 切 簡詳目並列 view(唯一 render 專利號)。**單號查詢不做家族收合也不拉
+    # pagesize=50**(BR_20260719 slot-expiry mitigation):單號查詢回單筆家族/<50 筆,
+    # 這兩步對 resolve_one 無用,各多一個 slot-advancing 請求。只保留 view-switch。
+    dual_html, _ = await _enter_dual_view(
+        s, result_html, adv_tab_url, dump_dir, bump_page_size=False)
+    # slot-chaining anchor harvest — **AFTER dual-view, from the LAST response**
+    # (BR_20260719 slot-expiry RCA, 2026-07-19 instrumented live trace).
+    # ROOT CAUSE: the GPSS4 slot anchor is a SESSION-LEVEL "current slot"
+    # pointer — every response mints a new slot and voids the previous one. The
+    # old code harvested from result_html (right after submit) and THEN did the
+    # dual-view POST, which minted a new slot and INVALIDATED the just-harvested
+    # anchor — so query N+1 reused a spent anchor → len=289 at depth 3. The live
+    # trace proved that harvesting from dual_html (the last response of THIS
+    # item, after ALL its requests) chains reliably: a 3-item all-appno batch
+    # resolved 3/3 (was 2/3). So harvest LAST, not early.
+    _harvest_next_anchor(dual_html, result_html)
+    page = AdvResultPage.parse(dual_html)
+    if not page.patents:
+        return None
+    # 選第一筆 apply_no / pat_no 匹配的 row(去前綴數字比對,對齊 _norm 慣例)。
+    def _digits(x: Optional[str]) -> str:
+        return re.sub(r"\D", "", x or "").lstrip("0")
+    want = _digits(number)
+    for p in page.patents:
+        if axis == "apply" and p.apply_no and _digits(p.apply_no) == want:
+            return p
+        if axis == "pub" and p.pat_no and _digits(p.pat_no) == want:
+            return p
+    # 無精確匹配但有結果 → 回第一筆(單號查詢通常僅一筆家族),讓呼叫端判定。
+    return page.patents[0] if page.patents else None
+
+
 # --- httpx handshake contract (reverse-engineered & verified 2026-07-11) ------
 # The advanced-search flow is a pure HTTP state machine — NO browser needed.
 # Every short-lived slot key lives in the page HTML; httpx extracts it from each
@@ -536,6 +747,14 @@ _PSIZE_OPT_RE = re.compile(
 _NEXTPG_RE = re.compile(r'name="?_IMG_\u6b21\u9801')
 # 簡詳目並列 record field labels: <td class=sumth1 ...>公開公告號</td><td ...>VALUE
 _DUAL_MARKER = '公開公告號'
+# BR_20260719 slot-expiry RCA (2026-07-19 instrumented trace): after a large
+# result item, the NEXT item's adv-form GET may return a ~289-byte TTS stub
+# "SystemMessage:Connection refused." — a connection-layer transient (never
+# reached the app tier; the anchor is NOT consumed). Retry the SAME anchor after
+# a short escalating backoff before failing.
+_CONN_REFUSED_MARK = 'Connection refused'
+_ADV_FORM_RETRIES = 4
+_ADV_FORM_BACKOFF = 1.5  # seconds; multiplied by attempt number (1.5/3.0/4.5)
 _INFO_RE = re.compile(r"""name=["']?INFO["']?\s+value=["']?([0-9A-Fa-f]+)""", re.I)
 _JOB_URL_RE = re.compile(r'AURL\s*=\s*"(/gpss4/gpsskmc/ttsserv_watch\?)"\s*\+\s*kmtmp')
 _PTMP_RE = re.compile(r'ptmp\s*=\s*"([^"]+)"')
@@ -566,6 +785,36 @@ async def _login_session() -> "GPSS4Session":
     return s
 
 
+def _is_transient(html: str) -> bool:
+    """BR_20260719 slot-expiry RCA (2026-07-19 instrumented trace): a ~289-byte
+    TTS stub "SystemMessage:Connection refused." is a CONNECTION-LAYER transient
+    — the request never reached the app tier, so NO state changed (no slot
+    consumed, no query submitted). It can land on ANY hop (adv-form GET, query
+    POST, 家族收合 POST, dual-view POST), typically right after a large-result
+    item. Because nothing executed, replaying the SAME request is safe (never a
+    double-submit). Detect by the marker OR the tell-tale tiny body.
+    """
+    return _CONN_REFUSED_MARK in html or len(html) < 600
+
+
+async def _post_retry(s: "GPSS4Session", action: str, data: Dict[str, str],
+                      referer: str, want: str) -> "httpx.Response":
+    """POST with connection-layer-transient retry (see _is_transient). Retries
+    the SAME POST after an escalating backoff while the response is a transient
+    stub AND does not yet contain `want` (the success marker the caller needs).
+    Safe because a Connection-refused response means the POST never executed.
+    """
+    pr = None
+    for _attempt in range(_ADV_FORM_RETRIES):
+        pr = await s.client.post(action, data=data, headers={"Referer": referer})
+        if want in pr.text or not _is_transient(pr.text):
+            return pr
+        logger.info("POST transient (len=%d, attempt %d/%d); backoff+retry",
+                    len(pr.text), _attempt + 1, _ADV_FORM_RETRIES)
+        await asyncio.sleep(_ADV_FORM_BACKOFF * (_attempt + 1))
+    return pr
+
+
 def _dump(dump_dir: Optional[str], name: str, html: str) -> None:
     if not dump_dir:
         return
@@ -583,8 +832,26 @@ async def _submit_query(s: "GPSS4Session", adv_tab_url: str, query: str,
 
     form_action / info are needed later for the 家族收合 + JPAGE POSTs.
     """
-    resp = await s.get(adv_tab_url)
-    form_html = resp.text
+    # adv-form GET with transient-retry (BR_20260719 slot-expiry RCA, 2026-07-19
+    # instrumented trace): after a large-result item the server occasionally
+    # returns a 289-byte TTS stub "SystemMessage:Connection refused." for the
+    # NEXT item's adv-form GET — a CONNECTION-LAYER transient (the request never
+    # reached the app tier), NOT a quota/limit and NOT a spent anchor. Since the
+    # anchor was never consumed, re-GETting the SAME anchor after a short backoff
+    # recovers. Retry a few times before failing; only a persistent miss raises.
+    form_html = ""
+    for _attempt in range(_ADV_FORM_RETRIES):
+        resp = await s.get(adv_tab_url)
+        form_html = resp.text
+        if "_3_10_X" in form_html:
+            break
+        if _is_transient(form_html):
+            logger.info(
+                "adv-form GET transient (len=%d, attempt %d/%d); backoff+retry",
+                len(form_html), _attempt + 1, _ADV_FORM_RETRIES)
+            await asyncio.sleep(_ADV_FORM_BACKOFF * (_attempt + 1))
+            continue
+        break  # a substantive page without the form marker -> real failure
     _dump(dump_dir, "adv_form.html", form_html)
     if "_3_10_X" not in form_html:
         raise GPSS4AdvSearchError(
@@ -603,7 +870,9 @@ async def _submit_query(s: "GPSS4Session", adv_tab_url: str, query: str,
         "_3_10_X": query,
         "_IMG_\u6aa2\u7d22.x": "20", "_IMG_\u6aa2\u7d22.y": "10",
     }
-    pr = await s.client.post(action, data=data, headers={"Referer": str(resp.url)})
+    # query POST with connection-layer-transient retry (any success marker or a
+    # non-transient body ends the retry; INFO is the minimal result-form marker).
+    pr = await _post_retry(s, action, data, str(resp.url), "INFO")
     result_html = pr.text
     # async job? poll ttsserv_watch until the result list renders.
     if _NEEDCHECK_RE.search(result_html) and not any(
@@ -619,7 +888,7 @@ async def _submit_query(s: "GPSS4Session", adv_tab_url: str, query: str,
         if counts is not None:
             total_all = counts.get("全部", sum(counts.values()))
             if total_all == 0:
-                raise GPSS4AdvZeroHits(counts)
+                raise GPSS4AdvZeroHits(counts, result_html)
             raise GPSS4AdvSearchError(
                 f"search completed with {total_all} hits but the result list "
                 f"did not render (search-ready shell; per-DB counts={counts}) "
@@ -691,11 +960,9 @@ async def _poll_job(s: "GPSS4Session", shell_html: str, referer: str,
 async def _collapse_family(s: "GPSS4Session", form_action: str, info: str,
                           referer: str, dump_dir: Optional[str]) -> str:
     """POST BUTTON=家族收合 to get the collapsed list (with `N.M` family seqs)."""
-    pr = await s.client.post(
-        form_action,
-        data={"INFO": info, "BUTTON": "\u5bb6\u65cf\u6536\u5408"},
-        headers={"Referer": referer},
-    )
+    pr = await _post_retry(
+        s, form_action, {"INFO": info, "BUTTON": "\u5bb6\u65cf\u6536\u5408"},
+        referer, "INFO")
     _dump(dump_dir, "famcollapse.html", pr.text)
     return pr.text
 
@@ -727,23 +994,34 @@ def _view_form_data(html: str, img_name: str) -> tuple:
 
 
 async def _enter_dual_view(s: "GPSS4Session", result_html: str, referer: str,
-                           dump_dir: Optional[str]) -> tuple:
+                           dump_dir: Optional[str],
+                           bump_page_size: bool = True) -> tuple:
     """Switch the result list into 簡詳目並列 view (the ONLY view rendering
-    patent numbers — BR_20260716) and bump page size to 50 via the 每頁
-    <select> slot-option GET. Returns (dual_html, new_referer).
+    patent numbers — BR_20260716) and (when bump_page_size) bump page size to 50
+    via the 每頁 <select> slot-option GET. Returns (dual_html, new_referer).
+
+    bump_page_size=False (BR_20260719 slot-expiry mitigation): a single-number
+    query returns 1 family / <50 rows, so the 50/page GET is pointless — skipping
+    it removes one slot-advancing request between anchor-harvest and next use
+    (the surviving hypothesis for the batch depth-3 anchor staleness). harvest()
+    keeps the default True (it paginates large pools).
 
     Fail-fast: if the switch does not render 公開公告號 rows, raise — never
     silently harvest the number-less 條列式 view.
     """
-    action, data = _view_form_data(result_html, "\u7c21\u8a73\u76ee\u4e26\u5217")
-    pr = await s.client.post(action, data=data, headers={"Referer": referer})
+    action, data = _view_form_data(result_html, "簡詳目並列")
+    # dual-view POST with connection-layer-transient retry (_DUAL_MARKER is the
+    # success marker — the 公開公告號 rows we need).
+    pr = await _post_retry(s, action, data, referer, _DUAL_MARKER)
     dual = pr.text
     _dump(dump_dir, "dualview_p1.html", dual)
     if _DUAL_MARKER not in dual:
         raise GPSS4AdvSearchError(
-            f"\u7c21\u8a73\u76ee\u4e26\u5217 view switch failed (len={len(dual)}, "
+            f"簡詳目並列 view switch failed (len={len(dual)}, "
             "no 公開公告號 rows) — numbers unavailable")
     referer = str(pr.url)
+    if not bump_page_size:
+        return dual, referer
     # page size 50 (server maximum): the 每頁 <select> options are short-lived
     # slot URLs; GET the one labelled 50. Re-rendering resets to page 1.
     opts = _PSIZE_OPT_RE.findall(dual)

@@ -1,0 +1,37 @@
+{
+  "schemas": [
+    {
+      "name": "SessionManager (module-level singleton state)",
+      "kind": "config",
+      "fields": [
+        {"name": "_session", "type": "Optional[GPSS4Session]", "notes": "至多一個 live 共享 session；None=SSOT 空閒。恆為 0 或 1 (禁雙登入不變式)"},
+        {"name": "_in_use_holder", "type": "Optional[str]", "notes": "當前持用者名 (§4A 互斥);None=idle 可復用。非 None 時 acquire fail-fast"},
+        {"name": "_holder_exe", "type": "Optional[str]", "notes": "持有者真進程 exe (readlink /proc/<pid>/exe, DD-3 承接 login_gate DD-7)"},
+        {"name": "_minted_at", "type": "Optional[float]", "notes": "session mint 時戳 (monotonic);absolute TTL 起點"},
+        {"name": "_last_used_at", "type": "Optional[float]", "notes": "最後一次 acquire/release 時戳;idle TTL 基準"},
+        {"name": "IDLE_TTL_SEC", "type": "float", "notes": "閒置回收門檻 (建議 300-600s,遠短於 90min)"},
+        {"name": "ABSOLUTE_TTL_SEC", "type": "float", "notes": "自 mint 起強制回收 (建議 3600s=60min,< TIPO ~90min slot 死線)"}
+      ]
+    },
+    {
+      "name": "gpss4_session_status (tool 回傳)",
+      "kind": "json",
+      "fields": [
+        {"name": "live", "type": "bool", "notes": "是否有 live session"},
+        {"name": "busy", "type": "bool", "notes": "是否有 in-use holder"},
+        {"name": "holder", "type": "Optional[str]", "notes": "現持用者 (busy 時)"},
+        {"name": "age_sec", "type": "Optional[float]", "notes": "自 mint 起壽命"},
+        {"name": "idle_sec", "type": "Optional[float]", "notes": "自 last-used 起閒置時間"},
+        {"name": "expires_in_sec", "type": "Optional[float]", "notes": "距 absolute TTL 回收剩餘秒數"}
+      ]
+    },
+    {
+      "name": "gpss4_session_close (tool 回傳)",
+      "kind": "json",
+      "fields": [
+        {"name": "closed", "type": "bool", "notes": "是否實際 close 了一個 live session"},
+        {"name": "was_busy", "type": "bool", "notes": "close 時是否正 in-use (異常訊號)"}
+      ]
+    }
+  ]
+}

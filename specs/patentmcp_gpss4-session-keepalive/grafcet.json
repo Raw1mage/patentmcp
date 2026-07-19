@@ -1,0 +1,110 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A1",
+    "StepType": "initial",
+    "StepAction": "SSOT 空閒 (無 live session)：SessionManager singleton 就緒，_session=None、無 in-use holder",
+    "LinkInputType": [],
+    "LinkInputNumber": [],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["登入模式進入點呼叫 acquire(holder, country)"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "acquire 判定：檢查是否已有 in-use holder → 有則 fail-fast；否則判斷 live session 是否可復用 (存在 + _healthy() + 未逾 absolute TTL)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [2, 3, 8],
+    "LinkOutputType": "or",
+    "Condition": ["已有 in-use holder → 8", "live+健康+未逾TTL → 3 (復用)", "無/過期/不健康 → 2 (mint)"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "mint 新 session：若有殘留舊 session 先 close()，再 GPSS4Session()+ensure_logged_in() 登入一次，記錄 mint 時戳 (absolute TTL 起點)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [4],
+    "LinkOutputType": "track",
+    "Condition": ["登入成功"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "復用 live session：健康檢查通過，不重登，直接沿用既有 authed session",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [4],
+    "LinkOutputType": "track",
+    "Condition": ["復用就緒"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "標記 in-use (holder + DD-7 真進程 exe)，交付 session 給 caller 執行登入模式工作 (resolve_one 迴圈 / folder 操作)，更新 last-used 時戳",
+    "LinkInputType": ["track", "track"],
+    "LinkInputNumber": [2, 3],
+    "LinkOutputNumber": [5],
+    "LinkOutputType": "track",
+    "Condition": ["caller 工作完成 (正常或例外)"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 5,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "release (keep-alive)：清除 in-use holder、更新 last-used、**不 close** session，留在 SSOT 供下次復用 (finally 保證，含例外路徑)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [4],
+    "LinkOutputNumber": [6],
+    "LinkOutputType": "track",
+    "Condition": ["session 標回 idle"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 6,
+    "ModuleRef": "A4",
+    "StepType": "normal",
+    "StepAction": "idle 候命：live session 存活但無 in-use holder，等待下次 acquire 復用 或 回收觸發",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [5],
+    "LinkOutputNumber": [0, 7],
+    "LinkOutputType": "or",
+    "Condition": ["下次 acquire (回 0→1 復用路徑)", "回收觸發 → 7"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 7,
+    "ModuleRef": "A4",
+    "StepType": "normal",
+    "StepAction": "reap 回收：顯式 gpss4_session_close / idle TTL 逾時 / absolute TTL 逾時(<90min) / 健康檢查失敗 → session.close() 清出 SSOT (_session=None)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [6],
+    "LinkOutputNumber": [0],
+    "LinkOutputType": "track",
+    "Condition": ["SSOT 清空，回初始空閒態"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 8,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "fail-fast：raise GPSS4LoginBusyError (帶現 holder + held_for + exe)，不排隊/不重試/不開第二 session (§4A 天條)",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [0],
+    "LinkOutputType": "track",
+    "Condition": ["拒絕呼叫，SSOT 狀態不變 (現有 in-use session 續存)"],
+    "SubGrafcet": []
+  }
+]

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-19T11:34:18.073Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-19T11:58:42.741Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "recon-driven design 定稿: adv-route + login gate; artifacts 齊備"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-19T11:58:42.867Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "recon-driven design 定稿: adv-route + login gate; artifacts 齊備"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-19T14:47:25.822Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "fast-forward pass-through (burst implementation; all tasks checked + validation evidence): 6.1-6.3 收尾完成；單元 10/0 pass、live batch 6/6、TW roundtrip 對齊 ground truth；BR §4/§4A resolved、arch L89-98 synced。CN/US live deferred（純函式已 pytest 覆蓋）。"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-19T14:47:25.822Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "6.1-6.3 收尾完成；單元 10/0 pass、live batch 6/6、TW roundtrip 對齊 ground truth；BR §4/§4A resolved、arch L89-98 synced。CN/US live deferred（純函式已 pytest 覆蓋）。"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-19T14:51:09.061Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "使用者明確指示畢業提交收尾；verified，closeout 綠燈"
+    }
+  ]
+}
