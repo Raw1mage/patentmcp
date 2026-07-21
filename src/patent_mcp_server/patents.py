@@ -1008,6 +1008,41 @@ def _get_patent_country_and_normalized_no(publication_number: str) -> tuple[str,
     return normalize_pubno(publication_number)
 
 
+def _to_gpatents_canonical(raw: str) -> Optional[str]:
+    """Google Patents fetch-target canonical: country + leading-zero-stripped serial.
+
+    BR_20260719 R3 root cause: the fetch fallback chain sent the raw pubno straight
+    to gpatents (URL https://patents.google.com/patent/{pub}/en). A US grant number
+    with a LEADING-ZERO serial (e.g. US09993161B1) 404s at that URL; the un-padded
+    form (US9993161) hits — the leading zero is the sole變因 (實測: US9993161→found,
+    US09993161B1→miss). This composes existing converter primitives ONLY (禁新造格式
+    邏輯): normalize_pubno strips CC + trailing kind; lstrip('0') is the same
+    leading-zero-strip primitive to_epo_variants already uses. Idempotent on already-
+    canonical numbers (US9993161 -> US9993161). fail-fast: an unparseable number
+    (empty serial body) returns None so the caller MUST NOT bare-send the raw pubno.
+    """
+    from patent_mcp_server.pubno_convert import normalize_pubno, to_gpss4_web
+    country, _ = normalize_pubno(raw)
+    # to_gpss4_web strips the CC + trailing kind and returns the clean number body
+    # (US grant 'US09993161B1' -> '09993161'; TW cert 'TWI684433B' -> 'I684433').
+    # normalize_pubno's own kind-strip fails on US grant kinds like B1/B2 (mid-string
+    # letter blocks its ^(\\d+)[A-Za-z]*$ match), so it is NOT the right primitive here.
+    body, _axis = to_gpss4_web(raw)
+    # fail-fast (DD-4, 禁 silent fallback): a valid patent number body is an optional
+    # TW cert letter (I/M/D) followed by digits. Garbage ('???', 'ABC') yields a
+    # non-conforming body -> return None so the caller records a gap / errors out
+    # rather than bare-sending an unresolvable string to gpatents.
+    import re as _re
+    if not body or not _re.match(r"^[IMD]?\d+$", body):
+        return None
+    # leading-zero strip ONLY for pure-digit serials (US grant/old-A). TW cert bodies
+    # (I684433/M578729) and TW appno (109112770, keep its 民國年 zero) are not stripped:
+    # digit-only guard means 'I684433' is left intact, '109112770' has no leading zero.
+    if body.isdigit():
+        body = body.lstrip("0") or body
+    return f"{country}{body}"
+
+
 def _find_local_patent_cache(country: str, norm_pat: str, file_type: str):
     filename = f"specification.{file_type}"
     db_root = _get_db_root()
@@ -1248,8 +1283,10 @@ async def patent_get_claim1(publication_number: Optional[str] = None, full: bool
         
         if db is not None:
             try:
+                from patent_mcp_server.pubno_convert import to_gpss_rest
+                gpss_num = to_gpss_rest(pat)  # BR_20260719 R3: normalize BEFORE send
                 gpss_res = await gpss_client.search(
-                    conditions=[GPSSCondition(gpss_axis, pat)],
+                    conditions=[GPSSCondition(gpss_axis, gpss_num)],
                     databases=db,
                     fields="PN,CL",
                     num=1,  # BR_20260718: a PN/AN single-number lookup is unique;
@@ -1340,15 +1377,20 @@ async def patent_get_claim1(publication_number: Optional[str] = None, full: bool
 
     # B) EP Patents via EPO OPS
     if pat_upper.startswith("EP") and epo_client.configured():
-        try:
-            epo_res = await epo_client.claims(pat)
-            if epo_res.get("success") and epo_res.get("found") and epo_res.get("claim1"):
-                claim1 = epo_res["claim1"]
-                if not full and len(claim1) > 1000:
-                    claim1 = claim1[:1000].strip() + "..."
-                return {"success": True, "publication_number": pat, "claim1": claim1, "source": "epo"}
-        except Exception as e:
-            logger.warning(f"EPO OPS claims query failed for {pat}: {str(e)}")
+        # BR_20260719 R3: EPO docdb serial has 10↑11-digit / leading-zero variants;
+        # send every plausible docdb form (primary first), stop on first found.
+        from patent_mcp_server.pubno_convert import to_epo_variants
+        epo_variants = to_epo_variants(pat) or [pat]
+        for variant in epo_variants:
+            try:
+                epo_res = await epo_client.claims(variant)
+                if epo_res.get("success") and epo_res.get("found") and epo_res.get("claim1"):
+                    claim1 = epo_res["claim1"]
+                    if not full and len(claim1) > 1000:
+                        claim1 = claim1[:1000].strip() + "..."
+                    return {"success": True, "publication_number": pat, "claim1": claim1, "source": "epo"}
+            except Exception as e:
+                logger.warning(f"EPO OPS claims query failed for {variant}: {str(e)}")
 
     # C) BigQuery
     if google_bq_client.client is not None:
@@ -1427,8 +1469,16 @@ async def patent_get_claim1(publication_number: Optional[str] = None, full: bool
             logger.warning(f"GPSS general fallback failed for {pat}: {str(e)}")
 
     # ── 3. Google Patents Scraper (Last Resort Fallback) ──
+    # BR_20260719 R3 root cause: a US grant number with a leading-zero serial
+    # (US09993161B1) 404s at patents.google.com/patent/{pub}; the un-padded form
+    # (US9993161) hits. Normalize to gpatents canonical BEFORE send; fail-fast if
+    # unparseable (do NOT bare-send the raw pubno).
+    gpat_pub = _to_gpatents_canonical(pat)
+    if not gpat_pub:
+        return {"success": False, "publication_number": pat,
+                "error": f"UNPARSEABLE_PUBNO: cannot normalize {pat!r} for gpatents fetch"}
     try:
-        gpat_res = await gpatents_client.get_patent(pat, include_description=False)
+        gpat_res = await gpatents_client.get_patent(gpat_pub, include_description=False)
         if gpat_res.get("success") and gpat_res.get("claims"):
             claims_list = gpat_res["claims"]
             if claims_list:
@@ -4988,8 +5038,13 @@ async def pool_fetch(publication_numbers: List[str]) -> Dict[str, Any]:
                 
         # Try Web Scraper Fallback
         if not bq_success:
+            gpat_pub = _to_gpatents_canonical(pub)  # BR_20260719 R3: strip-0 canonical
+            if not gpat_pub:
+                gaps.append({"pub": pub, "error": f"UNPARSEABLE_PUBNO: cannot normalize {pub!r} for gpatents fetch"})
+                records.append(rec)
+                continue
             try:
-                gpat_res = await gpatents_client.get_patent(pub, include_description=False)
+                gpat_res = await gpatents_client.get_patent(gpat_pub, include_description=False)
                 if gpat_res.get("success"):
                     rec["abstract"] = gpat_res.get("abstract", "")
                     m = re.search(r'(20\d{2}|19\d{2})', pub)
