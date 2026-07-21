@@ -1,0 +1,68 @@
+{
+  "diagram_title": "enrich 取文降級鏈 per-target converter 接線",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "識別取文源",
+      "description": "取文降級鏈依序選定當前跳的外部源（gpatents / google / GPSS / EPO）",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "per-target 正規化號碼",
+      "description": "用該源對應 converter（strip-0 canonical / to_gpss_rest / to_epo_variants）把呼叫端原號轉成該源可吃格式",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "送查取文並落地",
+      "description": "用正規化號碼呼叫外部源取 claim1 文字，成功落地、失敗降級到下一源",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    {
+      "id": "AR1",
+      "source": "EXTERNAL",
+      "target": "A1:input",
+      "type": "input",
+      "label": "呼叫端原號 US09993161B1"
+    },
+    {
+      "id": "AR2",
+      "source": "EXTERNAL",
+      "target": "A2:control",
+      "type": "control",
+      "label": "pubno_convert per-target 規則"
+    },
+    {
+      "id": "AR3",
+      "source": "EXTERNAL",
+      "target": "A3:mechanism",
+      "type": "mechanism",
+      "label": "gpatents / GPSS / EPO 外部源"
+    },
+    {
+      "id": "AR4",
+      "source": "A1:output",
+      "target": "A2:input",
+      "type": "output",
+      "label": "選定源 + 原號"
+    },
+    {
+      "id": "AR5",
+      "source": "A2:output",
+      "target": "A3:input",
+      "type": "output",
+      "label": "該源可吃的正規化號"
+    },
+    {
+      "id": "AR6",
+      "source": "A3:output",
+      "target": "EXTERNAL",
+      "type": "output",
+      "label": "claim1 文字落地"
+    }
+  ]
+}

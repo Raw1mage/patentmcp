@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-20T18:36:55.851Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-20T18:46:39.898Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "core artifacts filled: proposal/spec/design(mermaid+idef0-ref)/idef0/grafcet"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-20T18:48:35.561Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "tasks + handoff filled; ready for implementation"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-21T00:04:49.138Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "fast-forward pass-through (burst implementation; all tasks checked + validation evidence): 取文降級鏈 5 送查點接 per-target converter + L3 閘擴充落地,pytest 329 pass/0 fail + 新測 37 pass,orchestrator 獨立驗證"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-21T00:04:49.138Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "取文降級鏈 5 送查點接 per-target converter + L3 閘擴充落地,pytest 329 pass/0 fail + 新測 37 pass,orchestrator 獨立驗證"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-21T00:04:58.608Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "使用者明確指示畢業:取文降級鏈接 converter + L3 閘,verified 通過"
+    }
+  ]
+}

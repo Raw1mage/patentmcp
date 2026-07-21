@@ -1,0 +1,21 @@
+{
+  "schemas": [
+    {
+      "name": "取文正規化參數",
+      "kind": "message",
+      "fields": [
+        { "name": "raw_pubno", "type": "str", "notes": "呼叫端原號，可能帶前導零如 US09993161B1" },
+        { "name": "target_source", "type": "enum", "notes": "gpatents|google_patents|gpss_rest|epo" },
+        { "name": "normalized", "type": "str|list[str]", "notes": "per-target converter 輸出；epo 回 variants list，其餘回單一 canonical" }
+      ]
+    },
+    {
+      "name": "patents.claim1 落地欄",
+      "kind": "table",
+      "fields": [
+        { "name": "pubno", "type": "str", "notes": "to_patentdb_key 正規化，保留前導零/kind（庫 key）" },
+        { "name": "claim1", "type": "text", "notes": "取文成功落地的獨立請求項全文；length>0 為有效" }
+      ]
+    }
+  ]
+}

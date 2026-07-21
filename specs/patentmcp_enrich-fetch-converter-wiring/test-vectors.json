@@ -1,0 +1,20 @@
+[
+  {
+    "id": "TV-1",
+    "description": "US grant 前導零號取文自癒（送 gpatents/google 前 strip-0）",
+    "input": { "pubno": "US09993161B1", "call": "patent_get_claim1" },
+    "expected": { "normalized_before_fetch": "US9993161", "success": true, "claim1_length_gt": 0 }
+  },
+  {
+    "id": "TV-2",
+    "description": "已正確號 idempotent（正規化不破壞已命中號）",
+    "input": { "pubno": "US9993161", "call": "patent_get_claim1" },
+    "expected": { "normalized_before_fetch": "US9993161", "success": true }
+  },
+  {
+    "id": "TV-3",
+    "description": "L3 防回歸：送查點改回原號直送時取文端 roundtrip 測試 fail",
+    "input": { "regression": "bypass converter, send raw pubno", "pubno": "US09993161B1" },
+    "expected": { "roundtrip_test": "fail" }
+  }
+]

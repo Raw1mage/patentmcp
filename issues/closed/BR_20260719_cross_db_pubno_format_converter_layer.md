@@ -1,6 +1,8 @@
 # BR_20260719 — 跨 DB 專利號碼格式 Converter Layer（SSOT）
 
-- **狀態**: **resolved**（2026-07-19 晚二修：`to_epo_variants` 已補 US grant/old-A 前導零 strip 變體，並同族收斂 epo/client.py 4 處單形式 `to_docdb`→variants fallback，pytest 33 全綠，見文末「落地紀錄（二修）」）；前輪 resolved（converter 落地、5 處散點收斂，pytest 19+11 全綠）——但 §4 實查 roundtrip 未做就漏了這個實查才抓得出的缺陷，故一度 reopened
+- **狀態**: **resolved（2026-07-21，R3 三修：取文降級鏈接線 + L3 閘擴充）** — `patent_get_claim1` / `patent_enrich_backfill` 取文降級鏈全部 5 個送外部源送查點接上 per-target converter（GPSS 主查→`to_gpss_rest`、EPO→`to_epo_variants` 逐變體、gpatents 尾級 ×2→`_to_gpatents_canonical` strip-0，fail-fast `UNPARSEABLE_PUBNO` 禁裸送）。新增 `tests/test_fetch_converter_wiring.py`（10 L3 gate + 4 送查點 spy，漏接時當場 fail），key tests 37 passed、全套件 329 passed。額外坐實：`normalize_pubno` 對 US grant kind（`B1`/`B2`）因 mid-string letter 不剝零，改用 `to_gpss4_web` body + `lstrip("0")` 才正確。根治 plan：`plans/patentmcp_enrich-fetch-converter-wiring/`。詳見文末「復發樣本 R3（2026-07-21）」+「落地紀錄（R3 三修）」。
+- ~~**狀態**: **REOPENED（2026-07-21，第三度同族復發）** — enrich 取文降級鏈整條沒接 per-target converter，US grant 前導零錯號（`US09993161B1`）直送 gpatents 必 miss，下游誤判成「451 筆真缺口」。~~
+- ~~**狀態**: **resolved**（2026-07-19 晚二修：`to_epo_variants` 已補 US grant/old-A 前導零 strip 變體，並同族收斂 epo/client.py 4 處單形式 `to_docdb`→variants fallback，pytest 33 全綠，見文末「落地紀錄（二修）」）；前輪 resolved（converter 落地、5 處散點收斂，pytest 19+11 全綠）——但 §4 實查 roundtrip 未做就漏了這個實查才抓得出的缺陷，故一度 reopened~~
 - **嚴重度**: high（資料完整性 + 反覆盲試燒 token 的系統性根因）
 - **回報者**: 異常偵測前案檢索案（orchestrator）
 - **元件**: `patent_mcp_server`（號碼正規化 / 各 DB 查詢入口）
@@ -249,3 +251,45 @@ plan 狀態停在 `implementing`（未 promote `verified`，因 roundtrip 實查
 - 同族 `family`/`claims`/`images`/`download_image_pdf` 對同批 US 前導零號亦不再假 miss。
 
 - event: `event_2026-07-19_br-20260719-converter-reopened-to-epo-variants-us-*`
+
+---
+
+## 復發樣本 R3（2026-07-21）— enrich 取文降級鏈整條沒接 converter（第三度漏網消費點）
+
+**回報者**：異常偵測前案檢索案（orchestrator）。**觸發**：US 母池 claim1 補撈，subagent 對一批 US 舊 grant 案回 `Failed to fetch from gpatents`，誤判為「451 筆真缺口 / gpatents 未上架」。orchestrator 實測翻案。
+
+### 坐實的因果鏈（三步，全實測）
+
+1. `to_patentdb_key("US09993161B1")` → `US09993161B1`（**保留前導零**，對帳 key 本就該保留，正確）。
+2. `patent_get_claim1("US09993161B1")` → `Failed to fetch from gpatents`（前導零錯號直送 gpatents，必 miss）。
+3. 剝零後 `patent_get_claim1("US9993161")` → `success: true`，完整 claim1 全文（`source: google_patents`）；`epo_biblio("US9993161B1")` 亦 `found: true`。
+
+→ **號碼形態沒錯是 converter 的鍋——`to_epo_variants` 二修已能產 strip-0 變體。真 bug 是 enrich 取文降級鏈（`patent_get_claim1` / `patent_enrich_backfill` 送 gpatents/google_patents/GPSS/EPO 前）整條沒呼叫任何 per-target converter，原號直送。**
+
+### 為何是本 BR 的同族復發，非新軸
+
+- 本 BR §5「消費端後續依賴」+ §7 L3 實查閘只覆蓋了**對帳/落地 key 消費點**（`patents.py:_get_patent_country_and_normalized_no`、`patentdb_store`），**沒覆蓋 `patent_get_claim1` 取文降級鏈的送查點**。
+- 這是本 BR 文末自己預言的 pattern 第三次應驗：「**L1/L2 防『不知道』，L3 防『知道但漏做』**」。converter 有能力、docstring 有 mapping（L1/L2 到位），但取文端這個消費點漏接線（L3 未覆蓋 → 漏網）。
+- 前兩個漏網消費點：US A1 pre-grant 10↔11 位（首修）、US grant/old-A strip-0（二修）。**本次是第三個：取文降級鏈整條**。三者同根：per-target converter 已正確實作，某消費端繞過它裸送。
+
+### 證據定位（subagent explore 偵查）
+
+- gpatents 送查點：`patents.py:1437`（`source: google_patents` 成功）、`patents.py:1440`（`Failed to fetch from gpatents.`）。
+- `patents.py` claim1/enrich 取文區段 grep `to_gpss|to_epo|to_docdb|pubno_convert` 交叉 `claim1|enrich|fetch` **未命中任何 per-target converter 呼叫** → 原號直送坐實。
+- `patents.py:1238` 有「gpatents 失敗 → 改走 @AN 申請號路由」的 fallback 註解，證明降級鏈是「fetch 失敗後改路由」補救，而非「送查前正規化號碼」——補救邏輯掩蓋了根因。
+
+### 影響
+
+- 本案 US claim1 補撈被誤判「451 筆真缺口 / gpatents 未上架」，實為前導零錯號 × 取文端跳過 converter 的雙重人為錯。converter 接上後用正確號重撈即可回收大部分。
+- 同族 `patent_enrich_backfill` 對任何 US grant/old-A 前導零號的取文都受影響。
+
+### 根治 plan
+
+`plans/patentmcp_enrich-fetch-converter-wiring/`（本輪開）——取文降級鏈每個送查點接對應 per-target converter（送 gpatents/google→strip-0 canonical、送 GPSS→to_gpss_rest、送 EPO→to_epo_variants）+ L3 實查閘擴充覆蓋取文降級鏈（DD-2「converter 漏任一消費點時當場 fail」的取文端實例）。
+
+### DD（本復發樣本新增）
+
+- **DD-3（取文端接線）**：enrich 取文降級鏈的送查點是 converter 的**第 6 類消費點**（前五：epo/client、patentdb_store、gpss4/folder、patents.py 對帳入口、family_backfill script）。每跳送查前呼叫該源 per-target converter，禁原號直送。
+- **DD-4（L3 閘擴充）**：L3 roundtrip 實查閘的「每消費點」維度必須含**取文降級鏈**——否則同一「知道但漏做」會第四次復發。閘的判準：拿一個已知前導零錯號跑 `patent_get_claim1`，斷言 converter 被呼叫且取文成功。
+
+- event: `event_2026-07-21_br-20260719-r3-enrich-fetch-converter-wiring`

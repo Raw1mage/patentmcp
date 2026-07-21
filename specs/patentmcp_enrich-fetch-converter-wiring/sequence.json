@@ -1,0 +1,14 @@
+[
+  {
+    "title": "取文送查前 per-target 正規化",
+    "participants": ["caller", "patent_get_claim1", "pubno_convert", "external_source"],
+    "messages": [
+      { "from": "caller", "to": "patent_get_claim1", "label": "原號 US09993161B1" },
+      { "from": "patent_get_claim1", "to": "pubno_convert", "label": "選定源 + 原號 → 該源 converter" },
+      { "from": "pubno_convert", "to": "patent_get_claim1", "label": "正規化號 US9993161" },
+      { "from": "patent_get_claim1", "to": "external_source", "label": "送查正規化號" },
+      { "from": "external_source", "to": "patent_get_claim1", "label": "claim1 文字 / miss→降級下一源" },
+      { "from": "patent_get_claim1", "to": "caller", "label": "success + claim1 落地" }
+    ]
+  }
+]

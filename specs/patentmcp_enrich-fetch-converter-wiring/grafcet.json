@@ -1,0 +1,62 @@
+[
+  {
+    "StepNumber": 0,
+    "ModuleRef": "A1",
+    "StepType": "initial",
+    "StepAction": "取文降級鏈收到呼叫端原號，選定第一個取文源",
+    "LinkInputType": [],
+    "LinkInputNumber": [],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["patent_get_claim1 / patent_enrich_backfill 被呼叫"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 1,
+    "ModuleRef": "A2",
+    "StepType": "normal",
+    "StepAction": "用當前源 per-target converter 正規化號碼（gpatents/google→strip-0、GPSS→to_gpss_rest、EPO→to_epo_variants）",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [0],
+    "LinkOutputNumber": [2],
+    "LinkOutputType": "track",
+    "Condition": ["已選定當前取文源"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 2,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "用正規化號送查外部源取 claim1",
+    "LinkInputType": ["track"],
+    "LinkInputNumber": [1],
+    "LinkOutputNumber": [3, 4],
+    "LinkOutputType": "or",
+    "Condition": ["號碼已正規化為該源可吃格式"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 3,
+    "ModuleRef": "A3",
+    "StepType": "normal",
+    "StepAction": "claim1 文字落地 patentdb",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [2],
+    "LinkOutputNumber": [],
+    "LinkOutputType": "track",
+    "Condition": ["取文成功"],
+    "SubGrafcet": []
+  },
+  {
+    "StepNumber": 4,
+    "ModuleRef": "A1",
+    "StepType": "normal",
+    "StepAction": "降級到下一取文源，重走正規化+送查",
+    "LinkInputType": ["or"],
+    "LinkInputNumber": [2],
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["取文失敗且仍有下一源"],
+    "SubGrafcet": []
+  }
+]
