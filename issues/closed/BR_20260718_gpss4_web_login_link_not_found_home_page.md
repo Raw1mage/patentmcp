@@ -11,8 +11,8 @@
 
 ```
 GPSS4_DBSCOPE_RUNTIME: login failed after trying 2 account(s):
-  account #0 (<account-redacted>):     login link not found on home page
-  account #1 (<account-redacted>):  login link not found on home page
+  account #0 (<account-1>):  login link not found on home page
+  account #1 (<account-2>):  login link not found on home page
 ```
 
 連續 2 個獨立工具（`gpss4_set_search_scope`、`gpss4_folder_mark`）同錯，非單一工具問題，是**共用登入 handshake 壞了**。
