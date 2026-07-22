@@ -1,0 +1,68 @@
+[
+  {
+    "id": "TV-1",
+    "description": "純分類軸多頁累積:corpus 450 筆 > 單頁 200,expSkip 自動翻頁累積至 num;斷言 success/source=gpss/records=450 且 GPSS search 呼叫 >=3 次(200+200+50),provenance 每頁一筆 hit (DD-2)",
+    "input": { "call": "bulk_export", "ipc": "G16H40/67", "databases": ["CN"], "num": 450, "corpus_size": 450, "page_size": 200 },
+    "expected": { "success": true, "source": "gpss", "records_len": 450, "min_gpss_calls": 3, "min_hit_provenance_entries": 3 }
+  },
+  {
+    "id": "TV-2",
+    "description": "軸小於 num → 於 total 停止:corpus 120,num=2000,cursor 達 total 即停;斷言 records=120(窮盡,非 2000)(DD-2 skip>=total 停止)",
+    "input": { "call": "bulk_export", "ipc": "G16H40/67", "num": 2000, "corpus_size": 120 },
+    "expected": { "success": true, "records_len": 120 }
+  },
+  {
+    "id": "TV-3",
+    "description": "軸大於 num → 於 num 截斷:corpus 1000,num=300;斷言 records=300(達 num 上限停止)(DD-2)",
+    "input": { "call": "bulk_export", "ipc": "G16H40/67", "num": 300, "corpus_size": 1000 },
+    "expected": { "success": true, "records_len": 300 }
+  },
+  {
+    "id": "TV-4",
+    "description": "num 硬上限:corpus 6000,num=999999;斷言 records <= BULK_EXPORT_MAX(5000),對齊 TIPO 配額防護(DD-2)",
+    "input": { "call": "bulk_export", "ipc": "G16H40/67", "num": 999999, "corpus_size": 6000 },
+    "expected": { "success": true, "records_len_max": 5000, "bulk_export_max": 5000 }
+  },
+  {
+    "id": "TV-5",
+    "description": "expFld 強制全欄:呼叫端無法縮欄;斷言每頁 search 的 fields == _BULK_FIELDS 且含 TI/PA/CL(DD-3 杜絕半殘 row)",
+    "input": { "call": "bulk_export", "ipc": "G16H40/67", "corpus_size": 2 },
+    "expected": { "success": true, "every_page_fields_equal": "PN,AN,ID,AD,PR,TI,AB,CL,IC,CS,UC,PA,IN", "fields_contains": ["TI", "PA", "CL"] }
+  },
+  {
+    "id": "TV-6",
+    "description": "官方 miss → 真 0 不退爬蟲:GPSS 回 'no record found';斷言 success=true + records=[] + source=gpss + 無 error_code + provenance 含 reason=zero_hits 且不含 gpatents/scraping(DD-5 no-fallback 天條)",
+    "input": { "call": "bulk_export", "ipc": "NOSUCH/00", "corpus_size": 0 },
+    "expected": { "success": true, "records": [], "source": "gpss", "has_error_code": false, "provenance_has_zero_hits": true, "provenance_has_gpatents": false, "provenance_has_scraping": false }
+  },
+  {
+    "id": "TV-7",
+    "description": "工具層 no-scraping:patent_bulk(source='gpss', ipc='NOSUCH/00') 回空;斷言 success=true + records=[] + 無 error_code(patent_bulk_export 已為 TOOL_RENAMED stub,無 allow_scraping 參數,DD-5)",
+    "input": { "call": "patent_bulk", "source": "gpss", "ipc": "NOSUCH/00", "corpus_size": 0 },
+    "expected": { "success": true, "records": [], "has_error_code": false }
+  },
+  {
+    "id": "TV-8",
+    "description": "分類軸缺失 fail-fast:未給 ipc/cpc/uspc;斷言 success=false + error_code=INVALID_PARAMS 且 gpss_client.search 零呼叫(純分類軸硬約束,DD-4)",
+    "input": { "call": "bulk_export", "databases": ["CN"], "num": 100, "corpus_size": 1 },
+    "expected": { "success": false, "error_code": "INVALID_PARAMS", "gpss_calls": 0 }
+  },
+  {
+    "id": "TV-9",
+    "description": "num 傳至 expQty:corpus 50,num=50;斷言首頁 expQty == min(_BULK_PAGE, 50)(num 語義正確映射至 GPSS expQty,不作 keyword AND 收窄,DD-4)",
+    "input": { "call": "bulk_export", "ipc": "G16H40/67", "num": 50, "corpus_size": 50, "page_size": 200 },
+    "expected": { "success": true, "first_page_expqty": 50 }
+  },
+  {
+    "id": "TV-10",
+    "description": "GPSS 未 configured → fail-fast:configured()=False;斷言 success=false + error_code=GPSS_NOT_CONFIGURED 且 search 零呼叫,不退其他來源(DD-5)",
+    "input": { "call": "bulk_export", "ipc": "G16H40/67", "gpss_configured": false, "corpus_size": 1 },
+    "expected": { "success": false, "error_code": "GPSS_NOT_CONFIGURED", "gpss_calls": 0 }
+  },
+  {
+    "id": "TV-11",
+    "description": "落地 patentdb:patent_bulk(source='gpss', ipc, num=3) collect-then-absorb;斷言 import_records 收到 3 筆(acquisition_cost=low)且 envelope.patentdb_absorb.imported=3(DD-6 對接 import_csv/import_records)",
+    "input": { "call": "patent_bulk", "source": "gpss", "ipc": "G16H40/67", "num": 3, "corpus_size": 3 },
+    "expected": { "success": true, "import_records_n": 3, "patentdb_absorb_imported": 3 }
+  }
+]

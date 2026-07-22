@@ -1,9 +1,0 @@
-[
-  {
-    "$scaffold": "plan-builder:scaffold",
-    "id": "TV-1",
-    "description": "<placeholder: what this vector proves>",
-    "input": {},
-    "expected": {}
-  }
-]

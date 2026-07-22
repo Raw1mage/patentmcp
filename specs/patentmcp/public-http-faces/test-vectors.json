@@ -1,0 +1,141 @@
+[
+  {
+    "id": "TV-1",
+    "description": "landing 根路徑公開可達，回 HTML，工具表為連結（每列 <a href=\"{prefix}/tools/{name}\">）",
+    "input": { "method": "GET", "path": "/", "auth": "none" },
+    "expected": {
+      "status": 200,
+      "content_type_contains": "text/html",
+      "body_contains": ["patentmcp", "/tools/", "Content-Language"],
+      "note": "tools 列以 <a href> 連到分頁；registry 失敗時 landing 仍 200 但工具表為空（silent fallback，:552-554）"
+    }
+  },
+  {
+    "id": "TV-2",
+    "description": "/tools 為 HTML 索引頁（非 JSON），列出所有工具連到各自 schema 分頁",
+    "input": { "method": "GET", "path": "/tools", "auth": "none" },
+    "expected": {
+      "status": 200,
+      "content_type_contains": "text/html",
+      "body_contains": ["工具總覽", "/tools/"]
+    }
+  },
+  {
+    "id": "TV-3",
+    "description": "/tools/{name} 存在工具：完整 inputSchema 分頁（參數表格 + 原始 JSON <pre>），動態取自 mcp.list_tools()",
+    "input": { "method": "GET", "path": "/tools/patent_search", "auth": "none" },
+    "expected": {
+      "status": 200,
+      "content_type_contains": "text/html",
+      "body_contains": ["patent_search", "inputSchema", "原始 JSON Schema"],
+      "note": "tool_page 找到 match 後渲染 _tool_page_html；schema 遞迴渲染 properties/type/required/enum/default（深度上限 2，:435）"
+    }
+  },
+  {
+    "id": "TV-4",
+    "description": "/tools/{name} 未知工具：HTML 404，body 帶 'Unknown tool' + 連回 /tools",
+    "input": { "method": "GET", "path": "/tools/__nonexistent__", "auth": "none" },
+    "expected": {
+      "status": 404,
+      "content_type_contains": "text/html",
+      "body_contains": ["Unknown tool", "__nonexistent__", "/tools"],
+      "note": "tool_page match is None 分支（:476-482）"
+    }
+  },
+  {
+    "id": "TV-5",
+    "description": "/tools.json 機器可讀 JSON introspection，與 landing/分頁同源 live registry（零漂移）",
+    "input": { "method": "GET", "path": "/tools.json", "auth": "none" },
+    "expected": {
+      "status": 200,
+      "content_type_contains": "application/json",
+      "json_shape": { "tools": "array of {name, description, inputSchema}" },
+      "note": "registry 失敗 fail-loud 500 {error:tool_registry_unavailable}，不 silent [] fallback（:522-528）"
+    }
+  },
+  {
+    "id": "TV-6",
+    "description": "/dav 與 /webdav 是同一 dav() handler；無憑證回 401 + WWW-Authenticate Basic（app-level auth，不受 route auth=0 影響）",
+    "input": { "method": "PROPFIND", "path": "/dav/some-subject", "auth": "none" },
+    "expected": {
+      "status": 401,
+      "content_type_contains": "application/xml",
+      "headers_contain": { "WWW-Authenticate": "Basic realm=\"patentmcp-webdav\"" },
+      "body_contains": ["<code>unauthorized</code>"],
+      "note": "/webdav/some-subject 同 handler 同行為（DD-4 別名，route :641-648）；經 gateway 時 /webdav 別名被 gateway login 牆攔（tasks.md e2e，對外用 /dav）"
+    }
+  },
+  {
+    "id": "TV-7",
+    "description": "/dav 與 /webdav 路由到同一 handler 的證明：兩前綴 base_href 皆由 request-path 反推（不烤 PATENTS_GATEWAY_PREFIX，rclone bug 5.5 教訓）",
+    "input": { "method": "PROPFIND", "path": "/webdav/some-subject/nested/file", "auth": "valid-basic-owner" },
+    "expected": {
+      "status": 207,
+      "note": "base_href 由 req_path 去尾 rel 反推（:618-626）；同一 handler 在 /dav 與 /webdav 兩 mount prefix 下 PROPFIND href 皆正確。mount_prefix 固定傳 /dav 使 _dest_rel find() 保持 prefix-agnostic"
+    }
+  },
+  {
+    "id": "TV-8",
+    "description": "cross-owner WebDAV 探測：憑證有效但非該 subject cache owner → 403 forbidden，無 fallback",
+    "input": { "method": "PROPFIND", "path": "/dav/other-owners-subject", "auth": "valid-basic-different-owner" },
+    "expected": {
+      "status": 403,
+      "content_type_contains": "application/xml",
+      "body_contains": ["<code>forbidden</code>", "identity does not own this subject cache"],
+      "note": "dav() not _auth.owns 分支（:602-606）；per-cache 授權在 route auth=0 下仍生效"
+    }
+  },
+  {
+    "id": "TV-9",
+    "description": "/sse 為 GET SSE stream（Route 非 Mount，避 307）；連上回 event-stream",
+    "input": { "method": "GET", "path": "/sse", "auth": "none" },
+    "expected": {
+      "status": 200,
+      "content_type_contains": "text/event-stream",
+      "note": "自建 SseServerTransport（非 mount sse_app()，避第二 lifespan crash，DD-5）；advertised message endpoint 帶 {prefix}/sse/messages"
+    }
+  },
+  {
+    "id": "TV-10",
+    "description": "/sse/messages 為 Mount 到 transport 的 raw-ASGI POST sink（JSON-RPC message 回灌）",
+    "input": { "method": "POST", "path": "/sse/messages", "auth": "none" },
+    "expected": {
+      "route_exists": true,
+      "note": "Mount(\"/sse/messages\", _sse.handle_post_message)（:667）；實際 session 綁定由 transport 內部管理，無有效 session 時由 transport 回錯"
+    }
+  },
+  {
+    "id": "TV-11",
+    "description": "/skills/patentworks.zip：skill 目錄存在時回 application/zip 附件；缺目錄 404 skill_not_found",
+    "input": { "method": "GET", "path": "/skills/patentworks.zip", "auth": "none" },
+    "expected": {
+      "status_when_present": 200,
+      "content_type_when_present": "application/zip",
+      "headers_when_present": { "Content-Disposition": "attachment; filename=\"patentworks.zip\"" },
+      "status_when_absent": 404,
+      "body_when_absent_contains": ["skill_not_found"]
+    }
+  },
+  {
+    "id": "TV-12",
+    "description": "gateway strip-prefix e2e：外網打 https://cms.thesmart.cc/patentmcp/ 無憑證即取 landing（公開無認證生效，auth=0）",
+    "input": { "method": "GET", "url": "https://cms.thesmart.cc/patentmcp/", "auth": "none" },
+    "expected": {
+      "status": 200,
+      "publicly_reachable_without_credentials": true,
+      "body_contains": ["patentmcp"],
+      "note": "gateway strip /patentmcp 走 UDS .run/patentmcp.sock；landing/tools/tools/{name}/tools.json/sse/mcp 全公開直通（tasks.md §5 e2e 2026-07-15，48 tools）"
+    }
+  },
+  {
+    "id": "TV-13",
+    "description": "每個對外 HTTP 請求落一筆 access log（統一觀測），fail-open 不弄斷請求",
+    "input": { "trigger": "any HTTP request to any route" },
+    "expected": {
+      "event_category": "access",
+      "event_kind": "http",
+      "fields": ["method", "uri", "status", "duration_ms", "client_ip", "user_agent", "mcp_client"],
+      "note": "_access_log_mw → friction_log.record_access（:338-346 / :236-253）；uri 丟棄 query string；recorder 自吞例外（fail-open）"
+    }
+  }
+]

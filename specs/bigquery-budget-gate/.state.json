@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [
+    "docs"
+  ],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-06-28T09:40:49.898Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "proposed",
+      "at": "2026-07-18T18:05:53.787Z",
+      "by": "pkcs12",
+      "mode": "sync",
+      "reason": "set lifecycle profile software → docs (drives plan-validate artifact requirements)"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-18T18:06:32.410Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "drift reconcile 2026-07-19: tasks all checked with inline validation evidence; docs profile"
+    },
+    {
+      "from": "designed",
+      "to": "verified",
+      "at": "2026-07-18T18:07:10.278Z",
+      "by": "pkcs12",
+      "mode": "migration",
+      "reason": "gate-paradox administrative repair 2026-07-19: all tasks checked with inline validation evidence BEFORE state bookkeeping ever advanced past designed; planned gate requires an unchecked item so natural ladder is unreachable. Evidence: tasks.md inline PASS notes"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-19T18:47:33.649Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user-confirmed KB graduation"
+    }
+  ]
+}

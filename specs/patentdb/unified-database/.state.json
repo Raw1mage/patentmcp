@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [
+    "research"
+  ],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-06-28T17:01:44.422Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts (profile=research)"
+    },
+    {
+      "from": "proposed",
+      "to": "implementing",
+      "at": "2026-06-29T01:33:38+08:00",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "schema 四審核點放行（全域只管書目/CSV脫鉤/inline吸收/百萬級/腳踏兩條船 + 粒度從簡），進實作"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-06-28T18:01:46.279Z",
+      "by": "pkcs12",
+      "mode": "migration",
+      "reason": "Phase 1-5 全完成：sqlite 結構化書目層 + 3 工具線上 PASS（import_csv 452 件 / query / put）、commit af1f95d 入版控、容器 rebuild healthy、單元測試 11/11 綠。tasks.md 22/22 全勾選。"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-19T18:46:28.824Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user-confirmed-KB-graduation-batch"
+    }
+  ]
+}

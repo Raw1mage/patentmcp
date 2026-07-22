@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-17T16:15:10.819Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-17T16:20:22.569Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "設計就緒"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-17T16:21:28.817Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "全 artifacts 就緒"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-17T16:21:28.950Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "進實作"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-17T16:32:19.864Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "13 rotation tests + 210 既有測試全綠, 零回歸"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-19T18:46:30.396Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user-confirmed-KB-graduation-batch"
+    }
+  ]
+}

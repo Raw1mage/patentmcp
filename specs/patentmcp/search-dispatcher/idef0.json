@@ -1,0 +1,45 @@
+{
+  "diagram_title": "Unified Patent Search Dispatcher (patent_search)",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "Normalize Query Axes",
+      "description": "Validate and normalize unified search params (cpc/ipc/keyword/applicant/inventor_country/pub_number/date/countries/num/skip) into a backend-neutral QuerySpec; fail-fast on invalid params.",
+      "decomposition": {}
+    },
+    {
+      "id": "A2",
+      "title": "Select Source Ladder Rung",
+      "description": "Route the QuerySpec down the source priority ladder GPSS -> EPO -> PPUBS -> (gated) gpatents using configured() availability and the axis capability matrix; USPC (CCL/) axis goes direct to PPUBS; gpatents is gated by allow_scraping (default False).",
+      "decomposition": {}
+    },
+    {
+      "id": "A3",
+      "title": "Execute Backend Search",
+      "description": "Run the backend-native query on the chosen rung under client throttling (GPSS single-thread+sleep, EPO 15/min two-phase search+biblio, PPUBS run_query, gated GooglePatents tail); emit raw hits and a per-rung attempt result.",
+      "decomposition": {}
+    },
+    {
+      "id": "A4",
+      "title": "Normalize Records & Assemble Provenance",
+      "description": "Map raw backend hits into the unified record schema (screening_table.py) with honest-gap discipline and assemble the {records, source, provenance, gaps} envelope, one provenance entry per attempted rung.",
+      "decomposition": {}
+    }
+  ],
+  "arrows": [
+    { "id": "AR1", "source": "EXTERNAL", "target": "A1:input", "type": "input", "label": "Unified params (cpc/ipc/keyword/applicant/inventor_country/pub_number/date/countries/num/skip)" },
+    { "id": "AR2", "source": "EXTERNAL", "target": "A1:control", "type": "control", "label": "Unified axis schema + fail-fast param validation" },
+    { "id": "AR3", "source": "A1:output", "target": "A2:input", "type": "input", "label": "Normalized QuerySpec" },
+    { "id": "AR4", "source": "EXTERNAL", "target": "A2:control", "type": "control", "label": "Source priority policy GPSS->EPO->PPUBS + axis capability matrix + allow_scraping gate (default False)" },
+    { "id": "AR5", "source": "A2:output", "target": "A3:input", "type": "input", "label": "Routing decision (source + backend-native query)" },
+    { "id": "AR6", "source": "EXTERNAL", "target": "A3:control", "type": "control", "label": "Client throttling (GPSS single-thread+sleep, EPO 15/min, SoftScrapePolicy)" },
+    { "id": "AR7", "source": "A3:output", "target": "A4:input", "type": "input", "label": "Raw backend hits + per-rung attempt result" },
+    { "id": "AR8", "source": "EXTERNAL", "target": "A4:control", "type": "control", "label": "Unified record schema (screening_table.py) + honest-gap discipline (blank, never faked)" },
+    { "id": "AR9", "source": "A4:output", "target": "EXTERNAL", "type": "output", "label": "Unified envelope {records, source, provenance, gaps}" },
+    { "id": "AR10", "source": "EXTERNAL", "target": "A1:mechanism", "type": "mechanism", "label": "search_dispatcher.py" },
+    { "id": "AR11", "source": "EXTERNAL", "target": "A2:mechanism", "type": "mechanism", "label": "gpss_client.configured() / epo_client.configured() / axis->backend mapper" },
+    { "id": "AR12", "source": "EXTERNAL", "target": "A3:mechanism", "type": "mechanism", "label": "GPSSClient.search / EPOClient.search+biblio / ppubs_client.run_query / GooglePatentsClient.search (gated tail)" },
+    { "id": "AR13", "source": "EXTERNAL", "target": "A4:mechanism", "type": "mechanism", "label": "gpss_to_records / ppubs_to_records / epo biblio mapper / google_to_records" }
+  ]
+}

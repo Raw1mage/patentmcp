@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-06-28T06:08:30.565Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-06-28T06:17:23.554Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "proposal/design/spec 完成; idef0+grafcet 經 drawmiat 驗證通過; c4/sequence/data-schema 建模齊備並對齊 validator 格式。六項 A~F 範圍與 DD-1~DD-8 決策已釘死。"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-06-28T06:20:29.387Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "tasks.md/handoff.md/test-vectors.json/errors.md/observability.md 已補齊並對齊 validator 標題與格式。6 phase 任務拆解完成，含 C docker mount 的 approval stop gate。"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-06-28T06:25:05.995Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "Phase 1 (A 單線程節流) 完成: _GPSS_SCRAPE_LOCK + 隨機延遲套用於三個 GPSS 抓圖工具，import smoke test 通過。"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-06-28T06:52:12.727Z",
+      "by": "pkcs12",
+      "mode": "migration",
+      "reason": "BR_20260628 六項 A~F 全部完成。A/B/D/E/F: 9/9 單元測試 PASS。C: 偵查發現 docxmcp bind-mount ban → 採 host-pipe SOP（patentmcp blob TCP 8000 → docxmcp /files tarball，實證 50026 bytes 完整搬移，bytes 不經 model context），固化進 skill。架構已同步，event log 已記。"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-19T18:46:32.723Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user-confirmed-KB-graduation-batch"
+    }
+  ]
+}

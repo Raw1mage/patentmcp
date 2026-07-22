@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [
+    "ssdlc",
+    "docs"
+  ],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-15T04:06:37.892Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts (profile=ssdlc)"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-15T04:12:36.430Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "架構定案：單一app多傳輸面 + SSE自建transport + gateway公開"
+    },
+    {
+      "from": "designed",
+      "to": "designed",
+      "at": "2026-07-15T04:28:48.360Z",
+      "by": "pkcs12",
+      "mode": "sync",
+      "reason": "infra/HTTP-face task: markdown design + code edits; SSDLC modeling artifacts not applicable"
+    },
+    {
+      "from": "designed",
+      "to": "verified",
+      "at": "2026-07-15T04:29:23.018Z",
+      "by": "pkcs12",
+      "mode": "migration",
+      "reason": "infra/HTTP-face task fully executed + e2e-verified via cms.thesmart.cc; ssdlc scaffolds (handoff/test-vectors/errors/observability) N/A for this task class; all tasks.md items done"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-19T18:57:08.664Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user-confirmed KB graduation"
+    }
+  ]
+}
