@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "state": "living",
+  "profile": [],
+  "history": [
+    {
+      "from": null,
+      "to": "proposed",
+      "at": "2026-07-21T10:54:11.293Z",
+      "by": "pkcs12",
+      "mode": "new",
+      "reason": "initial spec created via plan-init.ts"
+    },
+    {
+      "from": "proposed",
+      "to": "designed",
+      "at": "2026-07-21T11:01:19.818Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "R17 conformance plan: three gaps (resources/read, capability summary, asset preflight)"
+    },
+    {
+      "from": "designed",
+      "to": "planned",
+      "at": "2026-07-21T11:01:19.941Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "R17 conformance plan: three gaps (resources/read, capability summary, asset preflight)"
+    },
+    {
+      "from": "planned",
+      "to": "implementing",
+      "at": "2026-07-21T11:01:20.074Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "R17 conformance plan: three gaps (resources/read, capability summary, asset preflight)"
+    },
+    {
+      "from": "implementing",
+      "to": "verified",
+      "at": "2026-07-21T11:32:13.534Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "R17 conformance: 3 gaps closed, full suite 361 passed, standard §12 matrix + architecture synced, event recorded"
+    },
+    {
+      "from": "verified",
+      "to": "living",
+      "at": "2026-07-21T11:32:32.185Z",
+      "by": "pkcs12",
+      "mode": "promote",
+      "reason": "user-approved graduation: R17 conformance verified, full suite 361 passed"
+    }
+  ]
+}

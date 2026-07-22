@@ -1,0 +1,47 @@
+{
+  "schemas": [
+    {
+      "name": "CapabilitySummary",
+      "kind": "json",
+      "fields": [
+        {"name": "service", "type": "string", "notes": "patentmcp"},
+        {"name": "version", "type": "string", "notes": "mcp.json version"},
+        {"name": "transport", "type": "object", "notes": "{primary: streamable-http, endpoints: [Endpoint]}"},
+        {"name": "file_ingress", "type": "object", "notes": "{rails: [stage/token], note}"},
+        {"name": "file_egress", "type": "object", "notes": "{portable: resources/read, host_extensions: [Endpoint]}"},
+        {"name": "webdav_state", "type": "object", "notes": "{implemented: true, lifecycle: [cache_provision, cache_export, cache_close]}"},
+        {"name": "companion_skill", "type": "object", "notes": "{name: patentworks, source: skillPaths/GET /skills}"},
+        {"name": "conditional_families", "type": "array", "notes": "list of {family, tools[], when}"}
+      ]
+    },
+    {
+      "name": "Endpoint",
+      "kind": "json",
+      "fields": [
+        {"name": "kind", "type": "string", "notes": "mcp | blob | webdav | health | tools | skill"},
+        {"name": "path", "type": "string", "notes": "relative path/URI template (no host-guessing)"},
+        {"name": "visibility", "type": "string", "notes": "container | host-visible — R17.1.1; container never presented host-executable"},
+        {"name": "note", "type": "string", "notes": "how reached (via gateway / bare client)"}
+      ]
+    },
+    {
+      "name": "ResourceUri",
+      "kind": "message",
+      "fields": [
+        {"name": "uri", "type": "string", "notes": "patent://{token}/{rel} — protocol-native portable floor"},
+        {"name": "token", "type": "string", "notes": "tok_* token store id"},
+        {"name": "rel", "type": "string", "notes": "path within token namespace, traversal-checked via _safe_target"},
+        {"name": "mime_type", "type": "string", "notes": "guessed from rel suffix"}
+      ]
+    },
+    {
+      "name": "DeliveryAssertions",
+      "kind": "json",
+      "fields": [
+        {"name": "assert_nonempty", "type": "bool", "notes": "at least one deliverable file with size>0"},
+        {"name": "assert_min_files", "type": "int?", "notes": "minimum deliverable file count"},
+        {"name": "assert_contains_rel", "type": "string[]?", "notes": "required rel paths present"}
+      ]
+    }
+  ]
+}

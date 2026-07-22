@@ -1,0 +1,68 @@
+[
+  {
+    "id": "TV-1",
+    "description": "resources/read returns the exact bytes of a produced token-store artifact via patent://{token}/{rel}",
+    "input": {"produce": "put_bytes(b'PDF-BYTES', 'spec.pdf')", "read_uri": "patent://<token>/spec.pdf"},
+    "expected": {"bytes": "PDF-BYTES", "error": null}
+  },
+  {
+    "id": "TV-2",
+    "description": "resources/read on an unknown token/rel fails loud with a typed resource error (never an empty read)",
+    "input": {"read_uri": "patent://tok_DOESNOTEXIST/x.pdf"},
+    "expected": {"error": "resource_not_found", "bytes": null}
+  },
+  {
+    "id": "TV-3",
+    "description": "resources/read rejects a path that escapes the token namespace (traversal)",
+    "input": {"read_uri": "patent://<token>/../../etc/passwd"},
+    "expected": {"error": "traversal_or_not_found", "bytes": null}
+  },
+  {
+    "id": "TV-4",
+    "description": "resources/list mirrors the live token store — every produced rel appears exactly once",
+    "input": {"produce": ["a.csv", "sub/b.png"]},
+    "expected": {"uris_contain": ["patent://<t1>/a.csv", "patent://<t2>/sub/b.png"]}
+  },
+  {
+    "id": "TV-5",
+    "description": "patentmcp_init returns {doctrine, capabilities}; doctrine byte-identical to _guide_doctrine()/prompts-get body",
+    "input": {"call": "patentmcp_init()"},
+    "expected": {"keys": ["doctrine", "capabilities"], "doctrine_equals_guide": true}
+  },
+  {
+    "id": "TV-6",
+    "description": "capability endpoints carry visibility; the UDS/container socket is tagged container, never host-executable",
+    "input": {"call": "patentmcp_init()"},
+    "expected": {"every_endpoint_has": "visibility", "container_socket_visibility": "container", "no_host_exec_container_recipe": true}
+  },
+  {
+    "id": "TV-7",
+    "description": "cache_export refuses an empty working tree with typed EXPORT_EMPTY; nothing landed",
+    "input": {"provision": "subject S owner O", "export": "target T"},
+    "expected": {"success": false, "error_code": "EXPORT_EMPTY", "files_copied": 0}
+  },
+  {
+    "id": "TV-8",
+    "description": "cache_export with assert_min_files=2 fails typed when only 1 deliverable present",
+    "input": {"cache_files": ["only.csv"], "assert_min_files": 2},
+    "expected": {"success": false, "error_code": "ASSERTION_FAILED"}
+  },
+  {
+    "id": "TV-9",
+    "description": "cache_export backward-compat: no assertions supplied, non-empty tree lands exactly as before (byte-identical envelope)",
+    "input": {"cache_files": ["a.csv", "b.csv"], "assertions": null},
+    "expected": {"success": true, "files_copied": 2}
+  },
+  {
+    "id": "TV-10",
+    "description": "R17.6 end-to-end portable floor: host file -> ingress -> token -> transform -> assertion QA -> resources/read egress, NO WebDAV",
+    "input": {"floor": "portable"},
+    "expected": {"egress": "resources/read", "webdav_used": false, "qa_asserted": true}
+  },
+  {
+    "id": "TV-11",
+    "description": "R17.6 end-to-end with WebDAV: same chain but egress via cache_export with content assertions",
+    "input": {"floor": "webdav"},
+    "expected": {"egress": "cache_export", "webdav_used": true, "qa_asserted": true, "empty_refused": true}
+  }
+]

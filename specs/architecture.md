@@ -115,6 +115,9 @@
 - `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/screening_table.py`(現為 `_pure` re-export shim)
 - `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_pure/`(確定性純轉換 SSOT:screening.py/claims.py)
 - `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_token_store.py`(token store + deliverable-cache class)
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_resources.py`(R17.1(c) portable floor:token-store artifact ↔ `patent://{token}/{rel}` resources/list+read)
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_capabilities.py`(R17.1.1 結構化 capability summary,endpoint visibility=container|host-visible)
+- `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_delivery.py`(R17.2.4/5 typed asset preflight + content assertions,cache_export delivery gate)
 - `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_dav.py`(WebDAV class-2 handler + LockTable)
 - `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_auth_provider.py`(per-owner Basic auth,無 fallback)
 - `/home/pkcs12/projects/patentmcp/src/patent_mcp_server/_http_app.py`(HTTP app + /dav 掛載)
@@ -198,6 +201,7 @@
 
 ## Architecture Sync Note
 
+- 2026-07-21: R17 minimum operational toolset + host mediation 上線(plan `patentmcp_r17-minimum-operational-toolset`,依 `opencode/specs/mcp-integration-standard` §R17)。三 gap 補齊(既有 R17.1(a/b)/R17.4/R17.5 已達標之上):**R17.1(c) portable floor**——新 `_resources.py` + FastMCP 註冊,每個 token-store 產物經 `resources/read` @ `patent://{token}/{rel}` 協定原生取得(免 host socket/WebDAV),`resources/list` 動態 mirror live token store(`_resource_manager.list_resources` 覆蓋);unknown token/rel 與 traversal 逃逸 fail-loud、絕不空讀。**R17.1.1 結構化 capability summary**——`patentmcp_init` 由 prose-only 加寬為 `{doctrine, capabilities}`,每個 endpoint 標 `visibility=container|host-visible`(container UDS socket 不被誤認 host-executable);`prompts/get` 維持 prose-only,doctrine 兩 face byte-identical(`_capabilities.py`)。**R17.2.4/5 typed asset preflight**——`_delivery.py` + `cache_export` 接線:空工作樹 `EXPORT_EMPTY` 拒交付(nothing lands),optional content assertions(`assert_min_files`/`assert_nonempty`/`assert_contains_rel`)fail-loud `ASSERTION_FAILED`。**R17.6 eval**——`tests/test_r17_conformance.py` 端到端雙跑(portable-floor `resources/read` 無 WebDAV / WebDAV `cache_export`+assertions 空拒);mcp.json 0.5.0→0.6.0 + R17 signpost;全套 361 tests 綠。Critical File Index 補三新模組。
 - 2026-07-19: patentdb 擁有權對齊上線(issue_20260706 F1)。容器以 root 跑(compose 無 `user:`)、`_save_local_patent_cache` 容器側 mkdir/write 產 root-owned 案目錄,host 側 landing scripts(figure_extract.py 等)寫回撞 EACCES。修法:`patentdb_store.py` 新增 `align_db_ownership()`(僅 euid=0 生效;以 bind-mount root(`/patentdb`)的 stat uid/gid 為對齊目標;fail-open 絕不阻斷寫入路徑),`patents.py _save_local_patent_cache` 三寫入點(案目錄/figures/metadata.json)接線。存量 255 個 root-owned 檔/目錄已一次 `chown -R 1000:1000` 修復。容器內功能實測:新建案目錄+檔案落地後 uid=1000。附註:`friction.sqlite`/`observability.sqlite` 為容器側 lazy-init,新建仍可能 root-owned,但僅容器讀寫、不影響 host 落地路徑。
 - 2026-06-15: 已將架構 SSOT 從舊八階段 prompt pipeline 重構為 PatentWorks MCP + skill 現況；新增 analysis 作為資料來源無關的 planned boundary。
 - 2026-06-26: 獨立分析技能流程 `skills/patentworks/flows/analysis.md` 實作完成，並已同步更新 `SKILL.md` 路由表，以及 `screening.md` 與 `drafting.md` 的銜接說明。

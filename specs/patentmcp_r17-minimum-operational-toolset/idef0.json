@@ -1,0 +1,110 @@
+{
+  "diagram_title": "patentmcp R17 minimum operational toolset conformance",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "Portable result retrieval (resources/read)",
+      "description": "Expose every produced token-store binary through protocol-native MCP resources/list + resources/read, so a bare client retrieves it without the host-private /files blob or WebDAV extension.",
+      "decomposition": null
+    },
+    {
+      "id": "A2",
+      "title": "Structured capability summary",
+      "description": "patentmcp_init returns prose doctrine PLUS a compact machine-readable capability summary, distinguishing container/service endpoints from host-visible endpoints.",
+      "decomposition": null
+    },
+    {
+      "id": "A3",
+      "title": "Typed asset preflight + content assertions",
+      "description": "Delivery-oriented operations (cache_export) reject unresolved/empty/out-of-namespace assets before landing and emit machine-checkable content assertions; an empty artifact is never reported delivery-ready.",
+      "decomposition": null
+    }
+  ],
+  "arrows": [
+    {
+      "id": "AR1",
+      "source": "EXTERNAL",
+      "target": "A1:input",
+      "type": "input",
+      "label": "token-store blob (tok_*/rel)"
+    },
+    {
+      "id": "AR2",
+      "source": "EXTERNAL",
+      "target": "A1:control",
+      "type": "control",
+      "label": "MCP resources spec + traversal-safe URI + fail-loud (天條)"
+    },
+    {
+      "id": "AR3",
+      "source": "EXTERNAL",
+      "target": "A1:mechanism",
+      "type": "mechanism",
+      "label": "FastMCP @mcp.resource + TokenStore._safe_target"
+    },
+    {
+      "id": "AR4",
+      "source": "A1:output",
+      "target": "EXTERNAL",
+      "type": "output",
+      "label": "portable resource bytes (resources/read)"
+    },
+    {
+      "id": "AR5",
+      "source": "EXTERNAL",
+      "target": "A2:input",
+      "type": "input",
+      "label": "runtime endpoint + transport + companion + tool-family facts"
+    },
+    {
+      "id": "AR6",
+      "source": "EXTERNAL",
+      "target": "A2:control",
+      "type": "control",
+      "label": "R17.1.1 endpoint-visibility discipline (no container socket looks host-executable)"
+    },
+    {
+      "id": "AR7",
+      "source": "EXTERNAL",
+      "target": "A2:mechanism",
+      "type": "mechanism",
+      "label": "patentmcp_init envelope builder + _guide_doctrine() prose (unchanged)"
+    },
+    {
+      "id": "AR8",
+      "source": "A2:output",
+      "target": "EXTERNAL",
+      "type": "output",
+      "label": "prose + structured capabilities envelope"
+    },
+    {
+      "id": "AR9",
+      "source": "EXTERNAL",
+      "target": "A3:input",
+      "type": "input",
+      "label": "deliverable cache working tree + optional content assertions"
+    },
+    {
+      "id": "AR10",
+      "source": "EXTERNAL",
+      "target": "A3:control",
+      "type": "control",
+      "label": "R17.2.4/5 preflight rules + empty-artifact ban (天條)"
+    },
+    {
+      "id": "AR11",
+      "source": "EXTERNAL",
+      "target": "A3:mechanism",
+      "type": "mechanism",
+      "label": "cache_export preflight + assertion checker over token_store.list_files"
+    },
+    {
+      "id": "AR12",
+      "source": "A3:output",
+      "target": "EXTERNAL",
+      "type": "output",
+      "label": "landed export with assertion verdict OR typed preflight error"
+    }
+  ]
+}

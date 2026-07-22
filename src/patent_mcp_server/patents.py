@@ -4496,6 +4496,86 @@ async def gpatents_search(
 
 
 # =====================================================================
+# R17.1(c) portable result retrieval — protocol-native resources/read
+# /plans/patentmcp_r17-minimum-operational-toolset DD-1
+#
+# Every produced token-store binary is retrievable on the portable MCP floor
+# (resources/list + resources/read) WITHOUT a host-private extension
+# (/files/{token}/blob or the /dav WebDAV face). Those extensions stay as host
+# accelerators; this adds the portable floor beside them (R0/R2).
+#
+# - resources/read: a FastMCP resource TEMPLATE patent://{token}/{rel} maps the
+#   read to TokenStore.blob_path (traversal-safe, fail-loud on unknown/escape).
+# - resources/list: FastMCP only lists CONCRETE resources, so we override the
+#   ResourceManager's list_resources to MIRROR the live token store dynamically
+#   (artifacts are minted at runtime — a static registration cannot track them).
+# =====================================================================
+from patent_mcp_server import _resources as _res
+from patent_mcp_server import _delivery
+
+
+@mcp.resource(
+    _res._URI_PREFIX + "{token}/{rel}",
+    name="patent-artifact",
+    description=(
+        "Portable retrieval of a produced patent artifact by its token-store "
+        "URI patent://{token}/{rel} (R17.1(c) portable floor). Returns the raw "
+        "bytes; unknown token/rel or a path escaping the token namespace fails "
+        "loud (no empty read). Same bytes as the host-private "
+        "/files/{token}/blob/{rel} face, but reachable by a bare MCP client."
+    ),
+)
+def _patent_resource(token: str, rel: str) -> bytes:
+    """resources/read handler for patent://{token}/{rel}.
+
+    Delegates to the traversal-safe blob path; TokenStore raises fail-loud on an
+    unknown token / missing rel / traversal, which the SDK surfaces as a resource
+    error (天条 §11 — never a silent empty read)."""
+    return _res.read_resource_bytes(token_store, f"{_res._URI_PREFIX}{token}/{rel}")
+
+
+def _install_dynamic_resource_listing() -> None:
+    """Override ResourceManager.list_resources so resources/list mirrors the live
+    token store (R17.1(c)). FastMCP's default only lists statically-registered
+    concrete resources; our artifacts are minted at runtime, so we synthesise a
+    concrete FunctionResource per live blob at list time. The template above
+    still handles the actual read for any of them."""
+    from mcp.server.fastmcp.resources import FunctionResource
+    from pydantic import AnyUrl
+
+    _rm = mcp._resource_manager
+    _orig_list = _rm.list_resources
+
+    def _list_resources():
+        # Start from any statically-registered resources (there are none today,
+        # but stay forward-compatible), then add one per live token-store blob.
+        base = list(_orig_list())
+        seen = {str(r.uri) for r in base}
+        for desc in _res.list_resource_descriptors(token_store):
+            uri = desc["uri"]
+            if uri in seen:
+                continue
+            seen.add(uri)
+            base.append(
+                FunctionResource(
+                    uri=AnyUrl(uri),
+                    name=desc["name"],
+                    description="Produced patent artifact (token-store blob).",
+                    mime_type=desc["mime_type"],
+                    # Read goes through the template; this fn is a safe fallback
+                    # that returns the same bytes via the traversal-safe path.
+                    fn=(lambda u=uri: _res.read_resource_bytes(token_store, u)),
+                )
+            )
+        return base
+
+    _rm.list_resources = _list_resources  # type: ignore[assignment]
+
+
+_install_dynamic_resource_listing()
+
+
+# =====================================================================
 # R15 self-describing guide surface
 # /plans/mcp_r15-self-describing-guide DD-1/DD-5/DD-6
 # =====================================================================
@@ -4508,22 +4588,105 @@ _GUIDE_ANNOTATIONS = ToolAnnotations(
 )
 
 
+# ---------------------------------------------------------------------
+# R17.1.1 structured capability summary
+# /plans/patentmcp_r17-minimum-operational-toolset DD-2/DD-3
+#
+# patentmcp_init returns the prose doctrine PLUS a compact machine-readable
+# capability summary. Each endpoint carries a `visibility` class
+# (container | host-visible) so a client can tell the container-only UDS socket
+# from the gateway-fronted host-visible faces — and no container socket path is
+# presented as host-executable (R17.6 scenario 2). The `doctrine` field stays
+# byte-identical to the prompts/get face (R15.5 no-drift); capabilities are
+# additive metadata, not doctrine.
+# ---------------------------------------------------------------------
+def _build_capabilities() -> Dict[str, Any]:
+    """Compact machine-readable capability summary (R17.1.1).
+
+    Endpoint paths are stated relative / as the gateway mount; we deliberately
+    do NOT emit an executable recipe that pins a container-side socket path as if
+    the host could run it (R17.6 scenario 2 — the container UDS socket is
+    `visibility=container`, reached only via the gateway).
+    """
+    gw = os.environ.get("PATENTS_GATEWAY_PREFIX", "/patentmcp").rstrip("/") or "/patentmcp"
+    return {
+        "service": "patentmcp",
+        "version": "0.5.1",
+        "transport": {
+            "primary": "streamable-http",
+            "endpoints": [
+                {"kind": "mcp", "path": "/mcp", "visibility": "container",
+                 "note": "backend UDS socket, reached only via the gateway; not host-executable directly"},
+                {"kind": "mcp", "path": f"{gw}/mcp", "visibility": "host-visible",
+                 "note": "gateway-fronted MCP endpoint for host/remote clients"},
+            ],
+        },
+        "file_ingress": {
+            "rails": ["webdav-put", "tool-produced-token"],
+            "note": "stage bytes via a provisioned WebDAV cache (cache_provision + DAV PUT); tools that produce artifacts mint tokens directly",
+        },
+        "file_egress": {
+            "portable": {
+                "kind": "resources/read",
+                "uri_template": f"{_res._URI_PREFIX}{{token}}/{{rel}}",
+                "visibility": "protocol",
+                "note": "protocol-native portable floor (R17.1(c)); works for a bare MCP client with no host extension",
+            },
+            "host_extensions": [
+                {"kind": "blob", "path": "/files/{token}/blob/{rel}", "visibility": "container",
+                 "note": "host accelerator over the UDS socket; also reachable host-visible via the gateway mount"},
+                {"kind": "blob", "path": f"{gw}/files/{{token}}/blob/{{rel}}", "visibility": "host-visible",
+                 "note": "gateway-fronted blob download"},
+            ],
+        },
+        "webdav_state": {
+            "implemented": True,
+            "mount_prefix": _DAV_MOUNT_PREFIX,
+            "visibility": "host-visible",
+            "lifecycle": ["cache_provision", "cache_list", "cache_export", "cache_close"],
+            "note": "writable R14 working cache; cache_close refuses dirty unexported work (fail-loud)",
+        },
+        "companion_skill": {
+            "name": "patentworks",
+            "sources": ["mcp.json skillPaths", "GET /skills/patentworks.zip", "patentmcp_init doctrine"],
+            "note": "one source; load before any patent search or drafting task",
+        },
+        "conditional_families": [
+            {"family": "search", "tools": ["patent_search", "patent_bulk"],
+             "when": "prior-art search / classification-axis sweep"},
+            {"family": "fetch", "tools": ["gpatents_get", "epo_family", "epo_biblio",
+                                          "fetch_patent_pdf", "ppubs_batch_get_claims"],
+             "when": "single-document retrieval by known number"},
+            {"family": "webdav-cache", "tools": ["cache_provision", "cache_list",
+                                                 "cache_export", "cache_close"],
+             "when": "staging / landing large deliverables"},
+            {"family": "domain-kb", "tools": ["patentmcp_kb_query", "patentmcp_kb_get"],
+             "when": "recall-first before judgment-heavy steps (R16)"},
+            {"family": "resources", "tools": ["resources/list", "resources/read"],
+             "when": "portable retrieval of any produced artifact (R17.1(c))"},
+        ],
+    }
+
+
 @mcp.tool(annotations=_GUIDE_ANNOTATIONS)
-async def patentmcp_init() -> str:
-    """Read-only: returns patentmcp's usage doctrine, no side effects (R15 self-describing organism).
+async def patentmcp_init() -> Dict[str, Any]:
+    """Read-only: returns patentmcp's usage doctrine + structured capabilities, no side effects.
 
     Despite the `init` name this makes NO state changes — call it ONCE before
-    first use to receive, in-band, the complete patentworks usage doctrine in one
-    call: cross-tool
-    tradeoffs (multi-source search flow selection + the GPSS>EPO>PPUBS>gated
-    Google Patents source ladder), pre-call disciplines (patent work-pool data
-    tree spec, scratch->/tmp, scraping authorization), organ coordination
-    (container + UDS transport + patentworks skill + host-local scripts +
-    WebDAV working cache), and counter-intuitive gotchas. This is delivered
-    context (arrives in-band at the action boundary) rather than doctrine you
-    must remember to load. Same content as `prompts/get patentmcp_init`
-    (byte-identical, single source). No arguments."""
-    return _guide_doctrine()
+    first use. Returns `{doctrine, capabilities}`:
+
+    - `doctrine`: the complete patentworks usage doctrine in-band (cross-tool
+      tradeoffs, pre-call disciplines, organ coordination, gotchas). Byte-identical
+      to `prompts/get patentmcp_init` (single source, R15.5 no-drift).
+    - `capabilities`: a compact machine-readable capability summary (R17.1.1):
+      transport, file ingress/egress (incl. the protocol-native resources/read
+      portable floor), WebDAV lifecycle state, companion skill, and conditional
+      tool families. Each endpoint carries a `visibility` class
+      (container | host-visible | protocol) so a container-only socket is never
+      presented as host-executable.
+
+    No arguments."""
+    return {"doctrine": _guide_doctrine(), "capabilities": _build_capabilities()}
 
 
 @mcp.prompt(
@@ -5191,7 +5354,10 @@ async def cache_list(owner_identity: str) -> Dict[str, Any]:
 
 @mcp.tool()
 async def cache_export(subject_id: str, target: str,
-                       owner_identity: str) -> Dict[str, Any]:
+                       owner_identity: str,
+                       assert_nonempty: Optional[bool] = None,
+                       assert_min_files: Optional[int] = None,
+                       assert_contains_rel: Optional[List[str]] = None) -> Dict[str, Any]:
     """COPY-land a cache's full working tree (src + deliverables) to a truth-store
     target reference point, then stamp the export baseline.
 
@@ -5201,6 +5367,15 @@ async def cache_export(subject_id: str, target: str,
     directory tree is fabricated). After a successful copy, the export snapshot
     (last_export_at + per-file hashes) is recorded so `cache_close` can detect
     subsequent dirty edits.
+
+    Typed asset preflight + content assertions (standard R17.2.4/5): before the
+    COPY, an EMPTY working tree is refused with EXPORT_EMPTY — a transport-valid
+    but empty artifact is NEVER delivery-ready. Optional, opt-in content
+    assertions (absent ⇒ not checked, so an existing caller is byte-identical,
+    天条 §11): `assert_nonempty` (>=1 deliverable with size>0),
+    `assert_min_files` (>=N deliverable files), `assert_contains_rel` (every
+    listed rel present). A failed assertion returns typed ASSERTION_FAILED and
+    NOTHING is landed.
 
     Returns {success, subject_id, target, files_copied} or a typed error.
     """
@@ -5218,6 +5393,21 @@ async def cache_export(subject_id: str, target: str,
             "error_code": "EXPORT_TARGET_UNREACHABLE",
             "detail": f"target parent does not exist / not writable: {tgt.parent}",
         }
+    # R17.2.4/5 typed asset preflight + content assertions BEFORE landing anything.
+    _cache_files = token_store.list_files(entry.token)
+    _verdict = _delivery.preflight_export(
+        _cache_files,
+        assert_nonempty=assert_nonempty,
+        assert_min_files=assert_min_files,
+        assert_contains_rel=assert_contains_rel,
+    )
+    if not _verdict["ok"]:
+        # Fail-loud; nothing is copied (天条 §11 — empty/unasserted never lands).
+        _out = {"success": False, "error_code": _verdict["error_code"],
+                "detail": _verdict["detail"]}
+        if "failed" in _verdict:
+            _out["failed"] = _verdict["failed"]
+        return _out
     src_dir = entry.dir_path
     files_copied = 0
     try:

@@ -1,0 +1,39 @@
+[
+  {
+    "title": "R17.6 portable-floor delivery (no WebDAV)",
+    "participants": ["Client", "patentmcp", "TokenStore", "ResourceFace"],
+    "messages": [
+      {"from": "Client", "to": "patentmcp", "label": "produce artifact (e.g. build_screening_table landing / pool_fetch)"},
+      {"from": "patentmcp", "to": "TokenStore", "label": "put_bytes -> tok_*"},
+      {"from": "patentmcp", "to": "Client", "label": "handle {token, rel}"},
+      {"from": "Client", "to": "ResourceFace", "label": "resources/list"},
+      {"from": "ResourceFace", "to": "TokenStore", "label": "enumerate live artifacts"},
+      {"from": "ResourceFace", "to": "Client", "label": "[patent://{token}/{rel} ...]"},
+      {"from": "Client", "to": "ResourceFace", "label": "resources/read patent://{token}/{rel}"},
+      {"from": "ResourceFace", "to": "TokenStore", "label": "blob_path (traversal-safe)"},
+      {"from": "ResourceFace", "to": "Client", "label": "exact bytes (or typed resource_not_found)"}
+    ]
+  },
+  {
+    "title": "R17.6 WebDAV delivery with content assertions",
+    "participants": ["Client", "patentmcp", "TokenStore", "DeliveryGate"],
+    "messages": [
+      {"from": "Client", "to": "patentmcp", "label": "cache_provision(subject, owner)"},
+      {"from": "Client", "to": "TokenStore", "label": "DAV PUT deliverables into cache"},
+      {"from": "Client", "to": "patentmcp", "label": "cache_export(subject, target, assert_nonempty, assert_min_files)"},
+      {"from": "patentmcp", "to": "DeliveryGate", "label": "preflight: empty? unresolved? assertions hold?"},
+      {"from": "DeliveryGate", "to": "patentmcp", "label": "verdict OR typed EXPORT_EMPTY/ASSERTION_FAILED"},
+      {"from": "patentmcp", "to": "Client", "label": "landed {files_copied} OR fail-loud error (nothing landed)"}
+    ]
+  },
+  {
+    "title": "patentmcp_init capability discovery",
+    "participants": ["Client", "patentmcp", "CapabilityBuilder", "Doctrine"],
+    "messages": [
+      {"from": "Client", "to": "patentmcp", "label": "patentmcp_init()"},
+      {"from": "patentmcp", "to": "Doctrine", "label": "_guide_doctrine() (byte-identical to prompts/get)"},
+      {"from": "patentmcp", "to": "CapabilityBuilder", "label": "build capabilities (endpoints tagged container/host-visible)"},
+      {"from": "patentmcp", "to": "Client", "label": "{doctrine, capabilities}"}
+    ]
+  }
+]
