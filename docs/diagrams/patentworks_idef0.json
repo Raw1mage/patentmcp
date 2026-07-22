@@ -1,0 +1,110 @@
+{
+  "diagram_title": "PatentWorks — 專利從 idea 到申請的功能分解 (IDEF0 A0)",
+  "node_reference": "A0",
+  "activities": [
+    {
+      "id": "A1",
+      "title": "檢索 / 取數\nPatent Search & Bulk Harvest",
+      "description": "單一入口 patent_search 沿來源梯自動路由;patent_bulk 窮盡建池。命中即吸收進 patentdb。",
+      "decomposition": {
+        "diagram_title": "A1 檢索 / 取數 — 來源梯自動路由",
+        "node_reference": "A1",
+        "activities": [
+          {
+            "id": "A11",
+            "title": "GPSS 檢索\n(TIPO 官方 · TW/CN 首選)",
+            "description": "IPC 錨定、Claim1 隨頁、長 query 自動分片"
+          },
+          {
+            "id": "A12",
+            "title": "EPO OPS 檢索\n(US/全球 · INPADOC 家族)",
+            "description": "布林 CQL、per-page absorb、大母數自動切片"
+          },
+          {
+            "id": "A13",
+            "title": "USPTO PPUBS 補抓\n(US 全文 · 逐字 Claim1)",
+            "description": "USPC 軸、claim1_empty 補齊"
+          },
+          {
+            "id": "A14",
+            "title": "Google Patents 爬蟲\n(尾級 · 需授權)",
+            "description": "官方全 miss 且 allow_scraping=true 才啟用,否則 SCRAPING_REQUIRED fail-fast"
+          }
+        ],
+        "arrows": [
+          { "id": "A1R1", "source": "EXTERNAL", "target": "A11:input", "label": "檢索軸 (ipc/cpc/keyword/pub_number)", "type": "input" },
+          { "id": "A1R2", "source": "EXTERNAL", "target": "A11:control", "label": "來源梯路由規則 · 憑證可用性", "type": "control" },
+          { "id": "A1R3", "source": "A11:output", "target": "A12:input", "label": "GPSS miss → 降級", "type": "output" },
+          { "id": "A1R4", "source": "A12:output", "target": "A13:input", "label": "EPO miss / US 全文需求", "type": "output" },
+          { "id": "A1R5", "source": "A13:output", "target": "A14:input", "label": "官方全 miss + 已授權", "type": "output" },
+          { "id": "A1R6", "source": "A14:output", "target": "EXTERNAL", "label": "records[] + provenance[] + patentdb_absorb", "type": "output" },
+          { "id": "A1R7", "source": "EXTERNAL", "target": "A11:mechanism", "label": "GPSS_USER_CODE · patentdb.sqlite", "type": "mechanism" },
+          { "id": "A1R8", "source": "EXTERNAL", "target": "A12:mechanism", "label": "EPO OAuth key/secret", "type": "mechanism" }
+        ]
+      }
+    },
+    {
+      "id": "A2",
+      "title": "取文 / 取物\nDocument & Figure Retrieval",
+      "description": "claim1 · 代表圖來源梯 · PDF。從缺前必走窮舉梯。"
+    },
+    {
+      "id": "A3",
+      "title": "檔案交付\nDelivery & Working Cache",
+      "description": "token+blob store · WebDAV working cache · R17 protocol-native resources/read。bytes 不過 context。"
+    },
+    {
+      "id": "A4",
+      "title": "patentworks 流程\nPractitioner Workflow (skill)",
+      "description": "disclosure → screening → analysis → drafting 四 flow,可單用或串成完整旅程。",
+      "decomposition": {
+        "diagram_title": "A4 patentworks 流程 — 四 flow",
+        "node_reference": "A4",
+        "activities": [
+          {
+            "id": "A41",
+            "title": "disclosure\n交底書",
+            "description": "發明材料/idea → 結構化技術交底書 (intake 問題集、專利點挖掘、脫敏、自檢)"
+          },
+          {
+            "id": "A42",
+            "title": "screening\n查新",
+            "description": "CPC 錨定、家族去重、逐列消化評分 → 人類可讀 scored CSV"
+          },
+          {
+            "id": "A43",
+            "title": "analysis\n前案比對",
+            "description": "102/103 比對、要件對照表 (Claim Chart)、差異分析 → 撰寫基礎"
+          },
+          {
+            "id": "A44",
+            "title": "drafting\n起草說明書",
+            "description": "claims-first → spec 支持 → 法遵自檢 (共通/TW/CN/US/EP 五法域)"
+          }
+        ],
+        "arrows": [
+          { "id": "A4R1", "source": "EXTERNAL", "target": "A41:input", "label": "發明材料 / idea", "type": "input" },
+          { "id": "A4R2", "source": "A41:output", "target": "A42:input", "label": "技術交底書", "type": "input" },
+          { "id": "A4R3", "source": "A42:output", "target": "A43:input", "label": "scored CSV 前案池", "type": "input" },
+          { "id": "A4R4", "source": "A43:output", "target": "A44:input", "label": "要件對照 + 差異分析", "type": "input" },
+          { "id": "A4R5", "source": "A44:output", "target": "EXTERNAL", "label": "專利說明書 (請求項+說明書+摘要)", "type": "output" },
+          { "id": "A4R6", "source": "EXTERNAL", "target": "A42:control", "label": "法域分流 · 來源梯窮舉門檻", "type": "control" },
+          { "id": "A4R7", "source": "EXTERNAL", "target": "A44:control", "label": "五法域法遵規則 · 人類複核裁決", "type": "control" },
+          { "id": "A4R8", "source": "EXTERNAL", "target": "A42:mechanism", "label": "patentmcp 檢索/取文工具", "type": "mechanism" }
+        ]
+      }
+    }
+  ],
+  "arrows": [
+    { "id": "AR1", "source": "EXTERNAL", "target": "A4:input", "label": "發明材料 / idea", "type": "input" },
+    { "id": "AR2", "source": "A1:output", "target": "A2:input", "label": "records[] (公開號/書目)", "type": "input" },
+    { "id": "AR3", "source": "A2:output", "target": "A3:input", "label": "全文 / 代表圖 / PDF", "type": "input" },
+    { "id": "AR4", "source": "A4:output", "target": "A3:input", "label": "交底書 / CSV / 說明書成品", "type": "input" },
+    { "id": "AR5", "source": "A3:output", "target": "EXTERNAL", "label": "專利申請文件 + 可稽核交付物", "type": "output" },
+    { "id": "AR6", "source": "EXTERNAL", "target": "A1:control", "label": "法域分流 · 爬蟲授權 · 額度預算閘", "type": "control" },
+    { "id": "AR7", "source": "EXTERNAL", "target": "A4:control", "label": "patentworks skill 劇本 · 法遵自檢", "type": "control" },
+    { "id": "AR8", "source": "EXTERNAL", "target": "A1:mechanism", "label": "GPSS/EPO/PPUBS 官方 API · patentdb", "type": "mechanism" },
+    { "id": "AR9", "source": "EXTERNAL", "target": "A3:mechanism", "label": "docxmcp · drawmiat · WebDAV cache", "type": "mechanism" },
+    { "id": "AR10", "source": "EXTERNAL", "target": "A2:mechanism", "label": "domain KB (kb_query/kb_get)", "type": "mechanism" }
+  ]
+}

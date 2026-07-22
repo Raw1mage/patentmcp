@@ -1,0 +1,84 @@
+[
+  {
+    "StepNumber": 0,
+    "StepType": "initial",
+    "StepAction": "待命 — 收到發明材料 / idea",
+    "LinkOutputNumber": [1],
+    "LinkOutputType": "track",
+    "Condition": ["使用者提出發明揭露 / 檢索 / 起草需求"]
+  },
+  {
+    "StepNumber": 1,
+    "StepType": "normal",
+    "StepAction": "disclosure — 整理技術交底書 (intake 問題集 / 專利點挖掘 / 脫敏 / 自檢)",
+    "LinkOutputNumber": [2],
+    "LinkOutputType": "track",
+    "Condition": ["技術交底書完成 (結構化揭露 + 專利點清單)"]
+  },
+  {
+    "StepNumber": 2,
+    "StepType": "normal",
+    "StepAction": "screening — 前案查新 (CPC 錰定 / 家族去重 / 逐列評分)",
+    "LinkInputNumber": [1, 5],
+    "LinkInputType": "convergence_or",
+    "LinkOutputNumber": [3, 4],
+    "LinkOutputType": "or_diverge",
+    "Condition": [
+      "輕量查新: 只需 scored CSV 判可專利性 / landscape",
+      "重型交付: 需正式 Excel 池 + 技術洞察報告 DOCX"
+    ]
+  },
+  {
+    "StepNumber": 3,
+    "StepType": "normal",
+    "StepAction": "screening 輕量出表 — 產出 Agent 友善 / 人類可讀 scored CSV",
+    "LinkOutputNumber": [5],
+    "LinkOutputType": "or_converge",
+    "Condition": ["scored CSV 落地 output/"]
+  },
+  {
+    "StepNumber": 4,
+    "StepType": "normal",
+    "StepAction": "priorsearch 重型檢索 — 固化工作資料夾 / 跨三地官方 API / 精雕迴圈滾大 pool / 收斂件數",
+    "LinkOutputNumber": [5],
+    "LinkOutputType": "or_converge",
+    "Condition": ["Excel 專利池 + 含逐字 Claim1 與檢索復現章的洞察報告 DOCX 完成"]
+  },
+  {
+    "StepNumber": 5,
+    "StepType": "normal",
+    "StepAction": "analysis — 102/103 前案比對 / 要件對照表 (Claim Chart) / 差異分析",
+    "LinkInputNumber": [3, 4],
+    "LinkInputType": "convergence_or",
+    "LinkOutputNumber": [6, 2],
+    "LinkOutputType": "or_diverge",
+    "Condition": [
+      "差異足夠 → 形成撰寫基礎,進起草",
+      "recall 洞 / 母數不足 → 回 screening 補撈精雕"
+    ]
+  },
+  {
+    "StepNumber": 6,
+    "StepType": "normal",
+    "StepAction": "drafting — claims-first 起草 (請求項 → 說明書支持 → 摘要)",
+    "LinkOutputNumber": [7],
+    "LinkOutputType": "track",
+    "Condition": ["草稿完成,定目標法域 (共通/TW/CN/US/EP)"]
+  },
+  {
+    "StepNumber": 7,
+    "StepType": "normal",
+    "StepAction": "法遵自檢 — 逐條比對對應法域規則 (reference/drafting/{common,tw,cn,us,ep}.md)",
+    "LinkOutputNumber": [8],
+    "LinkOutputType": "track",
+    "Condition": ["自檢通過 / 待人類複核裁決"]
+  },
+  {
+    "StepNumber": 8,
+    "StepType": "normal",
+    "StepAction": "交付 — 成品經 token+blob / WebDAV cache / resources/read 落地,帶版號後綴",
+    "LinkOutputNumber": [0],
+    "LinkOutputType": "track",
+    "Condition": ["專利申請文件交付完成,回待命"]
+  }
+]

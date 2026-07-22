@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="841" height="1520" viewBox="0.00 -2.00 42.04 76.00" role="img">
+<style>
+.step{fill:#fff;stroke:#111;stroke-width:.14}.step-inner{fill:none;stroke:#111;stroke-width:.08}
+.action{fill:#fff;stroke:#111;stroke-width:.14}.action-inner{fill:none;stroke:#111;stroke-width:.08}.gate{stroke:#111;stroke-width:.16}
+.edge{fill:none;stroke:#111;stroke-width:.05;stroke-linecap:round;stroke-linejoin:round}.edge-arrow{marker-end:url(#arrow)}
+.flyover-mask{stroke:#fff;stroke-width:.12;stroke-linecap:round}
+.flyover{fill:none;stroke:#111;stroke-width:.05;stroke-linecap:round}
+.junction{fill:#111;stroke:#111;stroke-width:0}.branch-junction{fill:#fff;stroke:#111;stroke-width:.08}
+.assoc{stroke:#111;stroke-width:.05}.label{font:bold .7px 'Times New Roman', 'BiauKai', 'DFKai-SB', serif;text-anchor:middle;dominant-baseline:middle}
+.action-label{font:.55px 'Times New Roman', 'BiauKai', 'DFKai-SB', serif;text-anchor:middle;dominant-baseline:middle}.gate-label{font:italic .55px 'Times New Roman', 'BiauKai', 'DFKai-SB', serif;text-anchor:start;dominant-baseline:middle}.gate-label-left{font:italic .55px 'Times New Roman', 'BiauKai', 'DFKai-SB', serif;text-anchor:end;dominant-baseline:middle}
+</style>
+<defs><marker id="arrow" markerWidth="0.4" markerHeight="0.4" refX="0.36" refY="0.2" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 0.4 0.2 L 0 0.4 z" fill="#111"/></marker></defs>
+<rect x="0.00" y="-2.00" width="42.04" height="76.00" fill="white"/>
+<path class="edge edge-arrow" data-edge-id="edge:S0O1S1I1" data-segment-ids="S0O1S1I1:1S" d="M 25.52 7.00 L 25.52 11.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:S1O1G3I1" data-segment-ids="S1O1G3I1:1S" d="M 25.52 14.00 L 25.52 20.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:G3O1S2I1" data-segment-ids="G3O1S2I1:1S" d="M 25.52 20.00 L 25.52 22.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:S2O1G1I1" data-segment-ids="S2O1G1I1:1S" d="M 25.52 25.00 L 25.52 27.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:G1O1S3I1" data-segment-ids="G1O1S3I1:1S" d="M 10.00 27.00 L 10.00 31.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:G1O2S4I1" data-segment-ids="G1O2S4I1:1S" d="M 25.52 27.00 L 25.52 31.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:S3O1G4I1" data-segment-ids="S3O1G4I1:1S" d="M 10.00 34.00 L 10.00 38.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:G4O1S5I1" data-segment-ids="G4O1S5I1:1S" d="M 25.52 38.00 L 25.52 40.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:S4O1G4I2" data-segment-ids="S4O1G4I2:1S" d="M 25.52 34.00 L 25.52 38.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:S5O1G2I1" data-segment-ids="S5O1G2I1:1S" d="M 25.52 43.00 L 25.52 45.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:G2O1S6I1" data-segment-ids="G2O1S6I1:1S" d="M 25.52 45.00 L 25.52 49.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:G2O2G3I2" data-segment-ids="G2O2G3I2:1W G2O2G3I2:2N G2O2G3I2:3E G2O2G3I2:4S" d="M 25.52 45.00 L 6.50 45.00 Q 6.00 45.00 6.00 44.50 L 6.00 16.50 Q 6.00 16.00 6.50 16.00 L 21.02 16.00 Q 21.52 16.00 21.52 16.50 L 21.52 20.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:S6O1S7I1" data-segment-ids="S6O1S7I1:1S" d="M 25.52 52.00 L 25.52 56.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:S7O1S8I1" data-segment-ids="S7O1S8I1:1S" d="M 25.52 59.00 L 25.52 63.00"/>
+<path class="edge edge-arrow" data-edge-id="edge:S8O1S0I1" data-segment-ids="S8O1S0I1:1S S8O1S0I1:2W S8O1S0I1:3N S8O1S0I1:4E S8O1S0I1:5S" d="M 25.52 66.00 L 25.52 69.50 Q 25.52 70.00 25.02 70.00 L 4.50 70.00 Q 4.00 70.00 4.00 69.50 L 4.00 2.50 Q 4.00 2.00 4.50 2.00 L 25.02 2.00 Q 25.52 2.00 25.52 2.50 L 25.52 4.00"/>
+<rect class="step" x="23.52" y="4.00" width="4.00" height="3.00" rx="0.35" ry="0.35"/>
+<rect class="step-inner" x="23.77" y="4.25" width="3.50" height="2.50" rx="0.22" ry="0.22"/>
+<text class="label" x="25.52" y="5.50">0</text>
+<rect class="step" x="23.52" y="11.00" width="4.00" height="3.00" rx="0.35" ry="0.35"/>
+<text class="label" x="25.52" y="12.50">1</text>
+<rect class="step" x="23.52" y="22.00" width="4.00" height="3.00" rx="0.35" ry="0.35"/>
+<text class="label" x="25.52" y="23.50">2</text>
+<rect class="step" x="8.00" y="31.00" width="4.00" height="3.00" rx="0.35" ry="0.35"/>
+<text class="label" x="10.00" y="32.50">3</text>
+<rect class="step" x="23.52" y="31.00" width="4.00" height="3.00" rx="0.35" ry="0.35"/>
+<text class="label" x="25.52" y="32.50">4</text>
+<rect class="step" x="23.52" y="40.00" width="4.00" height="3.00" rx="0.35" ry="0.35"/>
+<text class="label" x="25.52" y="41.50">5</text>
+<rect class="step" x="23.52" y="49.00" width="4.00" height="3.00" rx="0.35" ry="0.35"/>
+<text class="label" x="25.52" y="50.50">6</text>
+<rect class="step" x="23.52" y="56.00" width="4.00" height="3.00" rx="0.35" ry="0.35"/>
+<text class="label" x="25.52" y="57.50">7</text>
+<rect class="step" x="23.52" y="63.00" width="4.00" height="3.00" rx="0.35" ry="0.35"/>
+<text class="label" x="25.52" y="64.50">8</text>
+<line class="assoc" x1="27.52" y1="5.50" x2="28.52" y2="5.50"/>
+<rect class="action" x="28.52" y="4.07" width="9.52" height="2.86"/>
+<text class="action-label" x="33.28" y="5.50"><tspan x="33.28" dy="0">待命 — 收到發明材料 / idea</tspan></text>
+<line class="assoc" x1="27.52" y1="12.50" x2="28.52" y2="12.50"/>
+<rect class="action" x="28.52" y="11.07" width="9.52" height="2.86"/>
+<text class="action-label" x="33.28" y="11.68"><tspan x="33.28" dy="0">disclosure — 整理技術交</tspan><tspan x="33.28" dy="0.82">底書 (intake 問題集 / 專</tspan><tspan x="33.28" dy="0.82">利點挖掘 / 脫敏 / 自檢)</tspan></text>
+<line class="assoc" x1="27.52" y1="23.50" x2="28.52" y2="23.50"/>
+<rect class="action" x="28.52" y="22.07" width="9.52" height="2.86"/>
+<text class="action-label" x="33.28" y="23.09"><tspan x="33.28" dy="0">screening — 前案查新 (CPC 錨</tspan><tspan x="33.28" dy="0.82">定 / 家族去重 / 逐列評分)</tspan></text>
+<line class="assoc" x1="12.00" y1="32.50" x2="13.00" y2="32.50"/>
+<rect class="action" x="13.00" y="31.07" width="9.52" height="2.86"/>
+<text class="action-label" x="17.76" y="31.68"><tspan x="17.76" dy="0">screening 輕量出表</tspan><tspan x="17.76" dy="0.82">— 產出 Agent 友善</tspan><tspan x="17.76" dy="0.82">/ 人類可讀 scored CSV</tspan></text>
+<line class="assoc" x1="27.52" y1="32.50" x2="28.52" y2="32.50"/>
+<rect class="action" x="28.52" y="31.07" width="9.52" height="2.86"/>
+<text class="action-label" x="33.28" y="31.68"><tspan x="33.28" dy="0">priorsearch 重型檢索 — 固化工</tspan><tspan x="33.28" dy="0.82">作資料夾 / 跨三地官方 API /</tspan><tspan x="33.28" dy="0.82">精雕迴圈滾大 pool / 收斂件數</tspan></text>
+<line class="assoc" x1="27.52" y1="41.50" x2="28.52" y2="41.50"/>
+<rect class="action" x="28.52" y="40.07" width="9.52" height="2.86"/>
+<text class="action-label" x="33.28" y="40.68"><tspan x="33.28" dy="0">analysis — 102/103 前案</tspan><tspan x="33.28" dy="0.82">比對 / 要件對照表</tspan><tspan x="33.28" dy="0.82">(Claim Chart) / 差異分析</tspan></text>
+<line class="assoc" x1="27.52" y1="50.50" x2="28.52" y2="50.50"/>
+<rect class="action" x="28.52" y="49.07" width="9.52" height="2.86"/>
+<text class="action-label" x="33.28" y="50.09"><tspan x="33.28" dy="0">drafting — claims-first 起草 (請</tspan><tspan x="33.28" dy="0.82">求項 → 說明書支持 → 摘要)</tspan></text>
+<line class="assoc" x1="27.52" y1="57.50" x2="28.52" y2="57.50"/>
+<rect class="action" x="28.52" y="56.07" width="9.52" height="2.86"/>
+<text class="action-label" x="33.28" y="56.68"><tspan x="33.28" dy="0">法遵自檢 — 逐條比對對</tspan><tspan x="33.28" dy="0.82">應法域規則 (reference/</tspan><tspan x="33.28" dy="0.82">drafting/{common,tw,cn,us,ep}.md)</tspan></text>
+<line class="assoc" x1="27.52" y1="64.50" x2="28.52" y2="64.50"/>
+<rect class="action" x="28.52" y="63.07" width="9.52" height="2.86"/>
+<text class="action-label" x="33.28" y="63.68"><tspan x="33.28" dy="0">交付 — 成品經 token+blob</tspan><tspan x="33.28" dy="0.82">/ WebDAV cache / resources/</tspan><tspan x="33.28" dy="0.82">read 落地,帶版號後綴</tspan></text>
+<line class="gate" x1="19.52" y1="20.00" x2="27.52" y2="20.00"/>
+<line class="gate" x1="8.00" y1="27.00" x2="27.52" y2="27.00"/>
+<line class="gate" x1="8.00" y1="38.00" x2="27.52" y2="38.00"/>
+<circle class="branch-junction" cx="25.52" cy="45.00" r="0.28"/>
+<line class="gate" x1="24.52" y1="9.00" x2="26.52" y2="9.00" data-label-kind="condition-stub" data-edge-id="edge:S0O1S1I1" data-arrow-id="condition_stub:T1" data-transition-id="T1" data-condition-stub-id="condition_stub:T1"/>
+<text class="gate-label" x="26.92" y="9.00" data-label-kind="condition-stub" data-edge-id="edge:S0O1S1I1" data-arrow-id="condition_stub:T1" data-transition-id="T1" data-condition-stub-id="condition_stub:T1"><tspan x="26.92" dy="0">使用者提出發明揭露 / 檢索 / 起草需求</tspan></text>
+<line class="gate" x1="24.52" y1="16.00" x2="26.52" y2="16.00" data-label-kind="condition-stub" data-edge-id="edge:S1O1G3I1" data-arrow-id="condition_stub:T2" data-transition-id="T2" data-condition-stub-id="condition_stub:T2"/>
+<text class="gate-label" x="26.92" y="16.00" data-label-kind="condition-stub" data-edge-id="edge:S1O1G3I1" data-arrow-id="condition_stub:T2" data-transition-id="T2" data-condition-stub-id="condition_stub:T2"><tspan x="26.92" dy="0">技術交底書完成 (結構化揭露 + 專利點清單)</tspan></text>
+<line class="gate" x1="9.00" y1="29.00" x2="11.00" y2="29.00" data-label-kind="condition-stub" data-edge-id="edge:G1O1S3I1" data-arrow-id="condition_stub:T3" data-transition-id="T3" data-condition-stub-id="condition_stub:T3"/>
+<text class="gate-label-left" x="5.80" y="28.32" data-label-kind="condition-stub" data-edge-id="edge:G1O1S3I1" data-arrow-id="condition_stub:T3" data-transition-id="T3" data-condition-stub-id="condition_stub:T3"><tspan x="5.80" dy="0">輕量查新: 只需</tspan><tspan x="5.80" dy="0.68">scored CSV 判可專</tspan><tspan x="5.80" dy="0.68">利性 / landscape</tspan></text>
+<line class="gate" x1="24.52" y1="29.00" x2="26.52" y2="29.00" data-label-kind="condition-stub" data-edge-id="edge:G1O2S4I1" data-arrow-id="condition_stub:T4" data-transition-id="T4" data-condition-stub-id="condition_stub:T4"/>
+<text class="gate-label" x="26.92" y="29.00" data-label-kind="condition-stub" data-edge-id="edge:G1O2S4I1" data-arrow-id="condition_stub:T4" data-transition-id="T4" data-condition-stub-id="condition_stub:T4"><tspan x="26.92" dy="0">重型交付: 需正式 Excel 池 + 技術洞察報告 DOCX</tspan></text>
+<line class="gate" x1="9.00" y1="36.00" x2="11.00" y2="36.00" data-label-kind="condition-stub" data-edge-id="edge:S3O1G4I1" data-arrow-id="condition_stub:T5" data-transition-id="T5" data-condition-stub-id="condition_stub:T5"/>
+<text class="gate-label-left" x="8.60" y="35.32" data-label-kind="condition-stub" data-edge-id="edge:S3O1G4I1" data-arrow-id="condition_stub:T5" data-transition-id="T5" data-condition-stub-id="condition_stub:T5"><tspan x="8.60" dy="0">scored</tspan><tspan x="8.60" dy="0.68">CSV 落</tspan><tspan x="8.60" dy="0.68">地 output/</tspan></text>
+<line class="gate" x1="24.52" y1="36.00" x2="26.52" y2="36.00" data-label-kind="condition-stub" data-edge-id="edge:S4O1G4I2" data-arrow-id="condition_stub:T6" data-transition-id="T6" data-condition-stub-id="condition_stub:T6"/>
+<text class="gate-label" x="26.92" y="35.32" data-label-kind="condition-stub" data-edge-id="edge:S4O1G4I2" data-arrow-id="condition_stub:T6" data-transition-id="T6" data-condition-stub-id="condition_stub:T6"><tspan x="26.92" dy="0">Excel 專利池 + 含逐字</tspan><tspan x="26.92" dy="0.68">Claim1 與檢索復現章的</tspan><tspan x="26.92" dy="0.68">洞察報告 DOCX 完成</tspan></text>
+<line class="gate" x1="24.52" y1="47.00" x2="26.52" y2="47.00" data-label-kind="condition-stub" data-edge-id="edge:G2O1S6I1" data-arrow-id="condition_stub:T7" data-transition-id="T7" data-condition-stub-id="condition_stub:T7"/>
+<text class="gate-label" x="26.92" y="47.00" data-label-kind="condition-stub" data-edge-id="edge:G2O1S6I1" data-arrow-id="condition_stub:T7" data-transition-id="T7" data-condition-stub-id="condition_stub:T7"><tspan x="26.92" dy="0">差異足夠 → 形成撰寫基礎,進起草</tspan></text>
+<line class="gate" x1="20.52" y1="18.00" x2="22.52" y2="18.00" data-label-kind="condition-stub" data-edge-id="edge:G2O2G3I2" data-arrow-id="condition_stub:T8" data-transition-id="T8" data-condition-stub-id="condition_stub:T8"/>
+<text class="gate-label-left" x="20.12" y="18.00" data-label-kind="condition-stub" data-edge-id="edge:G2O2G3I2" data-arrow-id="condition_stub:T8" data-transition-id="T8" data-condition-stub-id="condition_stub:T8"><tspan x="20.12" dy="0">recall 洞 / 母數不足 → 回 screening 補撈精雕</tspan></text>
+<line class="gate" x1="24.52" y1="54.00" x2="26.52" y2="54.00" data-label-kind="condition-stub" data-edge-id="edge:S6O1S7I1" data-arrow-id="condition_stub:T9" data-transition-id="T9" data-condition-stub-id="condition_stub:T9"/>
+<text class="gate-label" x="26.92" y="54.00" data-label-kind="condition-stub" data-edge-id="edge:S6O1S7I1" data-arrow-id="condition_stub:T9" data-transition-id="T9" data-condition-stub-id="condition_stub:T9"><tspan x="26.92" dy="0">草稿完成,定目標法域 (共通/TW/CN/US/EP)</tspan></text>
+<line class="gate" x1="24.52" y1="61.00" x2="26.52" y2="61.00" data-label-kind="condition-stub" data-edge-id="edge:S7O1S8I1" data-arrow-id="condition_stub:T10" data-transition-id="T10" data-condition-stub-id="condition_stub:T10"/>
+<text class="gate-label" x="26.92" y="61.00" data-label-kind="condition-stub" data-edge-id="edge:S7O1S8I1" data-arrow-id="condition_stub:T10" data-transition-id="T10" data-condition-stub-id="condition_stub:T10"><tspan x="26.92" dy="0">自檢通過 / 待人類複核裁決</tspan></text>
+<line class="gate" x1="24.52" y1="68.00" x2="26.52" y2="68.00" data-label-kind="condition-stub" data-edge-id="edge:S8O1S0I1" data-arrow-id="condition_stub:T11" data-transition-id="T11" data-condition-stub-id="condition_stub:T11"/>
+<text class="gate-label" x="26.92" y="68.00" data-label-kind="condition-stub" data-edge-id="edge:S8O1S0I1" data-arrow-id="condition_stub:T11" data-transition-id="T11" data-condition-stub-id="condition_stub:T11"><tspan x="26.92" dy="0">專利申請文件交付完成,回待命</tspan></text>
+</svg>

@@ -1,0 +1,63 @@
+<svg width="1159.4" height="797.6" viewBox="-189.7 -165.8 1159.4 797.6" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="black" /></marker>
+<marker id="call_arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 M 0 2 L 6 5 L 0 8" fill="none" stroke="black" stroke-width="1" /></marker>
+</defs>
+<rect x="-189.7" y="-165.8" width="1159.4" height="797.6" fill="white" />
+<rect x="130.0" y="120.0" width="200.0" height="120.0" stroke="black" fill="white" stroke-width="1.5" data-id="A1" />
+<text x="230.0" y="155.3" text-anchor="middle" font-size="11" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A1" >A1</text>
+<text x="230.0" y="181.1" text-anchor="middle" font-size="13" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A1" >檢索 / 取數
+PATENT</text>
+<text x="230.0" y="205.4" text-anchor="middle" font-size="13" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A1" >SEARCH &amp; BULK HARVEST</text>
+<rect x="450.0" y="120.0" width="200.0" height="120.0" stroke="black" fill="white" stroke-width="1.5" data-id="A2" />
+<text x="550.0" y="151.0" text-anchor="middle" font-size="14" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A2" >A2</text>
+<text x="550.0" y="181.0" text-anchor="middle" font-size="16" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A2" >取文 / 取物
+DOCUMENT</text>
+<text x="550.0" y="211.0" text-anchor="middle" font-size="16" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A2" >&amp; FIGURE RETRIEVAL</text>
+<rect x="130.0" y="420.0" width="200.0" height="120.0" stroke="black" fill="white" stroke-width="1.5" data-id="A3" />
+<text x="230.0" y="451.0" text-anchor="middle" font-size="14" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A3" >A3</text>
+<text x="230.0" y="481.0" text-anchor="middle" font-size="16" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A3" >檔案交付
+DELIVERY</text>
+<text x="230.0" y="511.0" text-anchor="middle" font-size="16" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A3" >&amp; WORKING CACHE</text>
+<rect x="450.0" y="420.0" width="200.0" height="120.0" stroke="black" fill="white" stroke-width="1.5" data-id="A4" />
+<text x="550.0" y="443.2" text-anchor="middle" font-size="11" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A4" >A4</text>
+<text x="550.0" y="468.9" text-anchor="middle" font-size="13" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A4" >PATENTWORKS 流</text>
+<text x="550.0" y="493.2" text-anchor="middle" font-size="13" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A4" >程
+PRACTITIONER</text>
+<text x="550.0" y="517.6" text-anchor="middle" font-size="13" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A4" >WORKFLOW (SKILL)</text>
+<rect x="40.0" y="44.2" width="700.0" height="577.6" stroke="black" fill="none" stroke-width="2" />
+<rect x="152.0" y="-155.8" width="476.0" height="110.0" stroke="black" fill="white" stroke-width="1.5" data-id="A0" />
+<text x="390.0" y="-129.8" text-anchor="middle" font-size="14" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A0" >A0</text>
+<text x="390.0" y="-99.8" text-anchor="middle" font-size="16" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A0" >PATENTWORKS — 專利從 IDEA</text>
+<text x="390.0" y="-69.8" text-anchor="middle" font-size="16" font-weight="bold" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-id="A0" >到申請的功能分解 (IDEF0 A0)</text>
+<line x1="152.0" y1="-155.8" x2="40.0" y2="44.2" stroke="red" stroke-dasharray="5,5" stroke-width="1.0" opacity="0.6" />
+<line x1="628.0" y1="-155.8" x2="740.0" y2="44.2" stroke="red" stroke-dasharray="5,5" stroke-width="1.0" opacity="0.6" />
+<line x1="152.0" y1="-45.8" x2="40.0" y2="621.8" stroke="red" stroke-dasharray="5,5" stroke-width="1.0" opacity="0.6" />
+<line x1="628.0" y1="-45.8" x2="740.0" y2="621.8" stroke="red" stroke-dasharray="5,5" stroke-width="1.0" opacity="0.6" />
+<path d="M 330.0 180.0 L 450.0 180.0" stroke="black" stroke-width="1.2" data-arrow-id="AR2" data-waypoints="330.0,180.0 450.0,180.0" marker-end="url(#arrow)" fill="none" />
+<path d="M 650.0 180.0 L 680.0 180.0 Q 690.0 180.0 690.0 190.0 L 690.0 280.0 Q 690.0 290.0 680.0 290.0 L 100.0 290.0 Q 90.0 290.0 90.0 300.0 L 90.0 450.0 Q 90.0 460.0 100.0 460.0 L 130.0 460.0" stroke="black" stroke-width="1.2" data-arrow-id="AR3" data-waypoints="650.0,180.0 690.0,180.0 690.0,290.0 90.0,290.0 90.0,460.0 130.0,460.0" marker-end="url(#arrow)" fill="none" />
+<path d="M 650.0 480.0 L 680.0 480.0 Q 690.0 480.0 690.0 490.0 L 690.0 571.8 Q 690.0 581.8 680.0 581.8 L 100.0 581.8 Q 90.0 581.8 90.0 571.8 L 90.0 510.0 Q 90.0 500.0 100.0 500.0 L 130.0 500.0" stroke="black" stroke-width="1.2" data-arrow-id="AR4" data-waypoints="650.0,480.0 690.0,480.0 690.0,581.8 90.0,581.8 90.0,500.0 130.0,500.0" marker-end="url(#arrow)" fill="none" />
+<path d="M -10.0 330.0 L 400.0 330.0 Q 410.0 330.0 410.0 340.0 L 410.0 470.0 Q 410.0 480.0 420.0 480.0 L 450.0 480.0" stroke="black" stroke-width="1.2" data-arrow-id="AR1" data-waypoints="-10.0,330.0 410.0,330.0 410.0,480.0 450.0,480.0" marker-end="url(#arrow)" fill="none" />
+<path d="M 330.0 480.0 L 360.0 480.0 Q 370.0 480.0 370.0 470.0 L 370.0 380.0 Q 370.0 370.0 380.0 370.0 L 790.0 370.0" stroke="black" stroke-width="1.2" data-arrow-id="AR5" data-waypoints="330.0,480.0 370.0,480.0 370.0,370.0 790.0,370.0" marker-end="url(#arrow)" fill="none" />
+<path d="M 230.0 84.2 L 230.0 120.0" stroke="black" stroke-width="1.2" data-arrow-id="AR6" data-waypoints="230.0,84.2 230.0,120.0" marker-end="url(#arrow)" fill="none" />
+<path d="M 550.0 384.2 L 550.0 420.0" stroke="black" stroke-width="1.2" data-arrow-id="AR7" data-waypoints="550.0,384.2 550.0,420.0" marker-end="url(#arrow)" fill="none" />
+<path d="M 230.0 275.8 L 230.0 240.0" stroke="black" stroke-width="1.2" data-arrow-id="AR8" data-waypoints="230.0,275.8 230.0,240.0" marker-end="url(#arrow)" fill="none" />
+<path d="M 230.0 575.8 L 230.0 540.0" stroke="black" stroke-width="1.2" data-arrow-id="AR9" data-waypoints="230.0,575.8 230.0,540.0" marker-end="url(#arrow)" fill="none" />
+<path d="M 550.0 275.8 L 550.0 240.0" stroke="black" stroke-width="1.2" data-arrow-id="AR10" data-waypoints="550.0,275.8 550.0,240.0" marker-end="url(#arrow)" fill="none" />
+<text x="230.0" y="78.2" font-size="14" text-anchor="middle" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR6">法域分流 · 爬蟲授權 · 額度預算閘</text>
+<text x="544.0" y="414.0" font-size="14" text-anchor="end" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR7">patentworks</text>
+<text x="556.0" y="414.0" font-size="14" text-anchor="start" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR7">skill 劇本 · 法遵自檢</text>
+<text x="224.0" y="256.0" font-size="14" text-anchor="end" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR8">GPSS/EPO/PPUBS</text>
+<text x="236.0" y="256.0" font-size="14" text-anchor="start" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR8">官方 API · patentdb</text>
+<text x="224.0" y="556.0" font-size="14" text-anchor="end" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR9">docxmcp · drawmiat</text>
+<text x="236.0" y="556.0" font-size="14" text-anchor="start" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR9">WebDAV cache</text>
+<text x="544.0" y="256.0" font-size="14" text-anchor="end" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR10">domain KB</text>
+<text x="556.0" y="256.0" font-size="14" text-anchor="start" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR10">(kb_query/kb_get)</text>
+<text x="390.0" y="175.0" font-size="14" font-weight="bold" fill="black" text-anchor="middle" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR2">records[]</text>
+<text x="390.0" y="192.0" font-size="14" font-weight="bold" fill="black" text-anchor="middle" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR2">(公開號/書目)</text>
+<text x="550.0" y="308.0" font-size="14" font-weight="bold" fill="black" text-anchor="middle" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR3" >全文 / 代表圖 / PDF</text>
+<text x="550.0" y="599.8" font-size="14" font-weight="bold" fill="black" text-anchor="middle" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR4" >交底書 / CSV / 說明書成品</text>
+<text x="-14.0" y="334.0" font-size="20" text-anchor="end" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR1">發明材料 / idea</text>
+<text x="794.0" y="361.0" font-size="20" text-anchor="start" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR5">專利申請文件 +</text>
+<text x="794.0" y="387.0" font-size="20" text-anchor="start" font-weight="bold" fill="black" font-family="'Times New Roman', 'BiauKai', 'DFKai-SB', '標楷體', 'KaiTi', serif" data-arrow-id="AR5">可稽核交付物</text>
+</svg>

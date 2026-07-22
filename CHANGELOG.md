@@ -2,6 +2,20 @@
 
 本檔為 patentmcp 的變更紀錄(繁體中文)。早於 2026-07-06 的歷史見 git log 與 `specs/` 各 plan 套件。
 
+## 2026-07-21
+
+### Documented
+
+- **README 全面重寫(使用者/導入導向)+ IDEF0/GRAFCET 圖解**:舊 README 偏架構清單,重寫為「這是什麼→四大功能群→主旅程→快速上手」的導入叙事。新增 `docs/diagrams/` 四張 drawmiat 渲染 SVG:**IDEF0 A0**(功能總覽,A1檢索/A2取文/A3交付/A4 skill 四功能群 + ICOM)、**IDEF0 A1**(檢索來源梯 GPSS→EPO→PPUBS→爬蟲分解)、**IDEF0 A4**(disclosure→screening→analysis→drafting 四 flow)、**GRAFCET 主旅程狀態機**(screening 後 or-分岐輕量/重型、analysis 回流 screening 精雕迴圈)。圖源 JSON(`patentworks_idef0.json`/`patentworks_grafcet.json`)一併入版,經 `specbase_diagram_validate` 兩類均過。
+
+### Added
+
+- **R17 minimum operational toolset + host mediation(plan `patentmcp_r17-minimum-operational-toolset`,依 `opencode/specs/mcp-integration-standard` §R17)**:在既有已達標的 R17.1(a/b)/R17.4/R17.5 之上補齊三個 gap。
+  - **R17.1(c) portable result retrieval**:新增 `_resources.py` + FastMCP 註冊,每個 token-store 產物可經 `resources/read` @ `patent://{token}/{rel}` 以**協定原生**方式取得(免 host-private 的 `/files/{token}/blob` 或 WebDAV `/dav` 擴充);`resources/list` 動態 mirror live token store(覆蓋 `_resource_manager.list_resources`,產物為 runtime 鑄造故非靜態註冊)。unknown token/rel 與路徑逃逸沿用 blob 面的 `_safe_target` fail-loud,絕不空讀。blob/WebDAV 面不移除、續作 host accelerator。
+  - **R17.1.1 結構化 capability summary**:`patentmcp_init` 由 prose-only 加寬為 `{doctrine, capabilities}`,每個 endpoint 標 `visibility=container|host-visible`(container UDS socket path 不被誤認為 host-executable);`prompts/get` 維持 prose-only,doctrine 兩 face byte-identical(R15.5 no-drift,`_capabilities.py`)。
+  - **R17.2.4/5 typed asset preflight + content assertions**:新增 `_delivery.py`(pure module)並接線 `cache_export` delivery gate。空工作樹以 `EXPORT_EMPTY` 拒交付(nothing lands,transport-valid 但 empty 不得報 delivery-ready);caller 可帶 opt-in content assertions(`assert_nonempty`/`assert_min_files`/`assert_contains_rel`),不符即 fail-loud `ASSERTION_FAILED`。
+  - **驗證**:`tests/test_r17_conformance.py` 端到端雙跑(portable-floor `resources/read` 無 WebDAV / WebDAV `cache_export`+assertions 空拒)+ `test_resources.py` / `test_delivery_preflight.py` / `test_init_capabilities.py`;全套 361 tests 綠。mcp.json 0.5.0→0.6.0 + R17 signpost;`specs/architecture.md` Critical File Index 補三新模組;issue 移至 `issues/closed/`。
+
 ## 2026-07-13
 
 ### Changed
