@@ -30,7 +30,7 @@ _語言：[zh-hant](./) · **en**_
 ## Why (excerpt)
 
 - GPSS REST API 配額按**輸出筆數**計、**時段制重置**（上班 08–18 窄上限 10,000、下班+週末寬 30,000；SKILL.md §「官方實證」）。單一帳號的時段額度用盡後，`patent_search` / `patent_bulk` 的 GPSS 梯即整段失效，只能枯等時段重置。
-- 目前 `GPSSClient` 只讀單一 `GPSS_USER_CODE`（`gpss/client.py:94`），無多帳號、無 rotation、無額度感知。使用者已擁有第二個 TIPO 帳號驗證碼（<account-redacted>），要把「一個帳號額度用盡就自動換下一個」做成可擴充機制，額度加倍。
+- 目前 `GPSSClient` 只讀單一 `GPSS_USER_CODE`（`gpss/client.py:94`），無多帳號、無 rotation、無額度感知。使用者已擁有第二個 TIPO 帳號驗證碼（憑證存於 `.env`，不入版控），要把「一個帳號額度用盡就自動換下一個」做成可擴充機制，額度加倍。
 
 [Full →](./proposal.md)
 

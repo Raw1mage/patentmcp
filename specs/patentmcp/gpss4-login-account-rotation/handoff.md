@@ -15,6 +15,6 @@
 
 ## Execution-Ready Checklist
 
-- [x] 第二登入帳號憑證已備（<account-redacted> / <REDACTED>）
+- [x] 第二登入帳號憑證已備（憑證存於 `.env`，不入版控）
 - [x] 同構參照：patentmcp/gpss-account-rotation（REST rotation 已完成）
 - [x] 成對憑證編號式設定格式已定

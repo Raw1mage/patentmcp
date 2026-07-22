@@ -15,7 +15,7 @@
 
 ## 3. 設定與文件
 
-- [x] 3.1 `.env`：加 `GPSS4_USERNAME_2=<account-redacted>` / `GPSS4_PASSWORD_2=<REDACTED>`
+- [x] 3.1 `.env`：加 `GPSS4_USERNAME_2=<第二帳號>` / `GPSS4_PASSWORD_2=<密碼>`（實際憑證存於 `.env`，不入版控）
 - [x] 3.2 `.env.example`：新增 `GPSS4_USERNAME_2`/`GPSS4_PASSWORD_2` 註解（編號式可擴充、相容單帳號）
 - [x] 3.3 `docker-compose.yml`：注入 `GPSS4_USERNAME_2`/`GPSS4_PASSWORD_2`
 - [x] 3.4 `gpss4/__init__.py` 與 `session.py` docstring：單帳號 → 帳號池 rotation
