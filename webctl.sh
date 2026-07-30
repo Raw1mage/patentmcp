@@ -36,6 +36,49 @@ resolve_container() {
     printf '%s' "${cid:-$CONTAINER}"
 }
 
+assert_no_project_drift() {
+    # `container_name: patentmcp` (docker-compose.yml:19) pins the name GLOBALLY,
+    # across every compose project. So a container of that name owned by a
+    # DIFFERENT project makes up/--force-recreate die inside the daemon with
+    # "Conflict. The container name /patentmcp is already in use by container
+    # <hash>" -- a message that never mentions compose projects, and so reads as
+    # a stale-container problem rather than the drift it actually is.
+    #
+    # Observed 2026-07-22..30 (BR_20260730): a `docker compose up` run WITHOUT
+    # -p defaults the project to the directory name (`patentmcp`), while this
+    # script always drives `patentmcp-${USER}`. From then on `restart` was dead:
+    # image build succeeded, recreate always conflicted.
+    #
+    # Fail fast with the actual cause and the repair, instead of handing the
+    # operator a daemon conflict that does not name it.
+    local owner
+    owner="$(docker inspect "$CONTAINER" \
+        --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+    [ -z "$owner" ] && return 0            # no such container: nothing to collide with
+    [ "$owner" = "$PROJECT" ] && return 0  # ours
+    cat >&2 <<EOF
+webctl: compose project drift -- refusing to run
+
+  container '$CONTAINER' is owned by project '$owner'
+  this script drives project              '$PROJECT'
+
+  'container_name: $CONTAINER' is global, so these two projects cannot both
+  hold it. Any up/restart from here fails inside the daemon with a name
+  conflict that does not name this cause.
+
+  To adopt the running container into '$PROJECT':
+
+    docker compose -p '$owner' down
+    ./webctl.sh start
+
+  That does NOT remove the abandoned project's volumes. Inspect before
+  assuming they are disposable -- the sessions volume holds the token store:
+
+    docker volume ls --filter name=patentmcp
+EOF
+    return 1
+}
+
 wait_healthy() {
     local timeout=60 elapsed=0 status target
     target="$(resolve_container)"
@@ -54,6 +97,7 @@ wait_healthy() {
 case "${1:-}" in
     start)
         ensure_socket_dir
+        assert_no_project_drift
         docker compose -p "$PROJECT" up -d
         wait_healthy
         ;;
@@ -67,6 +111,10 @@ case "${1:-}" in
         # long silent window, and killing that window mid-recreate strands a
         # Created temp-named container (BR_20260703). Separate steps fail fast
         # per phase and keep the recreate window short.
+        # Drift check BEFORE the slow build: a conflicting container makes the
+        # recreate fail regardless, so spending the uv-sync minutes first only
+        # delays the same error (BR_20260730 symptom: [1/3] passed, [2/3] died).
+        assert_no_project_drift
         echo "webctl: [1/3] building image"
         docker compose -p "$PROJECT" build
         echo "webctl: [2/3] recreating container"

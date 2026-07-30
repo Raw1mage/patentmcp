@@ -1,9 +1,17 @@
 # patentmcp — per-user container (modeled on docxmcp's HTTP-over-UDS setup).
 #
-# Bring up:
+# Bring up (preferred — webctl drives the project name for you):
 #   cd vendor/patents-mcp
 #   cp .env.example .env        # fill in your keys
-#   docker compose -p patentmcp-${USER} up -d --build
+#   ./webctl.sh start
+#
+# The top-level `name:` below is what keeps a bare `docker compose up` (no -p)
+# from silently forking a SECOND project named after this directory. That is
+# not hypothetical: it happened 2026-07-22 and left the running container
+# labelled `patentmcp` while webctl drove `patentmcp-${USER}`, so every
+# `webctl.sh restart` died on a global container-name conflict for eight days
+# (BR_20260730). An explicit `-p` still overrides `name:`, so webctl and
+# scripts/patentmcp-self-heal.sh keep full control.
 #
 # IPC rendezvous lives in the repo at vendor/patents-mcp/.run/patentmcp.sock
 # (gitignored). The local opencode gateway connects there; register it via
@@ -13,9 +21,25 @@
 # service-account JSON is the one file we must mount read-only — it cannot be
 # baked into the image.
 
+# Default project name, used when no `-p` is given. Must match what webctl.sh
+# and scripts/patentmcp-self-heal.sh compute (`patentmcp-${USER:-$(id -un)}`).
+#
+# `:-nouser` rather than `:?` deliberately: interpolation is evaluated even when
+# `-p` overrides this key, so a `:?` guard would make the CORRECT path
+# (`webctl.sh start` under a systemd unit / cron, where USER is unset) fail
+# outright. Verified 2026-07-30 on compose v5.3.1: `-p explicit` + unset USER
+# + `:?` → "required variable USER is missing a value", exit 1. A plain default
+# cannot fail; if USER really is unset, webctl's own `id -un` fallback diverges
+# from it and assert_no_project_drift reports that loudly.
+name: patentmcp-${USER:-nouser}
+
 services:
   patentmcp:
     image: patentmcp:latest
+    # Global across ALL compose projects — this is what turns project drift into
+    # a hard name conflict instead of two silently-parallel stacks. Kept
+    # deliberately (the conflict is the LOUD failure); webctl's drift guard
+    # explains it when it fires.
     container_name: patentmcp
     build:
       # Repo root, so the image bakes in BOTH the server
