@@ -14,10 +14,16 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$HERE")"          # vendor/patents-mcp (where docker-compose.yml lives)
 
-PROJECT="patentmcp-${USER:-$(id -un)}"
+# PROJECT / CONTAINER / assert_no_project_drift come from the SAME source
+# webctl.sh uses. --heal drives `docker compose up` against the identical
+# globally-unique container_name, so it is exposed to the identical drift; a
+# private copy of the guard here would be two rule-sets free to diverge, which
+# is the defect BR_20260730 was filed for.
+# shellcheck source=_compose_lib.sh
+. "$HERE/_compose_lib.sh"
+
 SOCKET_DIR="$REPO_DIR/.run"
 SOCKET="$SOCKET_DIR/patentmcp.sock"
-CONTAINER="patentmcp"
 
 usage() {
     cat <<EOF
@@ -45,6 +51,11 @@ heal() {
     fi
     [ -d "$SOCKET_DIR" ] || mkdir -p "$SOCKET_DIR"
     chmod 755 "$SOCKET_DIR" 2>/dev/null || true
+    # Same gate webctl.sh applies before its own `up`: a container of this name
+    # owned by another project makes the up below die inside the daemon with a
+    # conflict that never mentions compose projects. Without this, --heal turns
+    # a diagnosable drift back into the 8-day mystery (VANS gap, BR_20260730).
+    assert_no_project_drift || return 1
     # Idempotent: `up -d` is a no-op when already running+healthy; recreates the
     # container when it is gone/stopped. Scoped to patentmcp's own project only.
     ( cd "$REPO_DIR" && docker compose -p "$PROJECT" up -d )

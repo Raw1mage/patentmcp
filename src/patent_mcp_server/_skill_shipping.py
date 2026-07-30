@@ -142,6 +142,17 @@ def list_shippable_skills() -> list[dict[str, object]]:
     root = skills_root()
     out: list[dict[str, object]] = []
     if not root.is_dir():
+        # Absent root is a legitimate "no companion" (silent). But a root that
+        # EXISTS and is merely unreadable/not-a-directory is a deployment fault
+        # wearing the same 200-with-empty-set face — indistinguishable on the
+        # wire from a service that genuinely ships nothing. Same anti-silence
+        # clause the withheld-entry warnings serve: the operator must be able to
+        # tell a misconfiguration from an honest empty (VANS gap, BR_20260730).
+        if root.exists():
+            _log.warning(
+                "[skills] skills root %s exists but is not a readable directory "
+                "— serving an EMPTY list; check the mount and PATENTS_SKILLS_ROOT",
+                root)
         return out
     for entry in sorted(root.iterdir()):
         # Admission through the SAME gate the download path uses, so any name

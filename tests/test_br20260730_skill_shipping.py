@@ -16,6 +16,7 @@ These tests pin BOTH halves plus the traversal guards that a parameterised
 from __future__ import annotations
 
 import io
+import logging
 import os
 import zipfile
 
@@ -64,6 +65,31 @@ def test_list_empty_root_is_honest_empty(tmp_path, monkeypatch):
     consumer reads an honest "no companion" instead of a transport error."""
     monkeypatch.setenv("PATENTS_SKILLS_ROOT", str(tmp_path / "nope"))
     assert ss.list_shippable_skills() == []
+
+
+def test_unusable_root_is_empty_but_NOT_silent(tmp_path, monkeypatch, caplog):
+    """An absent root and a BROKEN root produce the same empty wire payload, so
+    the log is the only thing that can tell them apart.
+
+    Absent is legitimate ("this service ships no companion") and stays silent.
+    A root that EXISTS but is not a readable directory — a mount that failed, a
+    ``PATENTS_SKILLS_ROOT`` pointing at a file — is a deployment fault wearing
+    the identical 200-with-empty-set face. Serving that silently is the same
+    defect class as the 22-byte empty zip: success-shaped nothing.
+    """
+    broken = tmp_path / "root-is-a-file"
+    broken.write_text("not a directory\n", encoding="utf-8")
+    monkeypatch.setenv("PATENTS_SKILLS_ROOT", str(broken))
+    with caplog.at_level(logging.WARNING, logger="patents_mcp.skills"):
+        assert ss.list_shippable_skills() == []
+    assert "not a readable directory" in caplog.text, (
+        f"a broken mount was indistinguishable from 'no companion': {caplog.text!r}")
+
+    caplog.clear()
+    monkeypatch.setenv("PATENTS_SKILLS_ROOT", str(tmp_path / "genuinely-absent"))
+    with caplog.at_level(logging.WARNING, logger="patents_mcp.skills"):
+        assert ss.list_shippable_skills() == []
+    assert caplog.text == "", f"an absent root is not a fault; stay quiet: {caplog.text!r}"
 
 
 @pytest.mark.parametrize("bad", ["../bin", "..", ".", "a/b", "", "foo/../../etc",
@@ -289,3 +315,142 @@ def test_route_empty_skill_404_not_empty_zip(client, tmp_path, monkeypatch):
     r = client.get("/skills/hollow.zip")
     assert r.status_code == 404, f"served an empty archive with {r.status_code}"
     assert r.json()["code"] == "SKILL_EMPTY"
+
+
+# ── VANS-driven regressions (validator ses_04c459f11, mutation survivors) ──
+#
+# Each test below exists because deleting the guard it covers left the suite
+# ENTIRELY GREEN. A clause with an implementation anchor but no test anchor is
+# one refactor away from silent removal — the exact shape of the original BR,
+# where a green check coexisted with an absent guarantee.
+def test_withheld_entries_are_announced_in_the_log(tmp_path, monkeypatch, caplog):
+    """spec R4: a withheld entry is announced in the log — **never silently**.
+
+    A directory that looks like a skill but cannot be served is an AUTHORING
+    error: the operator has to learn about it, because the wire payload
+    deliberately hides it (the consumer contract is "names I can download").
+    Silence here means the author sees a skill on disk, no error anywhere, and
+    no skill on the wire.
+
+    Mutation that this pins (VANS MUT8): deleting both ``_log.warning`` calls
+    left 28/28 green — no test in the suite observed logging at all
+    (``grep -rln caplog tests/`` had zero hits repo-wide).
+    """
+    root = tmp_path / "skills"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "SKILL.md").write_text("leaked\n", encoding="utf-8")
+    (root / "good").mkdir(parents=True)
+    (root / "good" / "SKILL.md").write_text("ok\n", encoding="utf-8")
+    (root / "\u4e2d\u6587").mkdir()                      # refused by the safe-name rule
+    (root / "\u4e2d\u6587" / "SKILL.md").write_text("x\n", encoding="utf-8")
+    (root / "linkout").symlink_to(outside)               # refused as an entry symlink
+    (root / "hollow").mkdir()                            # refused as SKILL_EMPTY
+    (root / "hollow" / ".dotfile-only").write_text("x\n", encoding="utf-8")
+    monkeypatch.setenv("PATENTS_SKILLS_ROOT", str(root))
+
+    with caplog.at_level(logging.WARNING, logger="patents_mcp.skills"):
+        listed = [e["name"] for e in ss.list_shippable_skills()]
+
+    assert listed == ["good"], f"advertised something it cannot serve: {listed}"
+    for withheld in ("\u4e2d\u6587", "linkout", "hollow"):
+        assert withheld in caplog.text, (
+            f"{withheld!r} was withheld SILENTLY — the operator has no way to "
+            f"discover the authoring error. Log was: {caplog.text!r}")
+    assert "SKILL_EMPTY" in caplog.text, "the empty-skill reason must be named"
+
+
+def test_containment_guard_fires_when_the_root_moves_mid_call(tmp_path, monkeypatch):
+    """spec R4: a containment check on the RESOLVED path, independent of the
+    name rule and the entry-symlink rule.
+
+    Guard 3 is unreachable through the public API while guard 2 stands — on
+    POSIX a non-symlink child cannot resolve out of its parent — so a naive
+    fixture can never make it fire, and mutating it away looks free (VANS MUT6:
+    ``if candidate.parent != root:`` -> ``if False:`` kept 28/28 green).
+
+    What it actually defends is the TOCTOU between the two reads:
+    ``resolve_skill_dir`` calls ``skills_root()`` TWICE (once resolved for the
+    root, once unresolved to build the candidate). Re-point the root between
+    those reads — a symlinked root swung by a deploy, or the env var rewritten
+    — and the candidate lands in a tree the root no longer contains. That is
+    the reachable case, so it is the one under test.
+    """
+    real = tmp_path / "real"
+    (real / "good").mkdir(parents=True)
+    (real / "good" / "SKILL.md").write_text("ok\n", encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "good").mkdir(parents=True)
+    (elsewhere / "good" / "SKILL.md").write_text("not ours to publish\n", encoding="utf-8")
+
+    reads: list[int] = []
+
+    def moving_root():
+        reads.append(1)
+        return real if len(reads) == 1 else elsewhere
+
+    monkeypatch.setattr(ss, "skills_root", moving_root)
+
+    with pytest.raises(ss.SkillShippingError) as e:
+        ss.resolve_skill_dir("good")
+    assert e.value.code == "SKILL_NAME_INVALID", (
+        "a candidate outside the resolved root was accepted — the containment "
+        "check is the only guard standing between here and an arbitrary tree")
+    assert len(reads) >= 2, "fixture never exercised the two-read window"
+
+
+def test_archive_never_carries_a_symlink_member(tmp_path, monkeypatch):
+    """spec R4 / R9.7.1: no member of the archive is a symlink.
+
+    A symlink inside a zip is a traversal primitive on EXTRACTION — the victim
+    is the consumer, not this server, which is why no probe against this
+    service can reveal it. ``is_file()`` alone follows the link and happily
+    ships the target's bytes under an innocuous member name.
+
+    Mutation that this pins (VANS MUT7): dropping ``p.is_symlink() or`` from
+    ``_shippable_members`` left 28/28 green. It is the twin of the entry-symlink
+    guard already covered by ``test_symlinked_skill_dir_is_refused`` — that one
+    correctly went red under mutation, this one had no coverage at all.
+    """
+    root = tmp_path / "skills"
+    secret = tmp_path / "secret.txt"
+    secret.write_text("root:x:0:0:in-the-archive\n", encoding="utf-8")
+    skill = root / "withlinks"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("ok\n", encoding="utf-8")
+    (skill / "leak.txt").symlink_to(secret)              # follows out of the tree
+    (skill / "self.md").symlink_to(skill / "SKILL.md")   # inside, still excluded
+    monkeypatch.setenv("PATENTS_SKILLS_ROOT", str(root))
+
+    names = zipfile.ZipFile(io.BytesIO(ss.pack_skill_zip("withlinks"))).namelist()
+    assert names == ["withlinks/SKILL.md"], f"symlink member shipped: {names}"
+    # and the advertised count must agree with what the archive really holds
+    (listed,) = [e for e in ss.list_shippable_skills() if e["name"] == "withlinks"]
+    assert listed["file_count"] == len(names)
+
+
+def test_loose_bytecode_outside_pycache_is_excluded(tmp_path, monkeypatch):
+    """spec R4: ``.pyc``/``.pyo`` are excluded — as a SUFFIX rule, not merely as
+    a side effect of the ``__pycache__`` directory rule.
+
+    ``test_zip_is_wellformed_and_hygienic`` asserts no bytecode ships, and it
+    passes — but only because all 11 ``.pyc`` files in the real tree happen to
+    live under ``__pycache__/``, where ``_EXCLUDED_DIRS`` catches them first.
+    Deleting the suffix branch entirely kept that test green (VANS MUT5); it
+    went red only after seeding a loose ``.pyc``. So the assertion was
+    load-bearing by accident of the tree, and the rule under test was not the
+    rule being exercised. This fixture makes the suffix rule the only thing
+    standing between the file and the archive.
+    """
+    root = tmp_path / "skills"
+    skill = root / "bytecode"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("ok\n", encoding="utf-8")
+    (skill / "stray.pyc").write_bytes(b"\x00compiled\n")   # NOT under __pycache__
+    (skill / "stray.pyo").write_bytes(b"\x00compiled\n")
+    monkeypatch.setenv("PATENTS_SKILLS_ROOT", str(root))
+
+    names = zipfile.ZipFile(io.BytesIO(ss.pack_skill_zip("bytecode"))).namelist()
+    assert names == ["bytecode/SKILL.md"], f"compiled bytecode shipped: {names}"
+    (listed,) = [e for e in ss.list_shippable_skills() if e["name"] == "bytecode"]
+    assert listed["file_count"] == 1, f"count includes excluded bytecode: {listed}"
