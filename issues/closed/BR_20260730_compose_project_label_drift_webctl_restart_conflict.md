@@ -12,9 +12,10 @@
 
 ```
 State:
-Fix: unfixed
-Effect: n/a
-Custody: unclaimed
+Fix: fixed(8d53020)
+Effect: deployed
+Closed: 2026-07-30 by session:ses_04db723af
+Custody: session:ses_04db723af
 Blocker: none
 Disposition: accepted
 Venue: patentmcp
@@ -138,3 +139,63 @@ drwxr-xr-x  2 root root  4096 Jul 17 15:26 tok_26PFYHWASJSBYVGZQ3NSE27C4VIHAV4V
 - `docker volume ls` 確認只剩一顆被實際掛載的 sessions volume，且切換前後
   token store 內容符合第 1 點的決定（搬移 or 明確清空）
 - `scripts/patentmcp-self-heal.sh --check` 在新 project 名下仍能正確探測
+
+---
+
+## 4. 決議與修復（2026-07-30，使用者拍板「全收」）
+
+§2 列的三個取捨，在 §1.5 更正後只剩兩個（volume 搬移取捨不存在）：
+
+**取捨 1（volume）——消失**。兩顆都沒有值得保留的東西：現役那顆空的，廢的那顆是 7/17 已過期 token（TTL 3600s）。直接删除廢 volume，無需搬移。
+
+**取捨 2（`container_name` 是否保留）—— 保留**。移除它會讓兩個 project 各自生出 `<project>-patentmcp-1`，變成**靜默跑出兩份服務**——比撞名難察覺得多。寧可吵，不要靜默分裂。這是刻意選擇的失敗形狀。
+
+**取捨 3（webctl 自衛）—— 加入**，並且不只這一道。
+
+### 兩道防線（職責不同，缺一不可）
+
+1. **結構防線——消除根因**：`docker-compose.yml` 加頂層 `name: patentmcp-${USER:-nouser}`。有了它，裸 `docker compose up`（無 `-p`）也會落在正確 project，**不再退回目錄名**——也就是說造成這次漂移的那個操作，以後不會再造成漂移。
+
+   用 `:-nouser` 而非 `:?` 是實測後的決定（compose v5.3.1）：
+
+   | 情境 | 結果 |
+   | --- | --- |
+   | `USER` 有設、無 `-p` | project = `patentmcp-pkcs12` ✓ 根因消除 |
+   | `USER` 有設、有 `-p` | `-p` 覆蓋 `name:` ✓ webctl 保有控制權 |
+   | **`USER` 未設、有 `-p`、用 `:?`** | **整個失敗**（`required variable USER is missing a value`, exit 1）|
+
+   第三列是關鍵：interpolation **即使 `-p` 已覆蓋此鍵仍會求值**，所以 `:?` 守衛會把 systemd/cron 下的**正確路徑**一起打死。
+
+2. **行為防線——攔截已發生的漂移**：`webctl.sh::assert_no_project_drift()`。`start` 與 `restart` 兩處都在動作前呼叫；偵測到同名容器屬別的 project 就 fail fast（exit 1，**唯讀不動服務**）並印出實際歸屬 + 修復指令。
+
+   在 `restart` 路徑刻意排在 build **之前**——衝突會讓 recreate 必敗，先花幾分鐘 build 只是延後同一個錯誤（正是 §1.1 症狀：[1/3] 過、[2/3] 死）。
+
+### 驗證（§3 四項全過）
+
+```
+驗證前（漂移狀態）
+  ./webctl.sh restart   -> guard fail fast, exit=1, 容器未受影響（唯讀）
+  ./webctl.sh start     -> guard fail fast, exit=1
+
+對齊
+  docker compose -p patentmcp down   -> 舊 project 拆除
+  ./webctl.sh start                  -> guard 放行，project=patentmcp-pkcs12
+  docker volume rm patentmcp_patentmcp-sessions   -> 廢 volume 清除
+
+對齊後
+  ① ./webctl.sh restart     -> 三階段跑完 + wait_healthy, exit=0, 28s
+  ② GET /health            -> 200
+     GET /skills             -> 200 {patentworks, file_count 30}
+     GET /skills/patentworks.zip -> 200, 130270B, 30 members, 全數 patentworks/ 前綴
+  ③ docker volume ls        -> 只剩 patentmcp-pkcs12_patentmcp-sessions（實際掛載中）
+  ④ self-heal.sh --check    -> healthy, exit=0
+
+compose name: 三情境
+  bare config（無 -p）      -> patentmcp-pkcs12（非目錄名 patentmcp）✓
+  -p 覆蓋                   -> patentmcp-pkcs12 ✓
+  USER 未設 + -p           -> exit=0（不會打死正規路徑）✓
+```
+
+### Architecture Sync
+
+`specs/architecture.md` 原本**完全沒有**容器生命週期章節（grep `webctl|compose project|container_name` 零命中）——這是本次暴露的真正文件債。已补上 `## Container Lifecycle / Compose Project 邊界`：三個檔案的分工、`container_name` 全域性的取捨、project 名決定 volume 前綴因此切 project 等於換 token store。
