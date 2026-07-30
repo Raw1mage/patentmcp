@@ -90,6 +90,48 @@ the answer it came to ask (BR_20260730).
 - **AND** a traversal attempt (`..`, `a/b`, percent-encoded escapes) is rejected
   by both the safe-name rule and a containment check on the resolved path
 
+#### Scenario: listing and download share ONE admission gate
+
+The contract a consumer relies on is "every name you list, I can fetch". Two
+code paths that merely *happen* to agree do not provide it — the first
+implementation listed with a bare `is_dir()` (following symlinks, applying no
+name rule) while downloading went through the validating resolver, so a
+symlinked or non-ASCII directory was advertised and then refused (200-then-404).
+
+- **GIVEN** a `skills/` tree containing entries that cannot be served — a
+  symlinked directory, a name outside the safe-name rule (e.g. non-ASCII), or a
+  directory holding no shippable file
+- **WHEN** a client `GET /skills` and then downloads every name returned
+- **THEN** each returned name downloads successfully — the unserviceable entries
+  were never advertised
+- **AND** listing and download reach that verdict through the **same** validation
+  function, so the guarantee is structural rather than a coincidence of two
+  rule-sets
+- **AND** every withheld entry is announced in the server log — a directory that
+  looks like a skill but cannot be served is an authoring error the operator
+  must see, so it is withheld from the payload but **never silently**
+
+#### Scenario: an empty archive is a typed failure, not a 200
+
+A zip holding zero members is a valid 22-byte archive; served with 200 it reads
+to the consumer as success-with-nothing — the same silent-failure class this
+spec exists to eliminate.
+
+- **GIVEN** a skill directory that holds nothing shippable (only dotfiles or
+  bytecode), or whose content disappears between the LIST and the DOWNLOAD
+- **WHEN** a client requests that name
+- **THEN** the response is a typed 404 (`SKILL_EMPTY`), never 200 with an empty
+  archive
+
+#### Scenario: errors disclose no filesystem layout
+
+- **WHEN** any `/skills*` request fails
+- **THEN** the response body states only that the name is invalid or absent, and
+  carries **no filesystem path** (an earlier 404 disclosed the container's
+  internal `/app/skills` root to any remote prober)
+- **AND** the full detail, including the root, is written to the server log
+  instead — the operator needs it, the remote client does not
+
 #### Scenario: archive hygiene (standard R9.7.1)
 
 - **WHEN** an archive is produced
@@ -111,3 +153,14 @@ the answer it came to ask (BR_20260730).
    full `list → download by name` chain succeeds for every listed entry. A check
    that only asserts "some zip downloads" does NOT satisfy this — that is exactly
    the shape that stayed green through BR_20260730.
+7. **Unserviceable entries are never advertised**: with a `skills/` tree seeded
+   with a symlinked dir, a non-ASCII name, and an empty dir, `GET /skills` lists
+   none of them, every name it DOES list downloads 200, and each omission appears
+   in the log. **No response is ever 200 with a zero-member archive.**
+8. **Traversal tests state WHICH layer refused the request.** Asserting only
+   "status is 404" is insufficient: percent-encoded slashes are rejected by the
+   router (decode-then-match leaves `{name}` unmatchable) and therefore never
+   exercise the in-handler guard. A conformance run MUST include at least one
+   case that reaches the guard — a single-segment but invalid name — and assert
+   the typed body, or the guard has zero coverage at the HTTP layer while
+   appearing tested.
