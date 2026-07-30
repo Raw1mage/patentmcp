@@ -139,6 +139,7 @@ patentmcp 以**單一 per-user compose project** 承載。三個檔案共同定�
 | `docker-compose.yml` | 頂層 `name: patentmcp-${USER:-nouser}` = **預設 project 名**；`container_name: patentmcp` = 全域唯一容器名 |
 | `webctl.sh` | 唯一正規生命週期入口（`start`/`stop`/`restart`/`refresh`/`health`/`clean`/`purge`），一律帶 `-p "patentmcp-${USER:-$(id -un)}"` |
 | `scripts/patentmcp-self-heal.sh` | `--check`/`--heal` 探測與復原，必須算出**與 webctl 相同**的 project 名 |
+| `scripts/_compose_lib.sh` | **上兩者共同 source 的單一來源**：`PROJECT` / `CONTAINER` / `assert_no_project_drift()` 都定義在這裡 |
 
 **為何 `container_name` 是全域的，且刻意保留**：它把容器名釘死成跨所有 compose project 唯一。代價是「不同 project、同一容器名」必然撞牆；效益是這個撞牆**很大聲**——沒有這行的話，兩個 project 會各自生出 `<project>-patentmcp-1`，變成**靜默跑出兩份服務**，症狀難察覺得多。這是刻意選擇的失敗形狀：寧可吵，不要靜默分裂。
 
@@ -148,7 +149,9 @@ patentmcp 以**單一 per-user compose project** 承載。三個檔案共同定�
 
 1. **結構防線** `docker-compose.yml` 的頂層 `name:` —— 消除**根因**。有了它，即使裸 `docker compose up`（無 `-p`）也會落在正確 project，不再退回目錄名。`-p` 仍可覆蓋，所以 webctl / self-heal 保有完全控制權。
    - 用 `:-nouser` 而非 `:?`：interpolation **即使 `-p` 已覆蓋此鍵仍會求值**，所以 `:?` 守衛會讓**正確路徑**（systemd unit / cron 下 `USER` 未設的 `webctl.sh start`）直接失敗。2026-07-30 於 compose v5.3.1 實測：`-p explicit` + 未設 `USER` + `:?` → `required variable USER is missing a value`, exit 1。純預設值不會 fail；若 `USER` 真的未設，webctl 自己的 `id -un` fallback 會與之分歧，並由下面第 2 道防線大聲報出。
-2. **行為防線** `webctl.sh::assert_no_project_drift()` —— 攔截**已經發生**的漂移。`start` 與 `restart` 兩處都在動作前呼叫；偵測到同名容器屬別的 project 就 fail fast（exit 1，唯讀不動服務），印出實際歸屬、本腳本驅動的 project、以及修復指令。在 `restart` 路徑它刻意排在 build **之前**——衝突會讓 recreate 必敗，先花數分鐘 build 只是延後同一個錯誤。
+2. **行為防線** `scripts/_compose_lib.sh::assert_no_project_drift()` —— 攔截**已經發生**的漂移。偵測到同名容器屬別的 project 就 fail fast（exit 1，唯讀不動服務），印出實際歸屬、本腳本驅動的 project、修復指令，以及「被遺棄的 project 仍持有 sessions volume」的警告。呼叫點涵蓋**所有會 mutate 的路徑**：`webctl.sh` 的 `start` 與 `restart`、`patentmcp-self-heal.sh` 的 `heal`。在 `restart` 路徑它刻意排在 build **之前**——衝突會讓 recreate 必敗，先花數分鐘 build 只是延後同一個錯誤。
+   - **為何抽成共用 lib（2026-07-30 VANS 覆核）**：guard 原本私有於 `webctl.sh`，而 self-heal 算出**同樣的** project 名、驅動**同樣的** `docker compose up`，卻完全繞過它——`--heal` 因此仍會撞上那則不提 compose project 的 daemon 衝突，也就是 guard 存在的理由本身。修法刻意**不複製一份** guard 到 self-heal：兩個 caller 各持一套規則自由漂移，與 `_skill_shipping.py` 的 list/download 分歧是同一個缺陷形狀（見「Skill Shipping」段），而那正是同一張 BR 在 Python 側剛修掉的東西。
+   - **測試錨點** `tests/test_compose_drift_guard.py`：以 PATH 上的 docker stub 驅動真正的 lib，釘住三個分支的**決策**（自有放行且靜默／容器不存在放行／漂移拒絕）與**拒絕的可診斷性**（訊息須指名 owner、印修復指令、警告 volume），另有結構斷言禁止私有重定義、並釘住 guard 必須排在 `up` **之前**。在此之前 guard 完全沒有自動化測試，只能靠操作者實際跑 verb 才會發現回歸——正是原始漂移潛伏 8 天的同一個盲區。
 
 **volume 歸屬的連帶效應**：project 名決定 named volume 前綴（`<project>_patentmcp-sessions`），所以切 project = 換 token store。判斷「舊 volume 能不能丟」必須**實際打開看內容**，不能從掛載關係推論——BR_20260730 的初判就是這樣寫反的（推論「沒掛的那顆是空的」，實際相反：漂移前它才是現役那顆）。
 
