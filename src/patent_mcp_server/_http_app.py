@@ -8,7 +8,8 @@ or TCP:
   * /healthz                      — liveness + store stats
   * /                             — human-readable landing page (install guide +
                                     live tool list + skill download button)
-  * /skills/patentworks.zip       — the patentworks skill packaged on the fly
+  * /skills                       — companion-skill list (bare names, R9.2)
+  * /skills/{name}.zip            — that skill packaged on the fly (R9.2)
 
 The backend stays UDS-only in production; an opencode/opencms gateway fronts it
 as ``https://<host>/patentmcp/...``. Because handles fall back to the relative
@@ -18,37 +19,21 @@ through that gateway prefix.
 from __future__ import annotations
 
 import html
-import io
 import logging
 import os
 import time
-import zipfile
-from pathlib import Path
 from typing import Optional
 
 _log = logging.getLogger("patents_mcp.http")
 
 _SERVICE_MARKER = "patents-mcp-files"
-_SKILL_NAME = "patentworks"
 
-
-def _skills_root() -> Path:
-    """Repo ``skills/`` dir. Override with PATENTS_SKILLS_ROOT; else derive from
-    this file's location (…/vendor/patents-mcp/src/patent_mcp_server/_http_app.py
-    → repo root is parents[4])."""
-    env = os.environ.get("PATENTS_SKILLS_ROOT")
-    if env:
-        return Path(env)
-    return Path(__file__).resolve().parents[4] / "skills"
-
-
-def _zip_skill(skill_dir: Path) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(skill_dir.rglob("*")):
-            if path.is_file():
-                zf.write(path, arcname=str(path.relative_to(skill_dir.parent)))
-    return buf.getvalue()
+# NOTE: there is deliberately no `_SKILL_NAME` constant and no local
+# `_skills_root()` here any more. Both moved into
+# :mod:`patent_mcp_server._skill_shipping`, which owns skills-root derivation,
+# name validation, traversal guards and archive hygiene as ONE implementation.
+# The skill name is DATA (a directory under `skills/`), never a constant baked
+# into a route pattern or a landing-page string — that bake-in was BR_20260730.
 
 
 _LANDING_CSS = """
@@ -187,7 +172,7 @@ def _pick_locale(lang_q, cookie_lang, accept_language) -> str:
     return "en"
 
 
-def _landing_html(tools, prefix: str, skill_available: bool, locale: str = "en") -> str:
+def _landing_html(tools, prefix: str, skills: list, locale: str = "en") -> str:
     s = STRINGS.get(locale, STRINGS["en"])
     mcp_ep = f"{prefix}/mcp"
     rows = "".join(
@@ -195,12 +180,20 @@ def _landing_html(tools, prefix: str, skill_available: bool, locale: str = "en")
         f"<td>{html.escape((t.description or '').strip().splitlines()[0] if (t.description or '').strip() else '')}</td></tr>"
         for t in tools
     )
+    # One button per shippable skill, driven by the SAME enumeration the
+    # `GET /skills` list route serves — so a second companion appears here by
+    # dropping a directory into `skills/`, with no landing-page edit
+    # (BR_20260730: the name used to be baked in at three separate sites).
     dl = (
-        f'<a class=btn href="{prefix}/skills/{_SKILL_NAME}.zip">'
-        + html.escape(s["install_btn"].format(skill=_SKILL_NAME)) + "</a>"
-        if skill_available
+        "".join(
+            f'<a class=btn href="{prefix}/skills/{html.escape(sk["name"])}.zip">'
+            + html.escape(s["install_btn"].format(skill=sk["name"])) + "</a> "
+            for sk in skills
+        )
+        if skills
         else f'<p class=muted>{html.escape(s["skill_unavailable"])}</p>'
     )
+    skill_names = ", ".join(sk["name"] for sk in skills) or "-"
     # Switcher sets a cookie and reloads the BARE landing path (no query) so it
     # works even for anonymous visitors behind a protected gateway, where a
     # `?lang=` URL would be redirected to login.
@@ -240,7 +233,7 @@ def _landing_html(tools, prefix: str, skill_available: bool, locale: str = "en")
 
 <h2>{html.escape(s["install_h2"])}</h2>
 <div class=card>{dl}
-<p class=muted>{s["install_note"].format(skill=_SKILL_NAME)}</p></div>
+<p class=muted>{s["install_note"].format(skill=skill_names)}</p></div>
 
 <h2>{html.escape(s["connect_h2"])}</h2>
 <p>{s["connect_remote"]}</p>
@@ -259,7 +252,7 @@ def _landing_html(tools, prefix: str, skill_available: bool, locale: str = "en")
 <p>{html.escape(s["ep_mcp"])}: <code>{prefix}/mcp</code></p>
 <p>{html.escape(s["ep_file"])}: <code>{prefix}/files/{{token}}/blob/{{rel}}</code></p>
 <p>{html.escape(s["ep_health"])}: <code>{prefix}/healthz</code></p>
-<p>{html.escape(s["ep_skill"])}: <code>{prefix}/skills/{_SKILL_NAME}.zip</code></p></div>
+<p>{html.escape(s["ep_skill"])}: <code>{prefix}/skills</code> (list) · <code>{prefix}/skills/{{name}}.zip</code></p></div>
 
 <h2>{html.escape(s["tools_h2"])} <span class=count>({len(tools)})</span></h2>
 <table>{rows}</table>
@@ -278,6 +271,7 @@ def build_app(mcp, store):
 
     from patent_mcp_server._auth_provider import AuthProvider, AuthError, Identity
     from patent_mcp_server import _dav
+    from patent_mcp_server import _skill_shipping
 
     # WebDAV working-cache face (DD-4/DD-6). One auth provider + one process-local
     # lock table shared across all DAV requests on this app.
@@ -536,15 +530,40 @@ th{{text-align:left;border-top:1px solid #243040;padding:.4rem .6rem;color:var(-
         ]
         return JSONResponse({"tools": projected})
 
+    async def skills_list(request):
+        """GET /skills — companion-skill LIST (R9.2, BR_20260730).
+
+        The DISCOVERY half. A remote client has no ``appRoot`` and so cannot
+        resolve ``mcp.json.skillPaths``; without this route it would have to
+        already know the name ``patentworks`` to fetch anything, which is not a
+        thing a generic consumer can do. Elements are BARE SKILL NAMES (never
+        filenames — a filename here is the documented bodesign anti-pattern).
+        An empty tree answers 200 with ``skills: []``, an honest "no companion".
+        """
+        skills = _skill_shipping.list_shippable_skills()
+        return JSONResponse({"ok": True, "skills": skills, "count": len(skills)})
+
     async def skill_zip(request):
-        skill_dir = _skills_root() / _SKILL_NAME
-        if not skill_dir.is_dir():
-            return JSONResponse({"error": "skill_not_found", "skill": _SKILL_NAME}, status_code=404)
-        data = _zip_skill(skill_dir)
+        """GET /skills/{name}.zip — per-name download (R9.2).
+
+        Parameterised on ``name`` rather than baking one skill into the route
+        pattern, so a second companion becomes servable by dropping a directory
+        into ``skills/``. Both invalid-name (traversal) and unknown-name map to
+        a typed 404 — never a 500, and never a 200 carrying an empty archive.
+        """
+        name = request.path_params["name"]
+        try:
+            data = _skill_shipping.pack_skill_zip(name)
+        except _skill_shipping.SkillShippingError as e:
+            return JSONResponse(
+                {"error": "skill_not_found", "code": e.code, "skill": name,
+                 "detail": e.message},
+                status_code=404,
+            )
         return Response(
             content=data,
             media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="{_SKILL_NAME}.zip"'},
+            headers={"Content-Disposition": f'attachment; filename="{name}.zip"'},
         )
 
     async def landing(request):
@@ -552,14 +571,14 @@ th{{text-align:left;border-top:1px solid #243040;padding:.4rem .6rem;color:var(-
             tools = await mcp.list_tools()
         except Exception:  # noqa: BLE001
             tools = []
-        skill_available = (_skills_root() / _SKILL_NAME).is_dir()
+        skills = _skill_shipping.list_shippable_skills()
         locale = _pick_locale(
             request.query_params.get("lang"),
             request.cookies.get("pmlang"),
             request.headers.get("accept-language"),
         )
         return HTMLResponse(
-            _landing_html(tools, prefix, skill_available, locale),
+            _landing_html(tools, prefix, skills, locale),
             headers={"Content-Language": locale, "Vary": "Accept-Language"},
         )
 
@@ -666,7 +685,12 @@ th{{text-align:left;border-top:1px solid #243040;padding:.4rem .6rem;color:var(-
         Route("/sse", sse_stream, methods=["GET"]),
         Mount("/sse/messages", app=_sse.handle_post_message),
         Route("/files/{token}/blob/{rel:path}", blob, methods=["GET"]),
-        Route(f"/skills/{_SKILL_NAME}.zip", skill_zip, methods=["GET"]),
+        # R9.2 skill shipping: BOTH halves. The bare list is what makes the
+        # zip discoverable to a client that does not already know the name
+        # (BR_20260730 — patentmcp previously served only the .zip, under a
+        # route pattern with the skill name f-string'd in).
+        Route("/skills", skills_list, methods=["GET"]),
+        Route("/skills/{name}.zip", skill_zip, methods=["GET"]),
     ])
 
     # Wrap the fully-routed Starlette app with the access-log middleware LAST, so

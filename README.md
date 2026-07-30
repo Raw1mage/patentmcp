@@ -125,7 +125,8 @@ skill 提供四個 flow,可單用、也可串成從 idea 到申請的完整旅�
 - `/mcp`(Streamable HTTP)、`/`(landing)
 - `/tools`(機器可讀工具 schema,取自 live registry,錯誤直接 500 不靜默)
 - `/health`(liveness;`/healthz` 為相容別名)
-- `/files/{token}/blob/{rel}`(blob 取件)、`/skills/patentworks.zip`(skill 打包)
+- `/files/{token}/blob/{rel}`(blob 取件)
+- `/skills`(companion skill 清單,回 bare 名稱)、`/skills/{name}.zip`(依名打包下載)
 - **`resources/read` @ `patent://{token}/{rel}`**(R17.1(c) 協定原生產物地板)
 
 生命週期:`webctl.sh {start|stop|restart|refresh|health|clean|purge}`;`scripts/patentmcp-self-heal.sh {--check|--heal}` 探測 UDS socket,不健康時只重建 `patentmcp-${USER}` compose project。

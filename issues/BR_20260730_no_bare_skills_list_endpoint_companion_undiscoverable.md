@@ -12,13 +12,16 @@
 
 ```
 State:
-Fix: unfixed
-Effect: n/a
-Custody: unclaimed
+Fix: fixed
+Effect: live (container restarted 2026-07-30, probe green)
+Custody: patentmcp coordinator (owns fix + verification + merge, a2a-d2d §3.1.1)
 Blocker: none
 Disposition: accepted
 Venue: patentmcp
 ```
+
+**Closed: 2026-07-30** — both R9.2 halves now served; verified by live probe against
+the running container (not just unit tests). See §4.
 
 ## 1.1 症狀（verbatim）
 
@@ -54,9 +57,12 @@ GET /health                    -> 200                       <- CONTROL：服務�
 
 ```
 Findings:
-F1 bare GET /skills 列表端點不存在（僅註冊了 .zip 那條 route） Fix: unfixed Disposition: accepted Venue: patentmcp
-F2 route 硬編碼單一 skill 名（_SKILL_NAME），新增 companion 需改 code 而非資料 Fix: unfixed Disposition: deferred Venue: patentmcp
+F1 bare GET /skills 列表端點不存在（僅註冊了 .zip 那條 route） Fix: fixed Disposition: accepted Venue: patentmcp
+F2 route 硬編碼單一 skill 名（_SKILL_NAME），新增 companion 需改 code 而非資料 Fix: fixed Disposition: accepted Venue: patentmcp
 ```
+
+F2 被一併修掉而非 deferred：reporter 判斷正確——F1/F2 是同一行 code 的兩面，
+只補一條 list route 而讓名字繼續寫死，等於留著同一個根因換個位置復發。
 
 ## 1.4 RCA
 
@@ -103,3 +109,73 @@ grep -c 'Route("/skills"' src/patent_mcp_server/_http_app.py  ->  0
 - 負向：未知名 → typed 404（非 500、非 200 空 archive）；`..%2Fbin` → 404/403
 - 端到端：`McpSkillFetch.materialize` 對本服務回 `kind:"materialized"` 且 `skills` 含 `patentworks`
 - 機檢：`McpConformanceProbe.run()`（opencode `76d58bb64`）對 patentmcp 的 `MCPSTD_SKILL_HALF_SHIPPED` 消失
+
+
+---
+
+## 4. 修復紀錄（2026-07-30，patentmcp coordinator）
+
+### 4.1 取捨裁決：修，不標 NOT-A-BUG
+
+reporter 明確把「只有一個 skill、硬編碼夠用、加 list 端點算不算過度工程」交回本 repo 裁決。
+裁決為**修**，理由不是「規範說要」，而是：
+
+1. **R9 的受益者是消費端，不是本服務。** 合規 client 不該為每個服務硬編碼 skill 名。
+   patentmcp 只有一個 skill 這件事，是**本服務的**內部事實，不是**消費端**能預先知道的事實。
+2. **修法確實很小，且 F2 讓它更小。** `_zip_skill()` 早已是通用函式，唯一的硬編碼在 route
+   pattern 的 f-string。把名字從「常數」還原成「資料」之後，list 端點幾乎是免費的。
+3. **不修的成本會複利。** 留著等於下一個稽核者再測一次、再 file 一次 BR。
+
+### 4.2 改動
+
+| 檔案 | 改動 |
+| --- | --- |
+| `src/patent_mcp_server/_skill_shipping.py` | **新增**。R9 remote 半的單一實作：`list_shippable_skills()` / `resolve_skill_dir()` / `pack_skill_zip()`。雙重 traversal guard（safe-name regex + resolve 後的 containment check）。無 Starlette 相依，可純單元測。 |
+| `src/patent_mcp_server/_http_app.py` | 新增 `skills_list` handler + `Route("/skills")`；`skill_zip` 改吃 `{name}` path param；landing page 改資料驅動（每個 skill 一顆按鈕）；移除已被取代的 `_zip_skill()` / `_skills_root()` / `_SKILL_NAME` 與隨之失效的 `io`/`zipfile`/`Path` import。 |
+| `tests/test_br20260730_skill_shipping.py` | **新增** 21 個測試：list 回 bare name（非檔名）、generic 非硬編碼、空樹誠實回 []、8 種 traversal 變體、typed 404、archive hygiene、byte-stability、以及 route 層的 list→download 端到端。 |
+| `specs/patentmcp/mcp-standard-conformance/spec.md` | 新增 `Requirement: R4`，並改寫 Purpose——原文把 R9 列為「已合規、out of scope」正是本缺陷存活的規範缺口。 |
+| `mcp.json` / `README.md` | instructions 與端點清單改述兩個端點。 |
+
+### 4.3 為什麼靜態自檢會回綠（規範缺口，非實作疏漏）
+
+reporter 指出 opencode 側靜態 conformance 閘對 patentmcp 回綠、第一版撥號探測也漏報。
+同一個盲點也存在於**本 repo 自己的** spec：`spec.md` 舊 Acceptance Check 4 只斷言
+`/skills/{name}.zip` 「still works」——一個只驗「有 zip 能下載」的檢查，對本缺陷**必然**回綠。
+
+因此本次不只補 code，更補了條文（R4 + Acceptance Check 6），並在 check 6 明寫：
+「只斷言 some zip downloads 不滿足本條——那正是本 BR 得以存活的形狀。」
+
+### 4.4 驗證（unit + live，兩層）
+
+單元 / 路由層（`.venv/bin/pytest`）:
+```
+tests/test_br20260730_skill_shipping.py    21 passed
+tests/ (全套回歸)                          382 passed, 15 subtests passed
+```
+
+Live probe——對**重啟後真的在跑的容器**打 TCP :8000（本 harness 禁止 curl 直打 UDS）:
+```
+GET /skills                  -> 200  {"ok":true,"skills":[{"name":"patentworks","file_count":30}],"count":1}
+GET /skills/patentworks.zip  -> 200  130270 bytes  application/zip
+GET /skills/no-such-skill.zip-> 404  {"code":"SKILL_NOT_FOUND",...}
+GET /skills/..%2F..%2Fetc%2Fpasswd.zip -> 404       (另二種 traversal 變體同)
+GET /health                  -> 200                 (CONTROL)
+```
+列表回的是 **bare name**（`patentworks`），非檔名——bodesign 反例的形狀已避開。
+`file_count: 30` 與 zip 成員數一致。
+
+zip 由 204837 → 130270 bytes 是**預期**的：新 packer 依 R9.7.1 排除
+`__pycache__` / `.pyc`（interpreter-specific，且 `co_filename` 會洩漏絕對建置路徑）。
+內容檔案未減少。
+
+### 4.5 附帶發現（不在本 BR scope，未動）
+
+`webctl.sh restart` 因 compose project label 漂移而失敗：跑著的 container 帶
+`com.docker.compose.project=patentmcp`（掛 volume `patentmcp_patentmcp-sessions`），
+而 `webctl.sh` 用的是 `patentmcp-${USER}` = `patentmcp-pkcs12`（對應另一個空 volume）。
+`up --force-recreate` 因此撞名衝突。
+
+本次改用 `docker restart <cid>` 就地重啟——`./src` 是 live bind mount，process 重讀即生效，
+不需重建、不動 volume、不冒 token store 搬家風險。此漂移**早於本次改動**（container 建於
+07-22），與本 BR 無因果關係，故不在此順手修（避免 scope drift 與 volume 誤動）。
+已另記，待獨立處理。
