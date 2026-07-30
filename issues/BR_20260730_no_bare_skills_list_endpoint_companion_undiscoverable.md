@@ -12,7 +12,7 @@
 
 ```
 State:
-Fix: fixed
+Fix: fixed (initial 5167774, review-driven follow-up — see §5)
 Effect: live (container restarted 2026-07-30, probe green)
 Custody: patentmcp coordinator (owns fix + verification + merge, a2a-d2d §3.1.1)
 Blocker: none
@@ -20,8 +20,10 @@ Disposition: accepted
 Venue: patentmcp
 ```
 
-**Closed: 2026-07-30** — both R9.2 halves now served; verified by live probe against
-the running container (not just unit tests). See §4.
+**Re-opened then re-closed 2026-07-30.** The first close was PREMATURE: an
+adversarial review (gpt-5.6-terra, §5) found five defects the original fix had
+introduced or left, two of which were real contract violations. The BR was pulled
+back out of `closed/`, the defects fixed, and re-verified. See §5.
 
 ## 1.1 症狀（verbatim）
 
@@ -179,3 +181,114 @@ zip 由 204837 → 130270 bytes 是**預期**的：新 packer 依 R9.7.1 排除
 不需重建、不動 volume、不冒 token store 搬家風險。此漂移**早於本次改動**（container 建於
 07-22），與本 BR 無因果關係，故不在此順手修（避免 scope drift 與 volume 誤動）。
 已另記，待獨立處理。
+
+---
+
+## 5. 對抗式覆核與後續修復（2026-07-30，同日稍晚）
+
+### 5.1 為什麼會有這一節：第一次結案下得太早
+
+§4 宣告修復完成並歸檔進 `issues/closed/`。使用者要求**用另一個模型獨立驗證**，遂以
+`codex/gpt-5.6-terra`（session `ses_04d1c8d51`）做**對抗式**覆核——指令明寫「目標不是
+確認它對，而是找出它錯在哪」，並禁止該 session commit / 重啟 / 改 code（修復決定權留在
+本 repo coordinator）。
+
+覆核回報 5 則 findings，**其中兩則是真契約違反**。§4 的「已自行驗收結案」因此不成立，
+BR 從 `closed/` 取回頂層重開。
+
+**這件事本身是教訓**：§4 的驗證（21 tests + live probe 全綠）只證明了「我設想的情境會過」，
+沒有證明「我沒設想到的情境不會爆」。綠燈不等於正確——這與本 BR 一開始的根因
+（靜態閘對缺陷回綠）是**同一個形狀**，只是換了一層。
+
+### 5.2 Findings（覆核回報 → 本 repo 逐項自驗）
+
+依 receipt discipline，**不採信自報**，五項全部自行重跑復現：
+
+| # | 嚴重度 | 內容 | 自驗結果 |
+| --- | --- | --- | --- |
+| F1 | MEDIUM | `list` 用裸 `is_dir()`（跟隨 symlink、不套 name 規則），`resolve_skill_dir` 卻會拒——**列出來卻下載不到** | ✅ 復現：`linkout`(symlink) / `中文技能`(non-ASCII) 皆 listed 但 resolve 回 `SKILL_NAME_INVALID` |
+| F2 | LOW | list 與 pack 各自重掃，無 snapshot；list 後檔案消失 → pack 回 **200 + 22-byte 空 zip** 而非 typed failure | ✅ 復現：`race` list 宣告 `file_count=1`，刪檔後 pack 得 22 bytes / 0 members |
+| F3 | LOW | route 層的 traversal 測試沒測到 guard——`%2F` 被 Starlette **router** 先擋（plaintext 404），根本沒進 handler | ✅ 復現（**且與本 repo 自查獨立同識**，見 5.3） |
+| F4 | LOW | 測試斷言 `assert n.startswith("patentworks/")` 落在 `for` 迴圈**外**，只驗最後一個成員 | ✅ 復現：`names=["/unsafe","patentworks/SKILL.md"]` 會通過 |
+| F5 | LOW | 404 body 直接回 `e.message`，洩漏容器絕對路徑 `looked in /app/skills` | ✅ 復現 |
+
+`foo.zip` 子論點另驗：名為 `foo.zip` 的目錄功能上**可**下載（`/skills/foo.zip.zip` → 200），
+但違反本 repo 自己的 bare-name 斷言 `not n.endswith(".zip")`。歸入 F1 同一根因（list 未套
+name 規則）一併解決。
+
+### 5.3 交叉驗證：F3 由兩邊獨立發現
+
+在等待覆核期間，本 repo coordinator 自行複查 §4.4 的 traversal 證據時，**獨立撞到同一點**：
+先前三個 probe 用 `-o /dev/null` 只收狀態碼，無法分辨 404 來自哪一層。改看 response body：
+
+```
+..%2F..%2Fetc%2Fpasswd  ->  body="Not Found"                 ROUTER（guard 從未執行）
+%2e%2e%2fbin            ->  body="Not Found"                 ROUTER
+a%2Fb                   ->  body="Not Found"                 ROUTER
+..  /  .  /  %00        ->  body={"code":"SKILL_NAME_INVALID"} MY GUARD
+```
+
+Starlette **先 decode 再 match**，`%2F` 還原成真斜線後，單段 `{name}` 匹配不到 → 在進
+handler 前就 404。**安全結果無誤**（三層縱深都在，guard 本身在 unit test 有直接測到 8 種
+變體），但 §4.4 拿那三個 probe 當「雙重 guard 已驗證」的證據**是空的**，措辭必須更正。
+
+兩個獨立來源得到同一結論，此點定案。
+
+### 5.4 修復
+
+`src/patent_mcp_server/_skill_shipping.py`：
+
+- **F1（結構性修復，不只補洞）**：`resolve_skill_dir` 升為**唯一准入閘**，`list_shippable_skills`
+  與 `pack_skill_zip` 都走它。「listed ⇒ downloadable」因此是**結構保證**，而非兩套規則
+  湊巧一致。新增第 2 道 guard：entry 本身不得是 symlink，且**在未 `.resolve()` 的路徑上檢查**
+  ——因為 `.resolve()` 會抹掉正在測試的那個事實，單靠 containment check 會放行指向 root
+  **內部**的 symlink。
+- **F1 副作用（反靜默）**：被擋下的目錄不再靜默消失，改發 `_log.warning`——「看起來像 skill
+  卻無法服務」是作者的錯誤，operator 必須看得到。wire payload 仍不含它（消費端契約是
+  「我列的你都拿得到」）。
+- **F2**：`pack_skill_zip` 空成員 → 拋 typed `SKILL_EMPTY`（新 error code）。22-byte
+  end-of-central-directory **是合法 zip**，配 200 回去等於「成功但什麼都沒有」——正是本 BR
+  要殺的靜默失敗形狀。
+- **F5**：所有錯誤訊息移除檔案系統路徑；完整細節（含 root）改走 server log。
+
+`tests/test_br20260730_skill_shipping.py`（21 → 28）：
+
+- **F4**：斷言移進 loop。
+- 新增 7 個覆核驅動的回歸測試，含 **F3 的兩面**：一個釘住 `%2F` 必須止於 router
+  （斷言 body **不含** `SKILL_`），一個確保 route 層真的能觸達 guard（用單段但違規的
+  `中文.zip`，斷言 body **是** typed `SKILL_NAME_INVALID`）。沒有後者，guard 在 HTTP 層
+  就是零覆蓋。
+
+### 5.5 重驗
+
+```
+tests/test_br20260730_skill_shipping.py   28 passed（原 21 + 7 覆核回歸）
+tests/（全套）                            389 passed + 15 subtests，零回歸
+```
+
+Live probe（容器重啟後，TCP :8000）：
+
+```
+GET /skills                    -> 200 {"ok":true,"skills":[{"name":"patentworks","file_count":30}],"count":1}
+GET /skills/patentworks.zip    -> 200 / 130270 bytes                      （回歸未破）
+GET /skills/nosuch.zip         -> 404 {"detail":"no such shippable skill"} （F5：路徑不再洩漏）
+GET /skills/..%2F..%2Fetc%2Fpasswd.zip -> 404 body="Not Found"            （F3：止於 router）
+GET /skills/%E4%B8%AD%E6%96%87.zip     -> 404 code=SKILL_NAME_INVALID     （F3：guard 確實觸達）
+```
+
+隔離樹實測（F1/F2 修復生效）：
+
+```
+skills/{linkout->outside, 中文技能, dotonly(僅.hidden), emptydir, race, good}
+  list -> ['good','race']        每個 listed name 都 resolve OK
+  LOG  -> not advertising 'linkout' … SKILL_NAME_INVALID (symlink)
+          not advertising '中文技能' … SKILL_NAME_INVALID (safe-name)
+          not advertising 'dotonly'/'emptydir' … SKILL_EMPTY
+  race 刪檔後 pack -> SKILL_EMPTY（不再是 200 空 zip）
+```
+
+### 5.6 待辦（不在本 BR，另案）
+
+**docxmcp 同源同病**：參考實作 `/home/pkcs12/projects/docxmcp/bin/_skill_shipping.py` 實測
+也會 list 出 non-ASCII 名稱卻在 resolve 時拒絕（它有擋 symlink，但同樣沒對 list 套 name
+規則）。依 BRNS 應在 docxmcp repo 立案，不在此順手修。

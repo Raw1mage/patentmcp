@@ -99,12 +99,97 @@ def test_zip_is_wellformed_and_hygienic():
         assert ".." not in n.split("/"), f"dot-dot segment in archive: {n}"
         assert not n.endswith((".pyc", ".pyo")), f"compiled bytecode shipped: {n}"
         assert "__pycache__" not in n.split("/"), f"pycache shipped: {n}"
-    assert n.startswith("patentworks/")  # rooted on the skill name, unzips in place
+        # INSIDE the loop: this assertion used to sit after it, so it only ever
+        # checked the LAST member — names=["/unsafe", "patentworks/SKILL.md"]
+        # would have passed (BR_20260730 review F4).
+        assert n.startswith("patentworks/"), f"member not rooted on skill name: {n}"
 
 
 def test_zip_is_byte_stable():
     """Sorted member order -> identical bytes for an unchanged tree."""
     assert ss.pack_skill_zip("patentworks") == ss.pack_skill_zip("patentworks")
+
+
+# ── review-driven regressions (BR_20260730 adversarial review) ───────
+def test_every_listed_name_is_downloadable(tmp_path, monkeypatch):
+    """F1 (MEDIUM): the LIST and the DOWNLOAD must share ONE admission gate.
+
+    Listing used a bare ``is_dir()`` — which follows symlinks and applies no
+    name rule — while downloading went through ``resolve_skill_dir``. So a
+    symlinked or non-ASCII directory was advertised and then refused: the
+    consumer contract "every name I list, you can fetch" was broken by the
+    implementation itself.
+    """
+    root = tmp_path / "skills"
+    outside = tmp_path / "outside"
+    (outside).mkdir()
+    (outside / "SKILL.md").write_text("leaked\n", encoding="utf-8")
+    (root / "good").mkdir(parents=True)
+    (root / "good" / "SKILL.md").write_text("ok\n", encoding="utf-8")
+    (root / "\u4e2d\u6587").mkdir()          # non-ASCII: passes is_dir, fails safe-name
+    (root / "\u4e2d\u6587" / "SKILL.md").write_text("x\n", encoding="utf-8")
+    (root / "linkout").symlink_to(outside)   # symlink: passes is_dir, must be refused
+    monkeypatch.setenv("PATENTS_SKILLS_ROOT", str(root))
+
+    listed = [e["name"] for e in ss.list_shippable_skills()]
+    assert listed == ["good"], f"advertised something it cannot serve: {listed}"
+    for name in listed:
+        ss.resolve_skill_dir(name)  # must not raise — that IS the contract
+
+
+def test_symlinked_skill_dir_is_refused(tmp_path, monkeypatch):
+    """A symlinked skill root is refused even when it points INSIDE the tree.
+
+    The check runs on the un-resolved path on purpose: ``.resolve()`` erases the
+    fact being tested, so the containment guard alone would wave this through.
+    """
+    root = tmp_path / "skills"
+    (root / "real").mkdir(parents=True)
+    (root / "real" / "SKILL.md").write_text("x\n", encoding="utf-8")
+    (root / "alias").symlink_to(root / "real")   # inside the root, still refused
+    monkeypatch.setenv("PATENTS_SKILLS_ROOT", str(root))
+
+    assert [e["name"] for e in ss.list_shippable_skills()] == ["real"]
+    with pytest.raises(ss.SkillShippingError) as e:
+        ss.resolve_skill_dir("alias")
+    assert e.value.code == "SKILL_NAME_INVALID"
+
+
+def test_empty_skill_never_yields_200_empty_zip(tmp_path, monkeypatch):
+    """F2 (LOW): a 22-byte end-of-central-directory record IS a valid zip.
+
+    Served with 200 it reads to the consumer as success-with-nothing — the exact
+    silent failure this BR exists to kill. Reached when a dir holds only
+    dotfiles, or when the tree changes between the LIST and the DOWNLOAD.
+    """
+    root = tmp_path / "skills"
+    (root / "dotonly").mkdir(parents=True)
+    (root / "dotonly" / ".hidden.md").write_text("x\n", encoding="utf-8")
+    (root / "empty").mkdir()
+    (root / "vanishing").mkdir()
+    (root / "vanishing" / "SKILL.md").write_text("x\n", encoding="utf-8")
+    monkeypatch.setenv("PATENTS_SKILLS_ROOT", str(root))
+
+    # advertised only while it has content...
+    assert [e["name"] for e in ss.list_shippable_skills()] == ["vanishing"]
+    # ...and the moment the content goes, the DOWNLOAD fails typed, not empty.
+    (root / "vanishing" / "SKILL.md").unlink()
+    for name in ("dotonly", "empty", "vanishing"):
+        with pytest.raises(ss.SkillShippingError) as e:
+            ss.pack_skill_zip(name)
+        assert e.value.code == "SKILL_EMPTY", f"{name} -> {e.value.code}"
+
+
+def test_errors_do_not_leak_filesystem_paths():
+    """F5 (LOW): a remote client learns the name is bad/absent, not our layout.
+
+    The 404 body used to carry ``looked in /app/skills``, disclosing the
+    container's internal path to anyone probing the endpoint.
+    """
+    for bad in ("nosuch", "../etc", "\u4e2d\u6587"):
+        with pytest.raises(ss.SkillShippingError) as e:
+            ss.resolve_skill_dir(bad)
+        assert "/" not in e.value.message, f"path leaked for {bad!r}: {e.value.message}"
 
 
 # ── route-level: both halves over the real ASGI app ──────────────────
@@ -156,6 +241,51 @@ def test_route_unknown_name_404_not_500(client):
 
 @pytest.mark.parametrize("attack", ["..%2F..%2Fetc%2Fpasswd", "..", "%2e%2e%2fbin"])
 def test_route_traversal_rejected(client, attack):
+    """Traversal is refused at SOME layer — this alone does not say which."""
     r = client.get(f"/skills/{attack}.zip")
     assert r.status_code in (400, 403, 404), f"traversal leaked: {r.status_code}"
     assert b"root:" not in r.content
+
+
+def test_route_encoded_slash_is_stopped_by_the_ROUTER_not_the_guard(client):
+    """F3 (LOW): pins WHICH layer refuses ``%2F``, because the distinction was
+    being mis-reported as evidence that the in-handler guard had been exercised.
+
+    Starlette decodes before matching, so an encoded slash becomes a real
+    separator and the single-segment ``{name}`` simply fails to match — the
+    request never reaches ``skill_zip``. Defence in depth is intact, but a probe
+    like this tests the ROUTE TABLE, not ``resolve_skill_dir``. The body shape
+    is the tell: the router's default 404 is plain text, ours is typed JSON.
+    """
+    r = client.get("/skills/..%2F..%2Fetc%2Fpasswd.zip")
+    assert r.status_code == 404
+    assert b"SKILL_" not in r.content, (
+        "handler-typed body means the guard ran; this case must be refused "
+        "EARLIER, by the router")
+
+
+def test_route_reaches_the_in_handler_guard(client):
+    """The complement: a name that DOES match the route but must fail the guard.
+
+    Without this, no route-level test exercises ``resolve_skill_dir`` at all —
+    the guard would be reachable only from unit tests while the HTTP surface
+    went unverified.
+    """
+    r = client.get("/skills/\u4e2d\u6587.zip")   # single segment: matches, then guard rejects
+    assert r.status_code == 404
+    body = r.json()
+    assert body["code"] == "SKILL_NAME_INVALID", f"guard did not run: {body}"
+    assert "/" not in body["detail"], f"path leaked: {body['detail']}"
+
+
+def test_route_empty_skill_404_not_empty_zip(client, tmp_path, monkeypatch):
+    """The HTTP face of F2: never 200 + a valid-but-empty archive."""
+    root = tmp_path / "skills"
+    (root / "hollow").mkdir(parents=True)
+    (root / "hollow" / ".only-a-dotfile").write_text("x\n", encoding="utf-8")
+    monkeypatch.setenv("PATENTS_SKILLS_ROOT", str(root))
+
+    assert client.get("/skills").json()["skills"] == []
+    r = client.get("/skills/hollow.zip")
+    assert r.status_code == 404, f"served an empty archive with {r.status_code}"
+    assert r.json()["code"] == "SKILL_EMPTY"

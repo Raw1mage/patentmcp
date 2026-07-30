@@ -34,10 +34,13 @@ rejection included, is unit-testable without building the ASGI app.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import re
 import zipfile
 from pathlib import Path
+
+_log = logging.getLogger("patents_mcp.skills")
 
 __all__ = [
     "SkillShippingError",
@@ -68,7 +71,17 @@ class SkillShippingError(Exception):
         check (i.e. a traversal attempt). Route → 404 (we deliberately do not
         distinguish "malformed" from "absent" to a remote caller).
       * ``SKILL_NOT_FOUND``    — well-formed name, no such skill directory.
-        Route → 404. NEVER a 200 with an empty archive.
+        Route → 404.
+      * ``SKILL_EMPTY``        — the directory exists but holds nothing
+        shippable (only dotfiles / bytecode), or the tree changed between the
+        LIST and the DOWNLOAD. Route → 404. This code exists so "never a 200
+        carrying an empty archive" is enforced by the type system instead of by
+        hoping the directory is non-empty (review F2: a 22-byte empty zip was
+        being served with 200).
+
+    Messages deliberately carry NO filesystem paths: a remote client learns only
+    that the name is bad or absent, never the container's layout. Full detail
+    (including the root) goes to the server log instead (review F5).
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -130,51 +143,80 @@ def list_shippable_skills() -> list[dict[str, object]]:
     out: list[dict[str, object]] = []
     if not root.is_dir():
         return out
-    for skill_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+    for entry in sorted(root.iterdir()):
+        # Admission through the SAME gate the download path uses, so any name
+        # appearing here is guaranteed to survive resolve_skill_dir() later.
+        try:
+            skill_dir = resolve_skill_dir(entry.name)
+        except SkillShippingError as e:
+            # NOT silent: a directory that looks like a skill but cannot be
+            # served is an authoring mistake the operator must see. It stays out
+            # of the wire payload (the consumer contract is "names I can
+            # download") but is announced in the log (review F1).
+            if entry.is_dir() or entry.is_symlink():
+                _log.warning("[skills] not advertising %r under %s: %s (%s)",
+                             entry.name, root, e.code, e.message)
+            continue
         members = _shippable_members(skill_dir)
         if not members:
+            _log.warning(
+                "[skills] not advertising %r under %s: SKILL_EMPTY (no shippable "
+                "file — only dotfiles/bytecode?)", entry.name, root)
             continue
-        out.append({"name": skill_dir.name, "file_count": len(members)})
+        out.append({"name": entry.name, "file_count": len(members)})
     return out
 
 
 def resolve_skill_dir(name: str) -> Path:
     """Validate ``name`` and return the contained skill directory.
 
-    Two independent traversal guards:
+    THE single admission gate. :func:`list_shippable_skills` and
+    :func:`pack_skill_zip` BOTH go through here, which is what makes "every
+    listed name is downloadable" a structural guarantee rather than two
+    rule-sets that happen to agree. Before the BR_20260730 review they did not
+    agree: listing used a bare ``is_dir()`` — which follows symlinks and applies
+    no name rule — so a symlinked or non-ASCII directory was advertised and then
+    rejected on download, a 200-then-404 contradiction (review F1).
+
+    Three independent guards:
       1. ``name`` matches the safe-name rule (single segment, no slash / ``..``
          / absolute marker). ``../bin`` or ``a/b`` never passes.
-      2. After ``.resolve()`` the candidate must still be a DIRECT child of the
-         resolved skills root — catches whatever the regex might miss (symlink
-         escape, unicode trickery, root itself).
+      2. The entry must not itself be a SYMLINK. Tested on the UN-resolved path,
+         because ``.resolve()`` erases the very fact being tested; guard 3 alone
+         would wave through a symlink pointing back INSIDE the root.
+      3. After ``.resolve()`` the candidate must still be a DIRECT child of the
+         resolved skills root — catches what the regex might miss (escape via a
+         symlinked parent, unicode trickery, the root itself).
 
     Raises :class:`SkillShippingError` (``SKILL_NAME_INVALID`` /
     ``SKILL_NOT_FOUND``); callers map both to 404.
     """
     if not isinstance(name, str) or not name or name in (".", ".."):
         raise SkillShippingError(
-            "SKILL_NAME_INVALID",
-            f"skill name must be a single path segment; got {name!r}",
-        )
+            "SKILL_NAME_INVALID", "skill name must be a single path segment")
     if not _SAFE_NAME_RE.match(name):
         raise SkillShippingError(
             "SKILL_NAME_INVALID",
-            f"skill name {name!r} contains characters outside [A-Za-z0-9._-] "
+            "skill name contains characters outside [A-Za-z0-9._-] "
             "(no slash, no '..', no path separator — this is a traversal guard)",
         )
     root = skills_root().resolve()
-    candidate = (root / name).resolve()
+    unresolved = skills_root() / name
+    if unresolved.is_symlink():
+        raise SkillShippingError(
+            "SKILL_NAME_INVALID",
+            "skill entry is a symlink (refused: it can point outside the tree, "
+            "and its target is not ours to publish)",
+        )
+    candidate = unresolved.resolve()
     if candidate.parent != root:
         raise SkillShippingError(
             "SKILL_NAME_INVALID",
-            f"skill name {name!r} does not resolve to a direct child of the "
-            "skills root (traversal rejected)",
+            "skill name does not resolve to a direct child of the skills root "
+            "(traversal rejected)",
         )
     if not candidate.is_dir():
-        raise SkillShippingError(
-            "SKILL_NOT_FOUND",
-            f"no shippable skill named {name!r} (looked in {root})",
-        )
+        raise SkillShippingError("SKILL_NOT_FOUND", "no such shippable skill")
     return candidate
 
 
@@ -188,8 +230,17 @@ def pack_skill_zip(name: str) -> bytes:
     sorted, making the archive byte-stable for an unchanged tree.
     """
     skill_dir = resolve_skill_dir(name)
+    members = _shippable_members(skill_dir)
+    if not members:
+        # A 22-byte end-of-central-directory record IS a valid zip, so a client
+        # unpacking it sees success-with-nothing — precisely the silent failure
+        # this BR exists to kill. Fail typed instead (review F2). Reached when
+        # the dir holds only dotfiles/bytecode, or when the tree changed between
+        # the LIST and this DOWNLOAD.
+        raise SkillShippingError(
+            "SKILL_EMPTY", "skill exists but holds no shippable file")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for p in _shippable_members(skill_dir):
+        for p in members:
             zf.write(p, arcname=f"{name}/{p.relative_to(skill_dir).as_posix()}")
     return buf.getvalue()
