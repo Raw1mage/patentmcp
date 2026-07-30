@@ -20,6 +20,10 @@ Disposition: accepted
 Venue: patentmcp
 ```
 
+**Closed: 2026-07-30** by patentmcp coordinator (`ses_04db723af`) — verified AND
+effective, no scoped remainder (the docxmcp same-shape defect is a SEPARATE BR in
+that repo, `6c25a0d`).
+
 **Re-opened then re-closed 2026-07-30.** The first close was PREMATURE: an
 adversarial review (gpt-5.6-terra, §5) found five defects the original fix had
 introduced or left, two of which were real contract violations. The BR was pulled
