@@ -12,15 +12,27 @@
 
 ```
 State:
-Fix: fixed (initial 5167774, review-driven follow-up — see §5)
-Effect: live (container restarted 2026-07-30, probe green)
+Fix: fixed (initial 5167774, review-driven follow-up 03a2420 — see §5;
+     VANS-driven follow-up eb385d0 / 9280614 / 3dc8272 — see §6)
+Effect: SPLIT — do NOT read this file as "everything here is running":
+  - live      : 5167774 + 03a2420（container restarted 2026-07-30, probe green）
+                所有對外契約行為（list / download / typed 404 / 不洩路徑）都在這一半
+  - UNDEPLOYED: eb385d0 + 9280614 + 3dc8272（committed, unit-verified, NOT loaded）
+                proc 1 started 13:13:02Z；source mtime 16:53:22Z；無 --reload / watcher。
+                CPython 在 import 時綁定 module，bind mount 換檔不重載。
+                此 delta 為 log-only + test-only，無契約行為差異，
+                於下次容器重啟時生效。
 Custody: patentmcp coordinator (owns fix + verification + merge, a2a-d2d §3.1.1)
 Blocker: none
 Disposition: accepted
 Venue: patentmcp
 ```
 
-**Closed: 2026-07-30** by patentmcp coordinator (`ses_04db723af`) — verified AND
+**Closed: 2026-07-30** by patentmcp coordinator (`ses_04db723af`) — the DEFECT this
+BR was filed for (bare `GET /skills` absent) is verified AND effective; the VANS-driven
+follow-up delta (§6) is committed-not-deployed and is tracked in the Effect block above
+rather than as an open defect, because it changes no contract behavior.
+Originally closed as — verified AND
 effective, no scoped remainder (the docxmcp same-shape defect is a SEPARATE BR in
 that repo, `6c25a0d`).
 
@@ -296,3 +308,104 @@ skills/{linkout->outside, 中文技能, dotonly(僅.hidden), emptydir, race, goo
 **docxmcp 同源同病**：參考實作 `/home/pkcs12/projects/docxmcp/bin/_skill_shipping.py` 實測
 也會 list 出 non-ASCII 名稱卻在 resolve 時拒絕（它有擋 symlink，但同樣沒對 list 套 name
 規則）。依 BRNS 應在 docxmcp repo 立案，不在此順手修。
+
+---
+
+## 6. VANS 獨立驗證（2026-07-30，三輪）
+
+§5 的覆核用的是舊 BRNS 格式。之後 fleet 立了正式的 VANS 契約
+（`validation-adversary` skill），使用者要求依新契約再驗一次——**修完 BR 跑一次
+VANS 是正常下一步**，不是補救。
+
+派發：`ses_04c459f11`（`codex/gpt-5.6-terra`，異 provider、獨立 session、唯讀）。
+工作單只給 SSOT 路徑與 8 條待驗宣稱（C1–C8），**不給我的結論、不給已知疑點**
+——否則是確認而非獨立驗證。
+
+### 6.1 三輪結果
+
+| 輪 | 裁決 | 主要內容 |
+|---|---|---|
+| R1 | pass=5 fail=2 unverified=1 | C5/C8 兩條契約**只有實作錨點、沒有測試錨點** |
+| R2 | pass=7 fail=1 unverified=0 | 兩個 finding 已修；新發現 C7 部署未生效 |
+| R3 | **pass=8 fail=0 unverified=0** | CLEARED |
+
+### 6.2 R1 的兩個 finding（我逐一自行重現後確認屬實，均不駁回）
+
+依 VANS §5，finding 是**宣稱不是判決**。我用自建隔離樹（非它的 fixture）重跑
+mutation，且**先證明 harness 真的載到隔離副本**才採信結果：
+
+```
+MUT8 刪除兩處 _log.warning          -> 28 passed   （全 suite 無 caplog，零觀測）
+MUT6 containment check -> if False   -> 28 passed
+MUT7 移除 in-archive symlink 排除    -> 28 passed
+MUT5 移除 .pyc suffix 排除           -> 28 passed（種一個散落 .pyc 後才變紅）
+```
+
+MUT5 的診斷特別精確：真實樹的 11 個 `.pyc` **全在** `__pycache__/` 底下，先被
+`_EXCLUDED_DIRS` 攔掉，所以 suffix 規則從未觸發。那條斷言是**碰巧**有效的。
+
+### 6.3 修復（eb385d0 / 9280614 / 3dc8272）
+
+補 5 個測試錨點，並以 **9 個 mutation 反證每個都能變紅、且各只紅一個**——
+綠測試不等於有效測試，這正是本 BR 的根因形狀。
+
+其中 containment check 值得記：guard 2 還站著時，guard 3 從公開 API **走不到**
+（POSIX 上非 symlink 的 child 不可能 resolve 出父目錄），天真 fixture 永遠測不到。
+改測它真正防的 TOCTOU——`resolve_skill_dir` 讀 `skills_root()` 兩次，兩次之間
+root 被換掉（部署切 symlink）時 candidate 會落在 root 已不再包含的樹裡。
+
+它 flag 的三個 gap 全部處理，不只挑好做的：
+- **self-heal 繞過 guard** → 抽 `scripts/_compose_lib.sh` 為單一來源。刻意**不複製**
+  一份 guard：兩個 caller 各持一套規則自由漂移，與 list/download 分歧是同一個
+  缺陷形狀，而那正是這張 BR 剛在 Python 側修掉的東西。
+- **不可讀 root 靜默回 `[]`** → `root.exists()` 但非目錄時出聲；完全不存在仍靜默
+  （合法的「無 companion」）。測試雙向都釘。
+- **guard 無自動化測試**（它 flag 兩輪、我兩輪未認領）→ `tests/test_compose_drift_guard.py`，
+  以 PATH 上的 docker stub 驅動真 lib，釘住三分支決策與拒絕的可診斷性。
+
+### 6.4 我自己找出、且推翻自己先前宣稱的兩件事
+
+**「全套 389 passed 零回歸」是帶著 env var 跑的。** 裸跑 `pytest tests` 在 pristine
+HEAD 就是 7 failed——`patents.py:79` 在 import 時凍結 `_DOCTRINE_PATH`，五個測試檔
+各自 `setdefault`、另四個匯入卻沒設，誰先 collect 誰決定路徑。加 `tests/conftest.py`
+收斂成單一設定點後裸跑 394 → 404 passed。
+
+**我自己寫的測試也出過假 FAIL。** `test_compose_drift_guard.py` 第一版用
+`text.index("docker compose -p")` 比對原始檔，命中的是第 10 行 usage HEREDOC 裡的
+說明文字而非第 61 行的實際呼叫，於是 code 正確、測試卻紅。一個把文件當成行為
+讀的測試，正是該檔案要消滅的假訊號。
+
+### 6.5 C7：sha256 相同 ≠ 已部署（本輪最有方法論價值的發現）
+
+R2 揪出容器仍跑舊碼：
+
+| 事實 | 值 |
+|---|---|
+| proc 1 StartedAt | `13:13:02Z` |
+| 容器內 source mtime | `16:53:22Z`（晚 3h40m） |
+| `--reload` / watcher | 無 |
+| sha256 容器 vs repo | **相同** |
+
+CPython 在 import 時綁定 module，bind mount 換檔不重載。**檔案同一性是必要非
+充分**，判別式是 process 起始時間 vs source mtime。
+
+值得記的是驗證者自己承認：**R1 它給 C7 PASS 用的正是 sha 比對，那個方法在 R2
+會回假綠**——它 R1 的 PASS 只是因為當時 process 剛好啟動於那些 commit 之後。
+
+這與本 BR 的原始根因是同一個形狀，今日第三次出現：**檢查沒涵蓋到的地方，
+必然回綠，而那個綠與正確實作的綠無法區分。**
+
+### 6.6 交互品質（記錄於此，因為它是這個機制成立的證據）
+
+- R1 兩個 finding 我全部自行重現而非爭辯；
+- 我提出的兩個反挑戰（`COMPOSE_PROJECT_NAME` 應勝過 `name:`、conftest 用
+  `setdefault` 保留 override）它判定我對並撤回質疑；
+- R1 它報「20 failed vs 我的 7」，查明是它自己的環境產物並主動撤回；
+- conftest 的 env var 依賴是**我對自己先前宣稱的反轉**，它沒抓到。
+
+雙向都在修正，不是驗證者橡皮圖章、也不是產出者防衛。
+
+### 6.7 仍未覆蓋（明列，不宣稱）
+
+- root 存在且**是**目錄但不可讀（mode 000）無測試覆蓋。
+- `eb385d0` 之後的 delta 無 live-probe 覆蓋，且在容器重啟前不可能有。
