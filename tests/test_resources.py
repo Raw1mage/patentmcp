@@ -89,7 +89,6 @@ def test_list_empty_store_is_empty(store):
 # ── integration: FastMCP template read + dynamic list ──────────────
 def test_fastmcp_resource_face_end_to_end(monkeypatch, tmp_path):
     import os
-    os.environ.setdefault("PATENTS_SKILLS_ROOT", "skills")
     from patent_mcp_server import patents
 
     # produce an artifact in the server's live token store

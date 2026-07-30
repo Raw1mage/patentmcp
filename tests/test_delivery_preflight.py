@@ -3,11 +3,8 @@
 plan patentmcp_r17-minimum-operational-toolset, tasks 3.3, TV-7/8/9.
 """
 import asyncio
-import os
 
 import pytest
-
-os.environ.setdefault("PATENTS_SKILLS_ROOT", "skills")
 
 from patent_mcp_server import _delivery
 

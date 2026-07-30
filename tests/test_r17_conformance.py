@@ -10,11 +10,8 @@ Exercises the full host-mediation chain twice:
                            assertions (host-visible extension), empty refused
 """
 import asyncio
-import os
 
 import pytest
-
-os.environ.setdefault("PATENTS_SKILLS_ROOT", "skills")
 
 from patent_mcp_server import _delivery
 from patent_mcp_server import _resources as _res

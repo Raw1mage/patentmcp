@@ -17,12 +17,9 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import zipfile
 
 import pytest
-
-os.environ.setdefault("PATENTS_SKILLS_ROOT", "skills")
 
 from patent_mcp_server import _skill_shipping as ss
 

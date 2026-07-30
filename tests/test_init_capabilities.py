@@ -4,9 +4,6 @@ plan patentmcp_r17-minimum-operational-toolset, tasks 2.3, TV-5/TV-6.
 """
 import asyncio
 import json
-import os
-
-os.environ.setdefault("PATENTS_SKILLS_ROOT", "skills")
 
 from patent_mcp_server import patents
 
