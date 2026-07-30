@@ -85,6 +85,38 @@ container 建於 `2026-07-22T00:59:55Z`。
 
 漂移早於該次改動（container 建於 07-22），與其無因果關係。
 
+## 1.5 更正（2026-07-30，實測推翻 §1.4 的前提）
+
+§1.4 寫「切到 `patentmcp-pkcs12` 會**掛上另一顆空 volume**，token store 靜默換人——handles 全失效」。實測**完全寫反**：
+
+```
+$ docker run --rm -v patentmcp_patentmcp-sessions:/d alpine sh -c 'ls -la /d; du -sh /d'
+total 16
+drwxr-xr-x 2 root root 12288 Jul 27 14:01 .      <<< 空的，而這顆正被活著的容器掛載
+12.0K	/d
+
+$ docker run --rm -v patentmcp-pkcs12_patentmcp-sessions:/d alpine sh -c 'ls -la /d | head; du -sh /d'
+drwxr-xr-x 93 root root 12288 Jul 17 16:45 .       <<< 91 個 token 目錄，2.4M
+drwxr-xr-x  2 root root  4096 Jul 17 15:26 tok_26PFYHWASJSBYVGZQ3NSE27C4VIHAV4V
+...
+2.4M	/d
+```
+
+**正確的局面**：
+
+| volume | 內容 | 掛載狀態 |
+| --- | --- | --- |
+| `patentmcp_patentmcp-sessions` | 空（12K，僅目錄） | 活著的容器正掛這顆 |
+| `patentmcp-pkcs12_patentmcp-sessions` | 91 個 token 目錄、2.4M、**Jul 17** | webctl 認定，目前未掛 |
+
+**這把整張 BR 的風險評估翻轉了**：
+
+- 切 project **不會**弄丟任何現役資料——現役那顆本來就是空的（token TTL 3600s，早已自然清完）
+- 反而是切過去會**掛上一顆 Jul 17 的死資料**（2.4M、全數過期）
+- 所以 §2 第 1 點的「搬移 vs 接受清空」取捨**不存在**：兩邊都沒有值得保留的東西，真正該問的是「兩顆都該不該直接刪」
+
+**我為何寫錯**：當時只看了 `docker volume ls` 與 `docker inspect` 的**名字與掛載關係**，就推論「沒掛的那顆是空的」——沒打開來看。這與本日 skill-shipping BR 的根因同形：**未被檢查覆蓋的地方，必然回綠**。推論看起來合理（新 project → 新 volume → 空），但 project 漂移發生在 07-22，而舊 volume 的資料是 07-17——**漂移發生前它才是現役那顆**，順序正好相反。
+
 ## 2. 修復方向
 
 需先決定的取捨（**這是 decision，不是純執行**）：
