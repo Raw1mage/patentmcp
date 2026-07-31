@@ -155,6 +155,23 @@ patentmcp 以**單一 per-user compose project** 承載。三個檔案共同定�
 
 **volume 歸屬的連帶效應**：project 名決定 named volume 前綴（`<project>_patentmcp-sessions`），所以切 project = 換 token store。判斷「舊 volume 能不能丟」必須**實際打開看內容**，不能從掛載關係推論——BR_20260730 的初判就是這樣寫反的（推論「沒掛的那顆是空的」，實際相反：漂移前它才是現役那顆）。
 
+### 部署生效判別式（commit ≠ 已部署）
+
+`src/` 是 **live bind mount**，所以 commit 後容器內的檔案立即變新。但服務以 `uv run patent-mcp-server` 啟動，**無 `--reload`、無 watcher** ——CPython 在 import 時將 module 綁進 `sys.modules`，之後改原始碼不會重載。因此：
+
+> **`sha256(容器內檔案) == sha256(HEAD)` 是必要條件，不是充分條件。**
+> 正確判別式是 **process 起始時間 vs source mtime**：
+> `docker inspect <c> --format '{{.State.StartedAt}}'` 必須 **晚於** 該檔的 mtime。
+
+這個區別是 2026-07-30 VANS 覆核（§6 C7）的發現，而且是**驗證者拆自己的台**：它第一輪正是用 sha 比對給部署項 PASS，第二輪發現**同一個方法在行程遜時會回假綠**——兩邊的 sha 完全相同，但 proc 起於 `13:13:02Z`、source mtime 是 `16:53:22Z`，服務的就是 3h40m 前的舊位元。它上一輪的 PASS 只是因為行程恰好起於那些 commit 之後。
+
+實務規則：
+
+- 宣告「修復已生效」前必須跑一次上述兩個時間戳的比較；只比 sha 等於沒比。
+- 若行程早於原始碼，BR 一律標 **FIXED-UNDEPLOYED 留頂層**，不得歸檔（即使 delta 是 log-only）。
+- 需要生效就跑 `./webctl.sh restart`（共用系統動作，需使用者當下批准），重啟後再跑一次判別式 + live probe 坐實。
+- 最便宜的行為層探針：挑一個 **只存在於新碼的對外訊息差異**（如舊碼的 404 body 帶 `looked in /app/skills`、新碼已移除），一發 curl 就能分辨新舊。
+
 ## Key Architectural Tensions
 
 - **舊 spec vs 現行 README 落差**：舊 `specs/architecture.md` 仍描述 `source/`、`.claude/agents/`、`sample/` 八階段 prompt pipeline，但現行 repo 已重定位為 PatentWorks MCP + skill。
