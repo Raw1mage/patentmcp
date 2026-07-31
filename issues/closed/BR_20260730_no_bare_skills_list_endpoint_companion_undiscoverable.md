@@ -14,14 +14,17 @@
 State:
 Fix: fixed (initial 5167774, review-driven follow-up 03a2420 — see §5;
      VANS-driven follow-up eb385d0 / 9280614 / 3dc8272 — see §6)
-Effect: SPLIT — do NOT read this file as "everything here is running":
-  - live      : 5167774 + 03a2420（container restarted 2026-07-30, probe green）
-                所有對外契約行為（list / download / typed 404 / 不洩路徑）都在這一半
-  - UNDEPLOYED: eb385d0 + 9280614 + 3dc8272（committed, unit-verified, NOT loaded）
-                proc 1 started 13:13:02Z；source mtime 16:53:22Z；無 --reload / watcher。
-                CPython 在 import 時綁定 module，bind mount 換檔不重載。
-                此 delta 為 log-only + test-only，無契約行為差異，
-                於下次容器重啟時生效。
+Effect: live — 全部 commit 皆已載入執行中的行程（SPLIT 狀態已於 2026-07-31 解除）。
+  判別式（非 sha256 比對——見 §6 C7）：
+    proc started 2026-07-31T00:06:30Z  >  source mtime 2026-07-30T16:53:22Z
+  亦即行程晚於原始碼，import 時綁定的就是這批位元。
+  上一版此處記為 SPLIT，因當時 proc 起於 13:13:02Z、早於 mtime 3h40m，
+  而容器無 --reload / watcher，CPython 在 import 時綁定 module，
+  bind mount 換檔不重載——sha256 相同仍是舊碼。
+  2026-07-31 `./webctl.sh restart` 後複驗：/health 200、/skills 200（bare name,
+  file_count 30）、/skills/patentworks.zip 200 130270B、unknown → typed
+  SKILL_NOT_FOUND、非 ASCII 單段 → typed SKILL_NAME_INVALID（無路徑洩漏）、
+  `..%2F` → router plaintext 404（兩層分明）。
 Custody: patentmcp coordinator (owns fix + verification + merge, a2a-d2d §3.1.1)
 Blocker: none
 Disposition: accepted
@@ -29,12 +32,14 @@ Venue: patentmcp
 ```
 
 **Closed: 2026-07-30** by patentmcp coordinator (`ses_04db723af`) — the DEFECT this
-BR was filed for (bare `GET /skills` absent) is verified AND effective; the VANS-driven
-follow-up delta (§6) is committed-not-deployed and is tracked in the Effect block above
-rather than as an open defect, because it changes no contract behavior.
-Originally closed as — verified AND
-effective, no scoped remainder (the docxmcp same-shape defect is a SEPARATE BR in
-that repo, `6c25a0d`).
+BR was filed for (bare `GET /skills` absent) is verified AND effective.
+
+**Deployment completed 2026-07-31.** At close time the VANS-driven follow-up delta
+(§6) was committed-not-deployed, so the Effect block was recorded as SPLIT rather
+than claiming a closed loop. The user authorised the restart on 2026-07-31;
+`./webctl.sh restart` ran clean (exit 0) and the delta is now loaded — Effect is
+plain `live`, with the proc-start-vs-mtime discriminator recorded above. No scoped
+remainder (the docxmcp same-shape defect is a SEPARATE BR in that repo, `6c25a0d`).
 
 **Re-opened then re-closed 2026-07-30.** The first close was PREMATURE: an
 adversarial review (gpt-5.6-terra, §5) found five defects the original fix had
